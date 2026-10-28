@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from .decision_agent import DecisionAgent
 from .duplicate_detector import DuplicateDetector
 from .epidemic_detector import EpidemicDetector
 from .extractor import WashExtractor
@@ -11,6 +12,8 @@ from .image_analyzer import ImageAnalyzer
 from .ollama_client import OllamaClient
 from .repair_advisor import RepairAdvisor
 from .schemas import (
+    DecisionCopilotRequest,
+    DecisionCopilotResponse,
     DuplicateCheckRequest,
     DuplicateCheckResponse,
     EpidemicClusterRequest,
@@ -18,6 +21,8 @@ from .schemas import (
     ImageAnalysisResponse,
     RepairPlanRequest,
     RepairPlanResponse,
+    ReplaceVsRepairAnalysis,
+    SchoolMaintenanceHistory,
     VoiceSynthesisRequest,
     VoiceSynthesisResponse,
     VoiceTranscriptionResponse,
@@ -28,8 +33,8 @@ from .voice_service import VoiceService
 
 app = FastAPI(
     title="WASH Sentinel AI Engine",
-    description="Moteur IA complet pour la priorisation, le diagnostic multimodal et l'alerte épidémique WASH en milieu scolaire.",
-    version="1.1.0",
+    description="Moteur IA complet pour la priorisation, le diagnostic multimodal, l'aide à la décision stratégique (Réparer vs Remplacer) et l'alerte épidémique.",
+    version="1.2.0",
 )
 
 # CORS pour autoriser Laravel et le frontend React
@@ -48,6 +53,7 @@ duplicate_detector = DuplicateDetector(ollama_client)
 image_analyzer = ImageAnalyzer(ollama_client)
 repair_advisor = RepairAdvisor(ollama_client)
 epidemic_detector = EpidemicDetector(ollama_client)
+decision_agent = DecisionAgent(ollama_client)
 voice_service = VoiceService()
 
 
@@ -69,6 +75,8 @@ def health() -> dict[str, Any]:
             "duplicate_detection",
             "repair_planning",
             "epidemic_early_warning",
+            "decision_copilot_tool_calling",
+            "repair_vs_replace_matrix",
         ],
     }
 
@@ -150,7 +158,38 @@ async def detect_epidemic_risk(payload: EpidemicClusterRequest) -> EpidemicClust
 
 
 # ==========================================
-# 6. Audio (Transcription STT & Synthèse TTS)
+# 6. Aide à la Décision Stratégique & Copilot (Tool-Calling)
+# ==========================================
+@app.post("/v1/wash/copilot/chat", response_model=DecisionCopilotResponse)
+async def decision_copilot_chat(payload: DecisionCopilotRequest) -> DecisionCopilotResponse:
+    """
+    Agent conversationnel d'aide à la décision :
+    Interroge les historiques d'interventions, exécute les tools d'arbitrage
+    et conseille les décideurs sur les investissements prioritaires (Réparer vs Remplacer).
+    """
+    try:
+        return await decision_agent.answer_decision_query(payload)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur du Copilot Décisionnel : {str(exc)}"
+        ) from exc
+
+
+@app.post("/v1/wash/copilot/replace-vs-repair", response_model=ReplaceVsRepairAnalysis)
+def evaluate_replace_vs_repair(school: SchoolMaintenanceHistory) -> ReplaceVsRepairAnalysis:
+    """Évalue mathématiquement et financièrement si un équipement doit être remplacé à neuf ou encore réparé."""
+    try:
+        return decision_agent.evaluate_school_equipment(school)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de l'analyse Réparer vs Remplacer : {str(exc)}"
+        ) from exc
+
+
+# ==========================================
+# 7. Audio (Transcription STT & Synthèse TTS)
 # ==========================================
 @app.post("/v1/voice/transcribe", response_model=VoiceTranscriptionResponse)
 async def transcribe_audio(
@@ -185,7 +224,7 @@ def synthesize_voice(payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
 
 
 # ==========================================
-# 7. Pipeline Unifié Commando (Texte ou Voix)
+# 8. Pipeline Unifié Commando (Texte ou Voix)
 # ==========================================
 @app.post("/v1/wash/triage")
 async def triage_report(

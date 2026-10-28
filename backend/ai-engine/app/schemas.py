@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -133,7 +133,48 @@ class EpidemicClusterResponse(BaseModel):
 
 
 # ==========================================
-# 6. Audio (STT & TTS)
+# 6. Aide à la Décision & Copilot (Replace vs Repair)
+# ==========================================
+
+class SchoolMaintenanceHistory(BaseModel):
+    school_id: int
+    school_name: str
+    district: str
+    equipment_type: str = "pompe_manuelle"
+    installation_year: int | None = 2021
+    estimated_replacement_cost: float = Field(1500000.0, description="Coût d'un remplacement à neuf (ex: en FCFA ou USD)")
+    incident_count: int = Field(0, description="Nombre de pannes enregistrées")
+    total_repair_cost: float = Field(0.0, description="Somme totale des factures de réparations passées")
+    total_days_without_service: int = Field(0, description="Nombre cumulé de jours où l'école a été privée d'eau")
+
+
+class ReplaceVsRepairAnalysis(BaseModel):
+    school_name: str
+    equipment_type: str
+    recommendation: Literal["REPLACE_EQUIPMENT", "CONTINUE_REPAIR", "MONITOR_CLOSELY"]
+    repair_to_replacement_ratio_percent: float = Field(..., description="Pourcentage du coût d'un équipement neuf déjà dépensé en réparations")
+    annualized_failure_rate: float = Field(..., description="Fréquence moyenne de pannes par an")
+    total_days_lost: int
+    financial_saving_potential: str
+    justification: str = Field(..., description="Raisonnement économique et opérationnel détaillé")
+    suggested_modernization: str = Field(..., description="Alternative moderne conseillée (ex: Forage solaire au lieu de pompe manuelle)")
+
+
+class DecisionCopilotRequest(BaseModel):
+    user_query: str = Field(..., description="Question stratégique posée par l'opérateur ou décideur")
+    district: str | None = Field(None, description="District ciblé")
+    schools_data: list[SchoolMaintenanceHistory] = Field(default_factory=list, description="Données d'historiques fournies par Laravel")
+
+
+class DecisionCopilotResponse(BaseModel):
+    answer: str = Field(..., description="Réponse exécutive complète et claire de l'IA")
+    tools_executed: list[str] = Field(default_factory=list, description="Outils analytiques appelés par l'agent")
+    replace_recommendations: list[ReplaceVsRepairAnalysis] = Field(default_factory=list, description="Analyses de remplacement générées")
+    strategic_action_plan: list[str] = Field(default_factory=list, description="Plan d'action prioritaire recommandé pour le budget")
+
+
+# ==========================================
+# 7. Audio (STT & TTS)
 # ==========================================
 
 class VoiceTranscriptionResponse(BaseModel):
