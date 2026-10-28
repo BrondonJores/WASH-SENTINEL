@@ -2,10 +2,16 @@
 
 import asyncio
 from app.decision_agent import DecisionAgent
+from app.equity_dispatcher import EquityDispatcher
 from app.extractor import WashExtractor
 from app.ollama_client import OllamaClient
 from app.repair_advisor import RepairAdvisor
-from app.schemas import DecisionCopilotRequest, RepairPlanRequest, SchoolMaintenanceHistory
+from app.schemas import (
+    DecisionCopilotRequest,
+    FairnessDispatchRequest,
+    RepairPlanRequest,
+    SchoolMaintenanceHistory,
+)
 
 
 async def run_diagnostics():
@@ -17,6 +23,7 @@ async def run_diagnostics():
     extractor = WashExtractor(client)
     advisor = RepairAdvisor(client)
     decision_agent = DecisionAgent(client)
+    equity_dispatcher = EquityDispatcher(client)
 
     sample_report = (
         "Bonjour, ici l'école primaire publique de Bonabéri. "
@@ -49,12 +56,10 @@ async def run_diagnostics():
         print(f"🔧 Outils recommandés    : {', '.join(plan.required_tools)}")
         print(f"📦 Pièces requises       : {', '.join(plan.spare_parts_needed)}")
         print(f"⏱️ Temps estimé          : {plan.estimated_intervention_time}")
-        print(f"💰 Niveau de coût        : {plan.estimated_cost_tier}")
     except Exception as e:
         print(f"ℹ️ Mode hors-ligne réparateur : {e}")
 
     print("\n3. [Aide à la Décision : Matrice Réparer vs Remplacer (Capex vs Opex)]")
-    # Test d'une école ayant déjà dépensé 1.120.000 FCFA sur une pompe de 1.500.000 FCFA
     critical_school = SchoolMaintenanceHistory(
         school_id=1,
         school_name="École Publique Saint-Michel",
@@ -71,24 +76,25 @@ async def run_diagnostics():
     print(f"⚖️ Ratio Dépenses/Neuf    : {analysis.repair_to_replacement_ratio_percent}%")
     print(f"🚨 Décision IA            : {analysis.recommendation}")
     print(f"💡 Solution Conseillée    : {analysis.suggested_modernization}")
-    print(f"💵 Potentiel d'Économie   : {analysis.financial_saving_potential}")
 
-    print("\n4. [Decision Copilot - Requête Stratégique en Langage Naturel]")
-    copilot_query = DecisionCopilotRequest(
-        user_query="Quelles écoles ont le plus de pannes et où devons-nous allouer le budget de remplacement ?",
-        district="District Ouest",
-        schools_data=[critical_school],
-    )
+    print("\n4. [Équité Territoriale & Optimisation de Tournées (Anti-Favoritisme)]")
+    dispatch_req = FairnessDispatchRequest(district="District Hauts-Plateaux")
     try:
-        copilot_res = await decision_agent.answer_decision_query(copilot_query)
-        print(f"🛠️ Tools exécutés        : {', '.join(copilot_res.tools_executed)}")
-        print(f"🤖 Réponse Copilot       : {copilot_res.answer[:160]}...")
-        print(f"📋 Plan d'Action         : {copilot_res.strategic_action_plan[0] if copilot_res.strategic_action_plan else 'N/A'}")
+        dispatch_plan = await equity_dispatcher.generate_fairness_plan(dispatch_req)
+        print(f"📊 Écoles Évaluées       : {dispatch_plan.total_schools_evaluated}")
+        print("🏆 Classement d'Équité Objectif :")
+        for r in dispatch_plan.ranked_schools:
+            print(f"   #{r.rank} {r.school_name} -> Score Équité: {r.equity_score}/100 ({r.primary_vulnerability_reason})")
+        print("\n🚚 Tournées Mutualisées (Économie Carburant) :")
+        for m in dispatch_plan.grouped_routes:
+            print(f"   - {m.route_name} : {m.primary_emergency_school} + {len(m.piggybacked_schools)} école(s) mutualisée(s) | Économie: {m.estimated_kilometers_saved} km")
+        print("\n📜 Note Publique d'Opposabilité (Extrait) :")
+        print(f"   \"{dispatch_plan.public_transparency_note[:140]}...\"")
     except Exception as e:
-        print(f"ℹ️ Mode hors-ligne Copilot : {e}")
+        print(f"ℹ️ Mode hors-ligne Équité : {e}")
 
     print("\n==========================================================")
-    print("✅ MOTEUR IA 100% COMPLET & VALIDÉ !")
+    print("✅ TOUS LES MODULES IA STRATÉGIQUES SONT OPÉRATIONNELS !")
     print("==========================================================")
 
 

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .decision_agent import DecisionAgent
 from .duplicate_detector import DuplicateDetector
 from .epidemic_detector import EpidemicDetector
+from .equity_dispatcher import EquityDispatcher
 from .extractor import WashExtractor
 from .image_analyzer import ImageAnalyzer
 from .ollama_client import OllamaClient
@@ -18,6 +19,8 @@ from .schemas import (
     DuplicateCheckResponse,
     EpidemicClusterRequest,
     EpidemicClusterResponse,
+    FairnessDispatchPlan,
+    FairnessDispatchRequest,
     ImageAnalysisResponse,
     RepairPlanRequest,
     RepairPlanResponse,
@@ -33,8 +36,8 @@ from .voice_service import VoiceService
 
 app = FastAPI(
     title="WASH Sentinel AI Engine",
-    description="Moteur IA complet pour la priorisation, le diagnostic multimodal, l'aide à la décision stratégique (Réparer vs Remplacer) et l'alerte épidémique.",
-    version="1.2.0",
+    description="Moteur IA complet pour la priorisation équitable, la détection multimodale, l'aide à la décision stratégique (Réparer vs Remplacer) et l'optimisation logistique anti-favoritisme.",
+    version="1.3.0",
 )
 
 # CORS pour autoriser Laravel et le frontend React
@@ -54,6 +57,7 @@ image_analyzer = ImageAnalyzer(ollama_client)
 repair_advisor = RepairAdvisor(ollama_client)
 epidemic_detector = EpidemicDetector(ollama_client)
 decision_agent = DecisionAgent(ollama_client)
+equity_dispatcher = EquityDispatcher(ollama_client)
 voice_service = VoiceService()
 
 
@@ -77,6 +81,8 @@ def health() -> dict[str, Any]:
             "epidemic_early_warning",
             "decision_copilot_tool_calling",
             "repair_vs_replace_matrix",
+            "equity_dispatcher_anti_favoritism",
+            "route_clustering_optimizer",
         ],
     }
 
@@ -158,7 +164,27 @@ async def detect_epidemic_risk(payload: EpidemicClusterRequest) -> EpidemicClust
 
 
 # ==========================================
-# 6. Aide à la Décision Stratégique & Copilot (Tool-Calling)
+# 6. Équité Territoriale & Tournées Groupées (Anti-Favoritisme)
+# ==========================================
+@app.post("/v1/wash/equity/dispatch-plan", response_model=FairnessDispatchPlan)
+async def generate_equity_dispatch_plan(payload: FairnessDispatchRequest) -> FairnessDispatchPlan:
+    """
+    Le Gardien de l'Équité Territoriale :
+    1. Classe les écoles selon une formule d'équité transparente (jours sans eau, filles, isolement).
+    2. Regroupe les pannes sur le même axe pour économiser les kilomètres du camion communal.
+    3. Rédige la note officielle de transparence opposable aux pressions politiques.
+    """
+    try:
+        return await equity_dispatcher.generate_fairness_plan(payload)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors du calcul du plan d'équité : {str(exc)}"
+        ) from exc
+
+
+# ==========================================
+# 7. Aide à la Décision Stratégique & Copilot (Tool-Calling)
 # ==========================================
 @app.post("/v1/wash/copilot/chat", response_model=DecisionCopilotResponse)
 async def decision_copilot_chat(payload: DecisionCopilotRequest) -> DecisionCopilotResponse:
@@ -189,7 +215,7 @@ def evaluate_replace_vs_repair(school: SchoolMaintenanceHistory) -> ReplaceVsRep
 
 
 # ==========================================
-# 7. Audio (Transcription STT & Synthèse TTS)
+# 8. Audio (Transcription STT & Synthèse TTS)
 # ==========================================
 @app.post("/v1/voice/transcribe", response_model=VoiceTranscriptionResponse)
 async def transcribe_audio(
@@ -224,7 +250,7 @@ def synthesize_voice(payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
 
 
 # ==========================================
-# 8. Pipeline Unifié Commando (Texte ou Voix)
+# 9. Pipeline Unifié Commando (Texte ou Voix)
 # ==========================================
 @app.post("/v1/wash/triage")
 async def triage_report(

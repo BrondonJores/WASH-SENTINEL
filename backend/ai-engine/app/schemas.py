@@ -174,7 +174,59 @@ class DecisionCopilotResponse(BaseModel):
 
 
 # ==========================================
-# 7. Audio (STT & TTS)
+# 7. Équité Territoriale & Optimisation de Tournées
+# ==========================================
+
+class SchoolEquityProfile(BaseModel):
+    school_id: int
+    school_name: str
+    district: str
+    distance_from_center_km: float = Field(10.0, description="Distance en km depuis le centre technique communal")
+    days_without_water: int = Field(0, description="Nombre de jours consécutifs sans eau potable")
+    total_students: int = Field(300, description="Effectif total d'élèves")
+    female_students: int = Field(150, description="Nombre de jeunes filles scolarisées")
+    broken_toilets: int = Field(0, description="Nombre de latrines hors d'usage")
+    months_since_last_intervention: int = Field(6, description="Mois écoulés depuis la dernière aide publique")
+    urgency_level: Literal["low", "medium", "high", "critical"] = "medium"
+    issue_summary: str = Field("", description="Description succincte de la panne")
+    lat: float | None = None
+    lng: float | None = None
+
+
+class FairnessRankingItem(BaseModel):
+    school_id: int
+    school_name: str
+    equity_score: float = Field(..., description="Score d'équité et de vulnérabilité de 0 à 100")
+    rank: int
+    primary_vulnerability_reason: str
+    days_deprived: int
+    distance_km: float
+
+
+class GroupedMission(BaseModel):
+    route_name: str = Field(..., description="Axe routier de la tournée mutualisée")
+    primary_emergency_school: str = Field(..., description="École en urgence critique justifiant le déplacement du camion")
+    piggybacked_schools: list[str] = Field(default_factory=list, description="Écoles dépannées sur le même trajet pour rentabiliser le carburant")
+    total_schools_served: int
+    estimated_kilometers_saved: float = Field(..., description="Kilomètres et carburant économisés")
+    technician_mission_brief: str = Field(..., description="Feuille de route logistique pour l'équipe")
+
+
+class FairnessDispatchPlan(BaseModel):
+    district: str
+    total_schools_evaluated: int
+    ranked_schools: list[FairnessRankingItem]
+    grouped_routes: list[GroupedMission]
+    public_transparency_note: str = Field(..., description="Note officielle d'opposabilité anti-favoritisme opposable aux pressions politiques")
+
+
+class FairnessDispatchRequest(BaseModel):
+    district: str
+    schools: list[SchoolEquityProfile] = Field(default_factory=list)
+
+
+# ==========================================
+# 8. Audio (STT & TTS)
 # ==========================================
 
 class VoiceTranscriptionResponse(BaseModel):
