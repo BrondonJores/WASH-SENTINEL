@@ -4,7 +4,7 @@ import asyncio
 from app.decision_agent import DecisionAgent
 from app.equity_dispatcher import EquityDispatcher
 from app.extractor import WashExtractor
-from app.ollama_client import OllamaClient
+from app.providers import OllamaProvider
 from app.repair_advisor import RepairAdvisor
 from app.schemas import (
     DecisionCopilotRequest,
@@ -19,7 +19,7 @@ async def run_diagnostics():
     print("🚀 Test Diagnostic Complet - Moteur IA WASH Sentinel")
     print("==========================================================")
 
-    client = OllamaClient()
+    client = OllamaProvider()
     extractor = WashExtractor(client)
     advisor = RepairAdvisor(client)
     decision_agent = DecisionAgent(client)

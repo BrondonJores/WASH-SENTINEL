@@ -259,10 +259,12 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         return []
 
 
-# Alias de compatibilité : les agents existants importent OllamaClient.
-OllamaClient = OllamaProvider
-
-
+PROVIDER_REGISTRY: dict[str, type[BaseLLMProvider]] = {
+    "ollama": OllamaProvider,
+    "openai_compatible": OpenAICompatibleProvider,
+    "openai": OpenAICompatibleProvider,
+    "external": OpenAICompatibleProvider,
+}
 def llm_from_headers(headers: Any) -> BaseLLMProvider:
     """Construit le provider par requête depuis les headers envoyés par Laravel.
 
@@ -280,12 +282,8 @@ def llm_from_headers(headers: Any) -> BaseLLMProvider:
     timeout_raw = get("x-llm-timeout") or None
     timeout = float(timeout_raw) if timeout_raw else None
 
-    if provider in ("openai_compatible", "openai", "external"):
-        return OpenAICompatibleProvider(
-            base_url=base_url, model=model, vision_model=vision_model,
-            embed_model=embed_model, api_key=api_key, timeout=timeout,
-        )
-    return OllamaProvider(
+    provider_cls = PROVIDER_REGISTRY.get(provider, OllamaProvider)
+    return provider_cls(
         base_url=base_url, model=model, vision_model=vision_model,
         embed_model=embed_model, api_key=api_key, timeout=timeout,
     )
@@ -302,9 +300,8 @@ def provider_from_profile(profile: dict[str, Any]) -> BaseLLMProvider:
         "api_key": profile.get("api_key"),
         "timeout": float(profile.get("timeout") or 30.0),
     }
-    if provider in ("openai_compatible", "openai", "external"):
-        return OpenAICompatibleProvider(**kwargs)
-    return OllamaProvider(**kwargs)
+    provider_cls = PROVIDER_REGISTRY.get(provider, OllamaProvider)
+    return provider_cls(**kwargs)
 
 
 PROVIDER_TYPES: list[dict[str, Any]] = [

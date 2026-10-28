@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from .ollama_client import OllamaClient
+from .providers import BaseLLMProvider
 from .schemas import ImageAnalysisResponse
 
 WASH_VISION_SYSTEM = """
@@ -24,12 +24,12 @@ Règles :
 
 
 class ImageAnalyzer:
-    def __init__(self, ollama: OllamaClient):
-        self.ollama = ollama
+    def __init__(self, llm: BaseLLMProvider):
+        self.llm = llm
 
     async def analyze(self, image_bytes: bytes) -> ImageAnalysisResponse:
         b64_img = base64.b64encode(image_bytes).decode("utf-8")
-        raw = await self.ollama.generate_vision_json(
+        raw = await self.llm.generate_vision_json(
             prompt="Analyse cette photo de panne sanitaire/hydraulique d'école.",
             image_base64=b64_img,
             system=WASH_VISION_SYSTEM,

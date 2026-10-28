@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from .ollama_client import OllamaClient
+from .providers import BaseLLMProvider
 from .schemas import ExtractedWashIncident, WashExtractionResponse
 
 WASH_SYSTEM_PROMPT = """
@@ -27,15 +27,15 @@ Règles impératives :
 
 
 class WashExtractor:
-    def __init__(self, ollama: OllamaClient):
-        self.ollama = ollama
+    def __init__(self, llm: BaseLLMProvider):
+        self.llm = llm
 
     async def extract(self, raw_text: str, school_name: str | None = None) -> WashExtractionResponse:
         user_prompt = f"Signalement brut :\n\"\"\"\n{raw_text}\n\"\"\""
         if school_name:
             user_prompt += f"\nÉcole déclarée : {school_name}"
 
-        raw_json = await self.ollama.generate_json(user_prompt, WASH_SYSTEM_PROMPT)
+        raw_json = await self.llm.generate_json(user_prompt, WASH_SYSTEM_PROMPT)
 
         # Calcul automatique du score de priorité standardisé (0 à 100)
         priority_score = self.calculate_priority_score(raw_json)
@@ -70,7 +70,7 @@ class WashExtractor:
 
         return WashExtractionResponse(
             data=incident,
-            model_used=self.ollama.model,
+            model_used=self.llm.model,
             confidence_score=0.92,
         )
 

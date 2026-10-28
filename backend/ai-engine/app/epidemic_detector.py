@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .ollama_client import OllamaClient
+from .providers import BaseLLMProvider
 from .schemas import EpidemicClusterRequest, EpidemicClusterResponse
 
 EPIDEMIC_ANALYZER_SYSTEM = """
@@ -22,8 +22,8 @@ Règles :
 
 
 class EpidemicDetector:
-    def __init__(self, ollama: OllamaClient):
-        self.ollama = ollama
+    def __init__(self, llm: BaseLLMProvider):
+        self.llm = llm
 
     async def detect_cluster(self, req: EpidemicClusterRequest) -> EpidemicClusterResponse:
         count = len(req.recent_incidents)
@@ -49,7 +49,7 @@ Signalements :
 {incidents_summary}
         """
 
-        raw = await self.ollama.generate_json(prompt, EPIDEMIC_ANALYZER_SYSTEM)
+        raw = await self.llm.generate_json(prompt, EPIDEMIC_ANALYZER_SYSTEM)
 
         risk_level = str(raw.get("risk_level", "moderate")).lower()
         if risk_level not in ["normal", "moderate", "high", "outbreak_warning"]:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .ollama_client import OllamaClient
+from .providers import BaseLLMProvider
 from .schemas import RepairPlanRequest, RepairPlanResponse
 
 REPAIR_ADVISOR_SYSTEM = """
@@ -24,8 +24,8 @@ Règles :
 
 
 class RepairAdvisor:
-    def __init__(self, ollama: OllamaClient):
-        self.ollama = ollama
+    def __init__(self, llm: BaseLLMProvider):
+        self.llm = llm
 
     async def generate_plan(self, req: RepairPlanRequest) -> RepairPlanResponse:
         prompt = f"""
@@ -35,7 +35,7 @@ Nature du problème : {req.issue_type}
 Niveau d'urgence : {req.urgency_level}
         """
 
-        raw = await self.ollama.generate_json(prompt, REPAIR_ADVISOR_SYSTEM)
+        raw = await self.llm.generate_json(prompt, REPAIR_ADVISOR_SYSTEM)
 
         tools = raw.get("required_tools")
         if not isinstance(tools, list) or not tools:

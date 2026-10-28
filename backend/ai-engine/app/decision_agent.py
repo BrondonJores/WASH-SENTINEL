@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from .ollama_client import OllamaClient
+from .providers import BaseLLMProvider
 from .schemas import (
     DecisionCopilotRequest,
     DecisionCopilotResponse,
@@ -25,8 +25,8 @@ Règles de style :
 
 
 class DecisionAgent:
-    def __init__(self, ollama: OllamaClient):
-        self.ollama = ollama
+    def __init__(self, llm: BaseLLMProvider):
+        self.llm = llm
 
     def evaluate_school_equipment(self, school: SchoolMaintenanceHistory) -> ReplaceVsRepairAnalysis:
         """
@@ -129,7 +129,7 @@ Rédige une réponse d'aide à la décision percutante pour l'opérateur, compre
 3. Les gains budgétaires et humains attendus.
         """
 
-        raw_reply = await self.ollama.generate_json(
+        raw_reply = await self.llm.generate_json(
             prompt=context_prompt,
             system=DECISION_COPILOT_SYSTEM + "\nRéponds avec un JSON : {\"answer\": \"texte du rapport\", \"action_plan\": [\"point 1\", \"point 2\", \"point 3\"]}"
         )

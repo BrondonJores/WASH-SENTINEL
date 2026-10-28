@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AiModelProfile;
-use App\Services\WashAiEngineService;
+use App\Contracts\AiEngineClient;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -94,7 +94,7 @@ class WashModelProfileController extends Controller
         return response()->json(['message' => "Profil « {$modelProfile->name} » activé.", 'profile' => $modelProfile->fresh()]);
     }
 
-    public function test(AiModelProfile $modelProfile, WashAiEngineService $ai)
+    public function test(AiModelProfile $modelProfile, AiEngineClient $ai)
     {
         try {
             $result = $ai->testProfile($modelProfile->testPayload());
@@ -113,7 +113,7 @@ class WashModelProfileController extends Controller
         return response()->json([...$result, 'profile' => $modelProfile->fresh()]);
     }
 
-    public function providerTypes(WashAiEngineService $ai)
+    public function providerTypes(AiEngineClient $ai)
     {
         try {
             $types = $ai->providerTypes();

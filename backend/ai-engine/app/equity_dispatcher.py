@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from typing import Any
-from .ollama_client import OllamaClient
+from .providers import BaseLLMProvider
 from .schemas import (
     FairnessDispatchPlan,
     FairnessDispatchRequest,
@@ -26,8 +26,8 @@ Ton ton doit être républicain, impartial, factuel et bienveillant.
 
 
 class EquityDispatcher:
-    def __init__(self, ollama: OllamaClient):
-        self.ollama = ollama
+    def __init__(self, llm: BaseLLMProvider):
+        self.llm = llm
 
     def calculate_equity_score(self, school: SchoolEquityProfile) -> tuple[float, str]:
         """
@@ -185,7 +185,7 @@ Top 3 des écoles prioritaires selon l'algorithme d'équité :
         prompt += f"\nTournées logistiques prévues : {len(grouped_missions)} mission(s) mutualisée(s)."
 
         try:
-            transparency_note = (await self.ollama.generate_json(
+            transparency_note = (await self.llm.generate_json(
                 prompt=prompt,
                 system=TRANSPARENCY_NOTE_SYSTEM + "\nRéponds avec un JSON : {\"official_note\": \"le texte complet de la note\"}"
             )).get("official_note", "")

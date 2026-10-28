@@ -10,8 +10,7 @@ from .epidemic_detector import EpidemicDetector
 from .equity_dispatcher import EquityDispatcher
 from .extractor import WashExtractor
 from .image_analyzer import ImageAnalyzer
-from .ollama_client import OllamaClient
-from .providers import PROVIDER_TYPES, llm_from_headers, provider_from_profile
+from .providers import PROVIDER_TYPES, OllamaProvider, llm_from_headers, provider_from_profile
 from .repair_advisor import RepairAdvisor
 from .schemas import (
     DecisionCopilotRequest,
@@ -53,14 +52,7 @@ app.add_middleware(
 )
 
 # Initialisation des composants IA
-ollama_client = OllamaClient()
-extractor = WashExtractor(ollama_client)
-duplicate_detector = DuplicateDetector(ollama_client)
-image_analyzer = ImageAnalyzer(ollama_client)
-repair_advisor = RepairAdvisor(ollama_client)
-epidemic_detector = EpidemicDetector(ollama_client)
-decision_agent = DecisionAgent(ollama_client)
-equity_dispatcher = EquityDispatcher(ollama_client)
+default_llm = OllamaProvider()
 voice_service = VoiceService()
 
 
@@ -79,9 +71,9 @@ def health() -> dict[str, Any]:
         "status": "healthy",
         "service": "WASH Sentinel AI Engine",
         "models": {
-            "llm": ollama_client.model,
-            "vision": ollama_client.vision_model,
-            "embeddings": ollama_client.embed_model,
+            "llm": default_llm.model,
+            "vision": default_llm.vision_model,
+            "embeddings": default_llm.embed_model,
         },
         "providers": [p["id"] for p in PROVIDER_TYPES],
         "capabilities": [

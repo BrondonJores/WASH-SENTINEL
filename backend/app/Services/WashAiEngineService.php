@@ -2,11 +2,12 @@
 
 namespace App\Services;
 
+use App\Contracts\AiEngineClient;
 use App\Models\AiModelProfile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
-class WashAiEngineService
+class WashAiEngineService implements AiEngineClient
 {
     public function __construct(
         protected string $baseUrl = '',

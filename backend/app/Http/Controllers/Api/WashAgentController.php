@@ -6,12 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Models\AiAnalysis;
 use App\Models\Incident;
 use App\Models\School;
-use App\Services\WashAiEngineService;
+use App\Contracts\AiEngineClient;
 use Illuminate\Http\Request;
 
 class WashAgentController extends Controller
 {
-    public function copilotChat(Request $request, WashAiEngineService $ai)
+    public function copilotChat(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate([
             'user_query' => ['required', 'string', 'max:2000'],
@@ -48,7 +48,7 @@ class WashAgentController extends Controller
         return response()->json($response);
     }
 
-    public function replaceVsRepair(School $school, WashAiEngineService $ai)
+    public function replaceVsRepair(School $school, AiEngineClient $ai)
     {
         $history = [
             'school_id' => $school->id,
@@ -65,7 +65,7 @@ class WashAgentController extends Controller
         return response()->json($ai->replaceVsRepair($history));
     }
 
-    public function dispatchPlan(Request $request, WashAiEngineService $ai)
+    public function dispatchPlan(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate(['district' => ['required', 'string', 'max:128']]);
 
@@ -109,7 +109,7 @@ class WashAgentController extends Controller
         return response()->json($response);
     }
 
-    public function epidemicScan(Request $request, WashAiEngineService $ai)
+    public function epidemicScan(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate(['district' => ['required', 'string', 'max:128']]);
 
@@ -137,7 +137,7 @@ class WashAgentController extends Controller
         return response()->json($response);
     }
 
-    public function synthesize(Request $request, WashAiEngineService $ai)
+    public function synthesize(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate(['text' => ['required', 'string', 'max:1000']]);
 

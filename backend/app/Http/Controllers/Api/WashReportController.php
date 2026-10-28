@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Report;
 use App\Models\School;
-use App\Services\IncidentTriageService;
+use App\Contracts\IncidentTriage;
 use Illuminate\Http\Request;
 
 class WashReportController extends Controller
@@ -20,7 +20,7 @@ class WashReportController extends Controller
         return response()->json($query->paginate(20));
     }
 
-    public function store(Request $request, IncidentTriageService $triage)
+    public function store(Request $request, IncidentTriage $triage)
     {
         $validated = $request->validate([
             'school_id' => ['required', 'exists:schools,id'],

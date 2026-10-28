@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import numpy as np
-from .ollama_client import OllamaClient
+from .providers import BaseLLMProvider
 from .schemas import DuplicateCheckRequest, DuplicateCheckResponse, DuplicateMatch
 
 
 class DuplicateDetector:
-    def __init__(self, ollama: OllamaClient):
-        self.ollama = ollama
+    def __init__(self, llm: BaseLLMProvider):
+        self.llm = llm
 
     async def check(self, request: DuplicateCheckRequest) -> DuplicateCheckResponse:
         """Compare un nouveau signalement aux incidents ouverts pour identifier les doublons."""
@@ -15,7 +15,7 @@ class DuplicateDetector:
             return DuplicateCheckResponse(is_duplicate=False)
 
         # 1. Vecteur du nouveau rapport
-        query_vec = await self.ollama.get_embedding(request.incoming_summary)
+        query_vec = await self.llm.get_embedding(request.incoming_summary)
         if not query_vec:
             # Fallback textuel simple si pas de modèle d'embedding disponible
             return self._fallback_text_match(request)
@@ -30,7 +30,7 @@ class DuplicateDetector:
         max_similarity = 0.0
 
         for inc in request.active_incidents:
-            inc_vec = await self.ollama.get_embedding(inc.summary)
+            inc_vec = await self.llm.get_embedding(inc.summary)
             if not inc_vec:
                 continue
 

@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Contracts\AiEngineClient;
+use App\Contracts\IncidentTriage;
 use App\Models\AiAnalysis;
 use App\Models\Incident;
 use App\Models\Report;
@@ -11,9 +13,9 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
-class IncidentTriageService
+class IncidentTriageService implements IncidentTriage
 {
-    public function __construct(protected WashAiEngineService $ai) {}
+    public function __construct(protected AiEngineClient $ai) {}
 
     public function ingest(School $school, string $channel, ?string $message, ?UploadedFile $audio, ?UploadedFile $photo, ?User $reporter = null): array
     {

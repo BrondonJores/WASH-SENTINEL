@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\AiAnalysis;
 use App\Models\Incident;
-use App\Services\WashAiEngineService;
+use App\Contracts\AiEngineClient;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -25,7 +25,7 @@ class WashIncidentController extends Controller
         return response()->json($query->paginate(20));
     }
 
-    public function show(Request $request, Incident $incident, WashAiEngineService $ai)
+    public function show(Request $request, Incident $incident, AiEngineClient $ai)
     {
         $incident->load(['school', 'reports', 'aiAnalyses', 'maintenanceLogs', 'assignee']);
         $payload = ['incident' => $incident];
