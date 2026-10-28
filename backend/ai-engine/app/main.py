@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .decision_agent import DecisionAgent
@@ -11,6 +11,7 @@ from .equity_dispatcher import EquityDispatcher
 from .extractor import WashExtractor
 from .image_analyzer import ImageAnalyzer
 from .ollama_client import OllamaClient
+from .providers import PROVIDER_TYPES, llm_from_headers, provider_from_profile
 from .repair_advisor import RepairAdvisor
 from .schemas import (
     DecisionCopilotRequest,
@@ -22,6 +23,8 @@ from .schemas import (
     FairnessDispatchPlan,
     FairnessDispatchRequest,
     ImageAnalysisResponse,
+    ProviderTestRequest,
+    ProviderTestResponse,
     RepairPlanRequest,
     RepairPlanResponse,
     ReplaceVsRepairAnalysis,
@@ -61,6 +64,15 @@ equity_dispatcher = EquityDispatcher(ollama_client)
 voice_service = VoiceService()
 
 
+def _llm(request: Request):
+    """Résout le provider LLM actif depuis les headers envoyés par Laravel.
+
+    Sans headers : retombe sur la configuration d'environnement (Ollama local).
+    Chaque requête a son propre client : aucun état global mutable.
+    """
+    return llm_from_headers(request.headers)
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
@@ -71,6 +83,7 @@ def health() -> dict[str, Any]:
             "vision": ollama_client.vision_model,
             "embeddings": ollama_client.embed_model,
         },
+        "providers": [p["id"] for p in PROVIDER_TYPES],
         "capabilities": [
             "text_extraction",
             "voice_transcription",
@@ -91,10 +104,10 @@ def health() -> dict[str, Any]:
 # 1. Extraction et Structuration Textuelle
 # ==========================================
 @app.post("/v1/wash/extract", response_model=WashExtractionResponse)
-async def extract_wash_data(payload: WashExtractionRequest) -> WashExtractionResponse:
+async def extract_wash_data(request: Request, payload: WashExtractionRequest) -> WashExtractionResponse:
     """Extrait et structure un signalement en JSON strict via Meta Llama 3.2."""
     try:
-        return await extractor.extract(payload.raw_text, payload.school_name)
+        return await WashExtractor(_llm(request)).extract(payload.raw_text, payload.school_name)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -106,10 +119,10 @@ async def extract_wash_data(payload: WashExtractionRequest) -> WashExtractionRes
 # 2. Détection de Doublons Sémantiques
 # ==========================================
 @app.post("/v1/wash/check-duplicates", response_model=DuplicateCheckResponse)
-async def check_duplicates(payload: DuplicateCheckRequest) -> DuplicateCheckResponse:
+async def check_duplicates(request: Request, payload: DuplicateCheckRequest) -> DuplicateCheckResponse:
     """Compare un signalement aux incidents existants pour détecter les doublons par similarité vectorielle."""
     try:
-        return await duplicate_detector.check(payload)
+        return await DuplicateDetector(_llm(request)).check(payload)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -121,11 +134,11 @@ async def check_duplicates(payload: DuplicateCheckRequest) -> DuplicateCheckResp
 # 3. Vision Multimodale (Analyse de Photos)
 # ==========================================
 @app.post("/v1/wash/analyze-image", response_model=ImageAnalysisResponse)
-async def analyze_photo(photo: UploadFile = File(...)) -> ImageAnalysisResponse:
+async def analyze_photo(request: Request, photo: UploadFile = File(...)) -> ImageAnalysisResponse:
     """Analyse visuellement une photo de panne d'infrastructure via Llama 3.2 Vision."""
     try:
         image_bytes = await photo.read()
-        return await image_analyzer.analyze(image_bytes)
+        return await ImageAnalyzer(_llm(request)).analyze(image_bytes)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -137,10 +150,10 @@ async def analyze_photo(photo: UploadFile = File(...)) -> ImageAnalysisResponse:
 # 4. Fiche Technique de Réparation (Techniciens)
 # ==========================================
 @app.post("/v1/wash/generate-repair-plan", response_model=RepairPlanResponse)
-async def generate_repair_plan(payload: RepairPlanRequest) -> RepairPlanResponse:
+async def generate_repair_plan(request: Request, payload: RepairPlanRequest) -> RepairPlanResponse:
     """Génère le matériel requis, outils, temps d'intervention et mesures de sécurité pour le réparateur."""
     try:
-        return await repair_advisor.generate_plan(payload)
+        return await RepairAdvisor(_llm(request)).generate_plan(payload)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -152,10 +165,10 @@ async def generate_repair_plan(payload: RepairPlanRequest) -> RepairPlanResponse
 # 5. Détecteur de Grappe & Alerte Épidémique
 # ==========================================
 @app.post("/v1/wash/detect-epidemic-risk", response_model=EpidemicClusterResponse)
-async def detect_epidemic_risk(payload: EpidemicClusterRequest) -> EpidemicClusterResponse:
+async def detect_epidemic_risk(request: Request, payload: EpidemicClusterRequest) -> EpidemicClusterResponse:
     """Analyse les incidents récents d'un district pour déclencher une alerte épidémique précoce (ex: Choléra)."""
     try:
-        return await epidemic_detector.detect_cluster(payload)
+        return await EpidemicDetector(_llm(request)).detect_cluster(payload)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -167,7 +180,7 @@ async def detect_epidemic_risk(payload: EpidemicClusterRequest) -> EpidemicClust
 # 6. Équité Territoriale & Tournées Groupées (Anti-Favoritisme)
 # ==========================================
 @app.post("/v1/wash/equity/dispatch-plan", response_model=FairnessDispatchPlan)
-async def generate_equity_dispatch_plan(payload: FairnessDispatchRequest) -> FairnessDispatchPlan:
+async def generate_equity_dispatch_plan(request: Request, payload: FairnessDispatchRequest) -> FairnessDispatchPlan:
     """
     Le Gardien de l'Équité Territoriale :
     1. Classe les écoles selon une formule d'équité transparente (jours sans eau, filles, isolement).
@@ -175,7 +188,7 @@ async def generate_equity_dispatch_plan(payload: FairnessDispatchRequest) -> Fai
     3. Rédige la note officielle de transparence opposable aux pressions politiques.
     """
     try:
-        return await equity_dispatcher.generate_fairness_plan(payload)
+        return await EquityDispatcher(_llm(request)).generate_fairness_plan(payload)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -187,14 +200,14 @@ async def generate_equity_dispatch_plan(payload: FairnessDispatchRequest) -> Fai
 # 7. Aide à la Décision Stratégique & Copilot (Tool-Calling)
 # ==========================================
 @app.post("/v1/wash/copilot/chat", response_model=DecisionCopilotResponse)
-async def decision_copilot_chat(payload: DecisionCopilotRequest) -> DecisionCopilotResponse:
+async def decision_copilot_chat(request: Request, payload: DecisionCopilotRequest) -> DecisionCopilotResponse:
     """
     Agent conversationnel d'aide à la décision :
     Interroge les historiques d'interventions, exécute les tools d'arbitrage
     et conseille les décideurs sur les investissements prioritaires (Réparer vs Remplacer).
     """
     try:
-        return await decision_agent.answer_decision_query(payload)
+        return await DecisionAgent(_llm(request)).answer_decision_query(payload)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -203,10 +216,10 @@ async def decision_copilot_chat(payload: DecisionCopilotRequest) -> DecisionCopi
 
 
 @app.post("/v1/wash/copilot/replace-vs-repair", response_model=ReplaceVsRepairAnalysis)
-def evaluate_replace_vs_repair(school: SchoolMaintenanceHistory) -> ReplaceVsRepairAnalysis:
+def evaluate_replace_vs_repair(request: Request, school: SchoolMaintenanceHistory) -> ReplaceVsRepairAnalysis:
     """Évalue mathématiquement et financièrement si un équipement doit être remplacé à neuf ou encore réparé."""
     try:
-        return decision_agent.evaluate_school_equipment(school)
+        return DecisionAgent(_llm(request)).evaluate_school_equipment(school)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -254,6 +267,7 @@ def synthesize_voice(payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
 # ==========================================
 @app.post("/v1/wash/triage")
 async def triage_report(
+    request: Request,
     text: str | None = Form(None),
     audio: UploadFile | None = File(None),
     school_name: str | None = Form(None),
@@ -275,7 +289,7 @@ async def triage_report(
     if not raw_content.strip():
         raise HTTPException(status_code=422, detail="Aucun contenu textuel ou audio exploitable fourni.")
 
-    extracted = await extractor.extract(raw_content, school_name)
+    extracted = await WashExtractor(_llm(request)).extract(raw_content, school_name)
 
     return {
         "raw_text": raw_content,
@@ -283,3 +297,28 @@ async def triage_report(
         "voice_details": transcription_meta,
         "extraction": extracted.dict(),
     }
+# ==========================================
+# 10. Administration des Providers (page Settings)
+# ==========================================
+@app.get("/v1/admin/provider-types")
+def list_provider_types() -> dict[str, Any]:
+    """Descripteurs des providers supportés : pilote le formulaire dynamique de la page Settings."""
+    return {"providers": PROVIDER_TYPES}
+
+
+@app.post("/v1/admin/test-provider", response_model=ProviderTestResponse)
+async def test_provider(payload: ProviderTestRequest) -> ProviderTestResponse:
+    """Teste un profil modèle (bouton Tester de la page Settings)."""
+    try:
+        provider = provider_from_profile(payload.model_dump())
+        result = await provider.test()
+        return ProviderTestResponse(
+            ok=result["ok"],
+            latency_ms=result["latency_ms"],
+            sample=result["sample"],
+            error=result["error"],
+            provider=provider.provider_name,
+            model=provider.model,
+        )
+    except Exception as exc:
+        return ProviderTestResponse(ok=False, error=f"{type(exc).__name__}: {str(exc)[:300]}")

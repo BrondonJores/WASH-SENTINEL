@@ -244,3 +244,26 @@ class VoiceSynthesisResponse(BaseModel):
     audio_base64: str
     mime_type: str = "audio/wav"
     text: str
+
+
+# ==========================================
+# 9. Administration des Providers LLM
+# ==========================================
+
+class ProviderTestRequest(BaseModel):
+    provider: str = Field("ollama", description="ollama ou openai_compatible")
+    base_url: str = Field(..., description="URL de base du provider")
+    model: str = Field(..., description="Modèle texte à tester")
+    vision_model: str | None = None
+    embed_model: str | None = None
+    api_key: str | None = None
+    timeout: float = 30.0
+
+
+class ProviderTestResponse(BaseModel):
+    ok: bool
+    latency_ms: int = 0
+    sample: str = ""
+    error: str | None = None
+    provider: str = ""
+    model: str = ""

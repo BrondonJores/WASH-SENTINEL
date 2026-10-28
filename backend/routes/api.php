@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\Admin\WashModelProfileController;
 use App\Http\Controllers\Api\WashAgentController;
 use App\Http\Controllers\Api\WashIncidentController;
 use App\Http\Controllers\Api\WashReportController;
@@ -35,4 +36,11 @@ Route::prefix('v1/wash')->group(function () {
         Route::post('/incidents/{incident}/override-priority', [WashIncidentController::class, 'overridePriority']);
         Route::post('/incidents/{incident}/maintenance-logs', [WashIncidentController::class, 'storeMaintenanceLog']);
     });
+});
+
+Route::prefix('v1/admin')->middleware('auth:sanctum')->group(function () {
+    Route::get('/provider-types', [WashModelProfileController::class, 'providerTypes']);
+    Route::apiResource('/model-profiles', WashModelProfileController::class)->parameters(['model-profiles' => 'modelProfile']);
+    Route::post('/model-profiles/{modelProfile}/activate', [WashModelProfileController::class, 'activate']);
+    Route::post('/model-profiles/{modelProfile}/test', [WashModelProfileController::class, 'test']);
 });

@@ -1,0 +1,36 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('ai_model_profiles', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->enum('provider', ['ollama', 'openai_compatible'])->default('ollama');
+            $table->string('base_url');
+            $table->string('model');
+            $table->string('vision_model')->nullable();
+            $table->string('embed_model')->nullable();
+            $table->text('api_key')->nullable();
+            $table->unsignedInteger('timeout')->default(120);
+            $table->boolean('is_active')->default(false);
+            $table->boolean('is_default')->default(false);
+            $table->timestamp('last_tested_at')->nullable();
+            $table->string('last_test_status')->nullable();
+            $table->unsignedInteger('last_test_latency_ms')->nullable();
+            $table->timestamps();
+
+            $table->index('is_active');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('ai_model_profiles');
+    }
+};
