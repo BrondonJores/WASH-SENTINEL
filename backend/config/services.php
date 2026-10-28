@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'ai_engine' => [
+        'url' => env('AI_ENGINE_URL', 'http://ai-engine:8000'),
+        'timeout' => env('AI_ENGINE_TIMEOUT', 120),
+    ],
 ];
