@@ -1,16 +1,25 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .duplicate_detector import DuplicateDetector
+from .epidemic_detector import EpidemicDetector
 from .extractor import WashExtractor
+from .image_analyzer import ImageAnalyzer
 from .ollama_client import OllamaClient
+from .repair_advisor import RepairAdvisor
 from .schemas import (
     DuplicateCheckRequest,
     DuplicateCheckResponse,
+    EpidemicClusterRequest,
+    EpidemicClusterResponse,
+    ImageAnalysisResponse,
+    RepairPlanRequest,
+    RepairPlanResponse,
+    VoiceSynthesisRequest,
+    VoiceSynthesisResponse,
     VoiceTranscriptionResponse,
     WashExtractionRequest,
     WashExtractionResponse,
@@ -19,8 +28,8 @@ from .voice_service import VoiceService
 
 app = FastAPI(
     title="WASH Sentinel AI Engine",
-    description="Microservice d'Intelligence Artificielle pour la priorisation et le suivi des urgences WASH en milieu scolaire.",
-    version="1.0.0",
+    description="Moteur IA complet pour la priorisation, le diagnostic multimodal et l'alerte épidémique WASH en milieu scolaire.",
+    version="1.1.0",
 )
 
 # CORS pour autoriser Laravel et le frontend React
@@ -32,10 +41,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialisation des composants
+# Initialisation des composants IA
 ollama_client = OllamaClient()
 extractor = WashExtractor(ollama_client)
 duplicate_detector = DuplicateDetector(ollama_client)
+image_analyzer = ImageAnalyzer(ollama_client)
+repair_advisor = RepairAdvisor(ollama_client)
+epidemic_detector = EpidemicDetector(ollama_client)
 voice_service = VoiceService()
 
 
@@ -44,11 +56,26 @@ def health() -> dict[str, Any]:
     return {
         "status": "healthy",
         "service": "WASH Sentinel AI Engine",
-        "model": ollama_client.model,
-        "ollama_url": ollama_client.base_url,
+        "models": {
+            "llm": ollama_client.model,
+            "vision": ollama_client.vision_model,
+            "embeddings": ollama_client.embed_model,
+        },
+        "capabilities": [
+            "text_extraction",
+            "voice_transcription",
+            "voice_synthesis",
+            "multimodal_vision",
+            "duplicate_detection",
+            "repair_planning",
+            "epidemic_early_warning",
+        ],
     }
 
 
+# ==========================================
+# 1. Extraction et Structuration Textuelle
+# ==========================================
 @app.post("/v1/wash/extract", response_model=WashExtractionResponse)
 async def extract_wash_data(payload: WashExtractionRequest) -> WashExtractionResponse:
     """Extrait et structure un signalement en JSON strict via Meta Llama 3.2."""
@@ -61,6 +88,9 @@ async def extract_wash_data(payload: WashExtractionRequest) -> WashExtractionRes
         ) from exc
 
 
+# ==========================================
+# 2. Détection de Doublons Sémantiques
+# ==========================================
 @app.post("/v1/wash/check-duplicates", response_model=DuplicateCheckResponse)
 async def check_duplicates(payload: DuplicateCheckRequest) -> DuplicateCheckResponse:
     """Compare un signalement aux incidents existants pour détecter les doublons par similarité vectorielle."""
@@ -73,6 +103,55 @@ async def check_duplicates(payload: DuplicateCheckRequest) -> DuplicateCheckResp
         ) from exc
 
 
+# ==========================================
+# 3. Vision Multimodale (Analyse de Photos)
+# ==========================================
+@app.post("/v1/wash/analyze-image", response_model=ImageAnalysisResponse)
+async def analyze_photo(photo: UploadFile = File(...)) -> ImageAnalysisResponse:
+    """Analyse visuellement une photo de panne d'infrastructure via Llama 3.2 Vision."""
+    try:
+        image_bytes = await photo.read()
+        return await image_analyzer.analyze(image_bytes)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur d'analyse visuelle : {str(exc)}"
+        ) from exc
+
+
+# ==========================================
+# 4. Fiche Technique de Réparation (Techniciens)
+# ==========================================
+@app.post("/v1/wash/generate-repair-plan", response_model=RepairPlanResponse)
+async def generate_repair_plan(payload: RepairPlanRequest) -> RepairPlanResponse:
+    """Génère le matériel requis, outils, temps d'intervention et mesures de sécurité pour le réparateur."""
+    try:
+        return await repair_advisor.generate_plan(payload)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de la génération du plan technique : {str(exc)}"
+        ) from exc
+
+
+# ==========================================
+# 5. Détecteur de Grappe & Alerte Épidémique
+# ==========================================
+@app.post("/v1/wash/detect-epidemic-risk", response_model=EpidemicClusterResponse)
+async def detect_epidemic_risk(payload: EpidemicClusterRequest) -> EpidemicClusterResponse:
+    """Analyse les incidents récents d'un district pour déclencher une alerte épidémique précoce (ex: Choléra)."""
+    try:
+        return await epidemic_detector.detect_cluster(payload)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de l'évaluation épidémique : {str(exc)}"
+        ) from exc
+
+
+# ==========================================
+# 6. Audio (Transcription STT & Synthèse TTS)
+# ==========================================
 @app.post("/v1/voice/transcribe", response_model=VoiceTranscriptionResponse)
 async def transcribe_audio(
     audio: UploadFile = File(...),
@@ -93,6 +172,21 @@ async def transcribe_audio(
         ) from exc
 
 
+@app.post("/v1/voice/synthesize", response_model=VoiceSynthesisResponse)
+def synthesize_voice(payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
+    """Génère un message audio de confirmation via Piper TTS."""
+    try:
+        return voice_service.synthesize(payload.text, payload.voice)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur de synthèse vocale : {str(exc)}"
+        ) from exc
+
+
+# ==========================================
+# 7. Pipeline Unifié Commando (Texte ou Voix)
+# ==========================================
 @app.post("/v1/wash/triage")
 async def triage_report(
     text: str | None = Form(None),
@@ -101,8 +195,8 @@ async def triage_report(
 ) -> dict[str, Any]:
     """
     Endpoint Commando Unifié :
-    Accepte soit du texte, soit une note vocale, transcrit si nécessaire,
-    puis extrait et priorise la panne dans un format immédiatement exploitable par Laravel.
+    Accepte du texte ou un enregistrement audio, transcrit si besoin,
+    puis extrait, priorise et renvoie les données complètes pour Laravel.
     """
     raw_content = text or ""
     transcription_meta = None
