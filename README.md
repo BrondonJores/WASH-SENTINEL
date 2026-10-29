@@ -7,6 +7,8 @@
 [![Fresh code](https://img.shields.io/badge/code-100%25%20fresh%20commits-green)]()
 [![Status](https://img.shields.io/badge/status-working%20MVP-success)]()
 
+> 🎬 **Demo video:** _coming soon_ (`docs/demo.mp4`) · **Live jury URL:** _on request_
+
 > **One omnipresent AI agent instead of dashboards.** School directors report a broken pump by text, voice note, photo or WhatsApp — in French or a local language like Douala. Sentinel triages, deduplicates, prioritizes, dispatches fairly across the territory, and advises: *repair or replace?*
 
 Built with 💧 for the **Meta Hackathon** — powered by **Meta Llama**, **Meta Omnilingual ASR** and the **WhatsApp Cloud API**. Starting pilot: **Cameroon 🇨🇲**.
@@ -15,7 +17,7 @@ Built with 💧 for the **Meta Hackathon** — powered by **Meta Llama**, **Meta
 
 ## 1. The problem
 
-- **600M+ children** worldwide lack safe water or decent toilets at school (UNICEF/WHO). In rural Cameroon, a broken handpump can leave **400+ pupils without drinking water for weeks**.
+- **429M children** lack basic drinking water at school, **460M** lack basic sanitation and **545M** lack basic hygiene ([WHO/UNICEF JMP 2015–2025](https://data.unicef.org/resources/jmp-wash-in-schools-2026/)). In rural Cameroon, a broken handpump can leave **400+ pupils without drinking water for weeks**.
 - Reports arrive chaotically — phone calls, WhatsApp voice notes in local languages, paper notes — and **die in inboxes**. Five teachers reporting the same leak create five tickets… or zero action.
 - Maintenance is unfair by default: the loudest, closest, best-connected school gets served first. Remote schools and **adolescent girls** (first to drop out when latrines fail) are forgotten.
 - Communes burn budgets on endless patch-repairs instead of strategic replacement.
@@ -35,14 +37,16 @@ WASH Sentinel turns every chaotic field report into **one triaged, deduplicated,
 
 ## 3. Why it wins 🏆
 
-1. **Dashboardless by design** — a real agent loop with native function-calling and 6 tools (incidents, schools, maintenance history, repair trends, dispatch, analysis), not a chatbot wrapper.
-2. **Meta-native, end to end** — Llama for reasoning, Omnilingual ASR for 1600+ languages (Douala included), WhatsApp for the last mile.
+1. **Dashboardless by design** — a real agent loop with native function-calling and 6 tools (`analyze_school`, `rank_schools_by_need`, `summarize_district`, `explain_incident`, `repair_trends`, `prepare_report`), not a chatbot wrapper.
+2. **Meta-native, end to end** — Llama for reasoning, Omnilingual ASR for 1,600 languages (Douala included), WhatsApp for the last mile.
 3. **Equity is the algorithm** — a transparent fairness score (days without water × health risk × girls' impact × isolation bonus) kills favoritism and produces an auditable public justification.
 4. **Repair-vs-repair economics** — the copilot computes cumulative repair cost vs. new-equipment cost (MTBF, school-days lost) and says *stop patching, replace with solar pumping*.
 5. **Model independence** — switch local ↔ cloud LLM/STT **at runtime from the admin Settings page**. No redeploy, no code change. API keys encrypted at rest.
 6. **Runs where it's needed** — full local stack on a CPU-only i5 (Llama 3.2 3B, ONNX int8 ASR). Cloud profiles available for zero-GPU demo day.
 
 ## 4. 🎬 3-minute jury demo script
+
+_Golden path with example outputs — run it live after `./start.sh`._
 
 1. **Report** — *« Ici école Saint-Paul, la pompe d'eau potable est brisée depuis ce matin, 400 élèves sans eau… »* (text or voice note) → incident created, **CRITICAL**, priority 95/100, reference `WASH-2026-0042`, voice confirmation generated.
 2. **Duplicate** — send *« Problème d'eau à Saint-Paul »* → `is_duplicate: true`, attached to the parent, severity bumped. No ticket spam.
@@ -124,7 +128,7 @@ Same flow for speech: `API cloud (OpenAI / Groq)` STT profile with `whisper-1`. 
 
 ## 8. API overview
 
-**Laravel** (`/api/v1`): `POST /auth/token` · `GET|POST /wash/schools|reports|incidents` · `POST /wash/agent/converse|chat|dispatch-plan|epidemic-scan` · `GET|POST /admin/model-profiles|stt-profiles` (+ `/activate`, `/test`) · `POST /whatsapp/webhook` (+ `GET` verify).
+**Laravel** (`/api/v1`): `POST /auth/token` · `GET /wash/schools|reports|incidents` · `POST /wash/reports` · `POST /wash/agent/chat|converse|dispatch-plan|epidemic-scan` · `GET|POST /admin/model-profiles|stt-profiles` (+ `/activate`, `/test`) · `POST /whatsapp/webhook` (+ `GET` verify).
 
 **AI engine** (`:8000`): `/health` · `/v1/wash/extract|check-duplicates|triage|analyze-image|generate-repair-plan|detect-epidemic-risk` · `/v1/wash/copilot/chat|replace-vs-repair` · `/v1/wash/equity/dispatch-plan` · `/v1/agent/chat` · `/v1/voice/transcribe|synthesize` · `/v1/admin/provider-types|test-provider|stt-types|test-stt`.
 
@@ -133,7 +137,7 @@ Full interactive reference: http://localhost:8000/docs
 ## 9. Voice & local languages 🗣️
 
 - **Whisper.cpp** (local, CPU) for French voice notes.
-- **Meta Omnilingual ASR** via `sherpa-onnx` (ONNX int8, CPU-friendly): 1600+ languages including **Douala (`dua_Latn`)**, Bassa, Ewondo. Each school sets its `default_language`.
+- **Meta Omnilingual ASR** via `sherpa-onnx` (ONNX int8, CPU-friendly): 1,600 languages including **Douala (`dua_Latn`)**, Bassa, Ewondo. Each school sets its `default_language`.
 - **Piper TTS** speaks confirmations back ("Your report WASH-2026-0042 is registered, priority HIGH…").
 
 To enable Omnilingual, drop the [~700 MB model + tokens](https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12) into `models/omnilingual/` and activate the profile in AI Settings.
@@ -145,7 +149,7 @@ To enable Omnilingual, drop the [~700 MB model + tokens](https://huggingface.co/
 ## 11. Engineering you can audit 🔒
 
 - **SOLID**: PHP contracts (`AiEngineClient`, `IncidentTriage`, `WhatsAppClient`) with container bindings; Python abstractions (`BaseLLMProvider`, `BaseSTTProvider`) + registries — agents depend on interfaces, never on Ollama.
-- **Security**: Sanctum tokens, Spatie RBAC (reporter / technician / admin), API keys encrypted in DB (masked in UI), strict request validation, every AI decision journaled in `ai_analyses`.
+- **Security**: Sanctum tokens, Spatie RBAC (reporter / technician / admin), API keys encrypted in DB (masked in UI), strict request validation, rate limiting on auth/report/webhook endpoints, every AI decision journaled in `ai_analyses`.
 - **Resilience**: deterministic triage fallbacks keep reporting alive if the AI engine is down.
 - **Tests**: PHPUnit suite (triage, duplicates, RBAC, WhatsApp, agent loop, notifications) green; Python probes cover LLM/STT/agent wiring.
 - **Traceability**: 100% fresh code, committed step by step — no copy-paste from previous projects.
