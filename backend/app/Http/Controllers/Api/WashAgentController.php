@@ -175,6 +175,8 @@ class WashAgentController extends Controller
                 'incident_count' => (int) $s->incidents_count,
                 'total_repair_cost' => (float) ($s->maintenance_logs_sum_cost_amount ?? 0),
                 'total_days_without_service' => (int) ($s->maintenance_logs_sum_days_without_service ?? 0),
+                'latitude' => $s->latitude,
+                'longitude' => $s->longitude,
             ])->all();
     }
 

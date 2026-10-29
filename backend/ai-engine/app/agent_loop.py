@@ -16,7 +16,7 @@ Règles impératives :
 - Si l'utilisateur nomme une école, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
 - Si l'utilisateur signale une panne, appelle prepare_report puis demande confirmation avant tout enregistrement.
-- Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).
+- Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).\n- Pour toute carte, visualisation géographique ou question 'où' : appelle territory_overview (la carte interactive est générée).\n- Pour tout briefing, dossier, diaporama ou synthèse exécutive : appelle build_briefing (la présentation est générée).
 - Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
 - Si un outil renvoie une erreur, corrige tes arguments avec les valeurs exactes fournies et réessaie au lieu d'abandonner.
 - N'appelle jamais deux fois le même outil avec les mêmes arguments : quand tu as le résultat, réponds.
@@ -29,6 +29,134 @@ REPEAT_NUDGE = (
     "Tu as déjà appelé cet outil avec ces mêmes arguments : le résultat est plus haut. "
     "N'appelle plus aucun outil et réponds maintenant à l'utilisateur en français."
 )
+
+
+def _fmt_int(value: Any) -> str:
+    try:
+        return f"{int(value):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return "0"
+
+
+def _fmt_1(value: Any) -> str:
+    try:
+        return f"{float(value):.1f}".replace(".", ",")
+    except (TypeError, ValueError):
+        return "0,0"
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if count == 1 else (plural or singular + "s")
+
+
+def _summarize_district(obs: dict[str, Any]) -> str:
+    n = int(obs.get("open_incidents", 0) or 0)
+    pupils = _fmt_int(obs.get("total_affected_students", 0))
+    schools = obs.get("schools_involved", []) or []
+    critical = int((obs.get("by_urgency", {}) or {}).get("critical", 0) or 0)
+    text = (
+        f"{n} {_plural(n, 'incident ouvert', 'incidents ouverts')} "
+        f"{_plural(n, 'touche', 'touchent')} "
+        f"{pupils} élèves dans {len(schools)} {_plural(len(schools), 'école')}"
+    )
+    if critical:
+        text += f", dont {critical} {_plural(critical, 'critique')}"
+    return text + ". Le détail est dans la carte ci-dessous."
+
+
+def _summarize_trends(obs: dict[str, Any]) -> str:
+    figures = obs.get("figures", {}) or {}
+    trend = {"up": "en hausse", "down": "en baisse"}.get(
+        str(figures.get("trend_direction", "")), "stable"
+    )
+    n = int(figures.get("total_incidents", 0) or 0)
+    return (
+        f"À {obs.get('school_name', '?')} sur {obs.get('months', 3)} mois : "
+        f"{n} {_plural(n, 'panne')}, "
+        f"{_fmt_int(figures.get('total_cost', 0))} {figures.get('currency', 'XAF')} de réparations, "
+        f"tendance {trend}. Le graphique est dans la carte ci-dessous."
+    )
+
+
+def _summarize_ranking(obs: dict[str, Any]) -> str:
+    ranking = obs.get("ranking", []) or []
+    if not ranking:
+        return "Aucune école avec panne ouverte pour le moment."
+    top = ranking[0]
+    total = int(obs.get("total", len(ranking)) or 0)
+    return (
+        f"{total} {_plural(total, 'école a', 'écoles ont')} besoin d'aide, en tête : "
+        f"{top.get('school_name', '?')} (score {_fmt_1(top.get('need_score', 0))}). "
+        "Le classement complet est dans la carte ci-dessous."
+    )
+
+
+def _summarize_analysis(obs: dict[str, Any]) -> str:
+    verdict = {
+        "REPLACE_EQUIPMENT": "remplacer l'équipement",
+        "CONTINUE_REPAIR": "continuer les réparations",
+        "MONITOR_CLOSELY": "renforcer la surveillance",
+    }.get(str(obs.get("recommendation", "")), "étudier le dossier")
+    n = len(obs.get("open_incidents", []) or [])
+    return (
+        f"À {obs.get('school_name', '?')} : {n} {_plural(n, 'panne ouverte', 'pannes ouvertes')}, "
+        f"ratio réparations/neuf de {_fmt_1(obs.get('repair_ratio_percent', 0))} %. "
+        f"Verdict : {verdict}. L'analyse complète est dans la carte ci-dessous."
+    )
+
+
+def _summarize_incident(obs: dict[str, Any]) -> str:
+    ref = obs.get("reference_code") or f"#{obs.get('id', '?')}"
+    return (
+        f"Incident {ref} à {obs.get('school_name', '?')} : {obs.get('title', '?')} "
+        f"(urgence {obs.get('urgency', '?')}, "
+        f"{_fmt_int(obs.get('affected_students', 0))} élèves). "
+        "Le détail est dans la carte ci-dessous."
+    )
+
+
+def _summarize_report(obs: dict[str, Any]) -> str:
+    matched = (obs.get("matched_school", {}) or {}).get("school_name")
+    description = str(obs.get("description", "")).strip()[:120]
+    if matched:
+        return (
+            f"Signalement préparé pour {matched} : « {description} ». "
+            "Confirmez-le dans la carte ci-dessous."
+        )
+    return (
+        f"Signalement préparé : « {description} ». "
+        "Précisez l'école puis confirmez dans la carte ci-dessous."
+    )
+
+
+def _summarize_territory(obs: dict[str, Any]) -> str:
+    total = int(obs.get("total", 0) or 0)
+    n = int(obs.get("open_incidents", 0) or 0)
+    missing = len(obs.get("missing_gps", []) or [])
+    text = (
+        f"{total} {_plural(total, 'école géolocalisée', 'écoles géolocalisées')}, "
+        f"{n} {_plural(n, 'incident ouvert', 'incidents ouverts')}. "
+        "La carte interactive est ci-dessous."
+    )
+    if missing:
+        text += f" ({missing} {_plural(missing, 'école sans', 'écoles sans')} GPS.)"
+    return text
+
+
+FALLBACK_SUMMARIES = {
+    "summarize_district": _summarize_district,
+    "repair_trends": _summarize_trends,
+    "rank_schools_by_need": _summarize_ranking,
+    "analyze_school": _summarize_analysis,
+    "explain_incident": _summarize_incident,
+    "prepare_report": _summarize_report,
+    "territory_overview": _summarize_territory,
+    "build_briefing": lambda obs: (
+        f"Briefing prêt : {int(obs.get('total', 0) or 0)} slides "
+        f"({(obs.get('slides', [{}])[0].get('stats', [{}])[0].get('value', '?'))} "
+        "incidents ouverts). La présentation est dans la carte ci-dessous."
+    ),
+}
 
 
 class AgentLoop:
@@ -80,16 +208,37 @@ class AgentLoop:
                     break
                 nudged = True
         else:
-            answer = answer or "Voici ce que j'ai trouvé à partir des données disponibles."
+            answer = self._fallback_answer(executed)
 
         if not answer.strip():
-            answer = "Voici ce que j'ai trouvé à partir des données disponibles."
+            answer = self._fallback_answer(executed)
 
         return AgentChatResponse(
             answer=answer.strip(),
             tools_executed=[name for name, _ in executed],
             cards=self._build_cards(executed),
             model_used=self.llm.model,
+        )
+
+    def _fallback_answer(self, executed: list[tuple[str, dict[str, Any]]]) -> str:
+        """Résumé humain déterministe quand le modèle ne conclut pas.
+
+        Prend la dernière observation réussie et la raconte en une phrase
+        chiffrée qui pointe vers la carte (pas de jargon robotique).
+        """
+        for name, observation in reversed(executed):
+            if "error" in observation:
+                continue
+            summarizer = FALLBACK_SUMMARIES.get(name)
+            if summarizer:
+                try:
+                    return summarizer(observation)
+                except (TypeError, ValueError, KeyError, IndexError, AttributeError):
+                    continue
+            return "J'ai consulté les données, le résultat est dans la carte ci-dessous."
+        return (
+            "Je n'ai pas pu récupérer de données pour cette question. "
+            "Reformulez-la avec le nom d'une école ou d'un district."
         )
 
     def _build_cards(self, executed: list[tuple[str, dict[str, Any]]]) -> list[AgentCard]:
@@ -125,6 +274,20 @@ class AgentLoop:
                 cards.append(AgentCard(
                     type="report_confirmation",
                     title="Confirmer le signalement",
+                    data=observation,
+                ))
+            elif name == "build_briefing":
+                district = observation.get("district")
+                cards.append(AgentCard(
+                    type="briefing_deck",
+                    title=f"Briefing{f' — {district}' if district else ''}",
+                    data=observation,
+                ))
+            elif name == "territory_overview":
+                district = observation.get("district")
+                cards.append(AgentCard(
+                    type="territory_map",
+                    title=f"Carte du territoire{f' — {district}' if district else ''}",
                     data=observation,
                 ))
             elif name == "repair_trends":

@@ -73,3 +73,78 @@ class AnalyzeSchoolTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+TERRITORY_CONTEXT = {
+    "schools": [
+        {"school_id": 1, "school_name": "E1", "district": "Wouri",
+         "latitude": 4.0, "longitude": 9.6},
+        {"school_id": 2, "school_name": "E2", "district": "Mvila",
+         "latitude": None, "longitude": None},
+        {"school_id": 3, "school_name": "E3", "district": "Wouri", "lat": 4.1, "lng": 9.7},
+    ],
+    "incidents": [
+        {"id": 1, "school_id": 1, "status": "reported",
+         "urgency": "critical", "affected_students": 100},
+        {"id": 2, "school_id": 1, "status": "resolved",
+         "urgency": "low", "affected_students": 5},
+        {"id": 3, "school_id": 3, "status": "in_progress",
+         "urgency": "medium", "affected_students": 20},
+    ],
+}
+
+
+class TerritoryOverviewTest(unittest.TestCase):
+    def test_points_and_missing(self) -> None:
+        res = TOOL_EXECUTORS["territory_overview"]({}, TERRITORY_CONTEXT)
+        self.assertEqual(res["total"], 2)
+        self.assertEqual(res["missing_gps"], ["E2"])
+        e1 = next(s for s in res["schools"] if s["school_id"] == 1)
+        self.assertEqual(e1["open_incidents"], 1)
+        self.assertEqual(e1["top_urgency"], "critical")
+        self.assertEqual(e1["affected_students"], 100)
+
+    def test_district_filter_case_insensitive(self) -> None:
+        res = TOOL_EXECUTORS["territory_overview"]({"district": "mVILA"}, TERRITORY_CONTEXT)
+        self.assertEqual(res["total"], 0)
+        self.assertEqual(res["missing_gps"], ["E2"])
+
+
+BRIEFING_CONTEXT = {
+    "schools": [
+        {"school_id": 1, "school_name": "E1", "district": "Wouri"},
+        {"school_id": 2, "school_name": "E2", "district": "Mvila"},
+    ],
+    "incidents": [
+        {"id": 1, "school_id": 1, "school_name": "E1", "district": "Wouri",
+         "title": "Pompe cassée", "status": "reported", "urgency": "critical",
+         "affected_students": 450, "reported_at": "2026-09-01T00:00:00Z"},
+        {"id": 2, "school_id": 2, "school_name": "E2", "district": "Mvila",
+         "title": "Fuite", "status": "in_progress", "urgency": "medium",
+         "affected_students": 20, "reported_at": "2026-10-28T00:00:00Z"},
+    ],
+}
+
+
+class BuildBriefingTest(unittest.TestCase):
+    def test_deck_structure(self) -> None:
+        res = TOOL_EXECUTORS["build_briefing"]({}, BRIEFING_CONTEXT)
+        self.assertEqual(res["total"], 3)
+        cover, prio, actions = res["slides"]
+        self.assertEqual(cover["kind"], "cover")
+        self.assertEqual(len(cover["stats"]), 3)
+        self.assertIn("E1", prio["lines"][0])
+        self.assertIn("critique", prio["lines"][0])
+        self.assertTrue(any("critique" in a for a in actions["lines"]))
+        self.assertTrue(any("7 jours" in a for a in actions["lines"]))
+
+    def test_district_filter(self) -> None:
+        res = TOOL_EXECUTORS["build_briefing"]({"district": "Mvila"}, BRIEFING_CONTEXT)
+        self.assertEqual(res["district"], "Mvila")
+        self.assertEqual(res["slides"][0]["stats"][0]["value"], "1")
+
+    def test_empty_context_is_honest(self) -> None:
+        res = TOOL_EXECUTORS["build_briefing"]({}, {"schools": [], "incidents": []})
+        self.assertEqual(res["slides"][0]["stats"][0]["value"], "0")
+        self.assertIn("calme plat", res["slides"][1]["lines"][0])
+        self.assertIn("surveillance", res["slides"][2]["lines"][0])

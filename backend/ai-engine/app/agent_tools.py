@@ -189,6 +189,123 @@ def tool_prepare_report(args: dict[str, Any], context: dict[str, Any]) -> dict[s
     }
 
 
+URGENCY_FR = {"critical": "critique", "high": "haute", "medium": "moyenne", "low": "basse"}
+
+
+def _fmt_int(n: Any) -> str:
+    try:
+        return f"{int(n):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return "0"
+
+
+def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Assemble un mini-dossier de briefing (diaporama) déterministe."""
+    district = str(args.get("district") or "").strip()
+    dlow = district.lower()
+    schools = [s for s in context.get("schools", [])
+               if not dlow or str(s.get("district", "")).lower() == dlow]
+    sids = {s.get("school_id") for s in schools}
+    open_incs = [i for i in _open_incidents(context) if i.get("school_id") in sids]
+    weights = {"critical": 10.0, "high": 5.0, "medium": 2.0, "low": 0.5}
+    affected = sum(int(i.get("affected_students", 0) or 0) for i in open_incs)
+    now = datetime.now(timezone.utc)
+
+    top = sorted(open_incs,
+                 key=lambda i: (weights.get(str(i.get("urgency", "low")), 0.0),
+                                int(i.get("affected_students", 0) or 0)),
+                 reverse=True)[:3]
+    priorities = [
+        f"{i.get('school_name', '?')} — {i.get('title', '?')} "
+        f"({URGENCY_FR.get(str(i.get('urgency')), str(i.get('urgency')))}, "
+        f"{_fmt_int(i.get('affected_students', 0))} élèves)"
+        for i in top
+    ] or ["Aucune priorité : calme plat sur ce territoire."]
+
+    actions: list[str] = []
+    crit = [i for i in open_incs if str(i.get("urgency")) == "critical"]
+    if crit:
+        names = ", ".join(sorted({str(i.get("school_name", "?")) for i in crit}))
+        actions.append(f"Intervenir en priorité sur {len(crit)} incident(s) critique(s) : {names}.")
+    old = [i for i in open_incs
+           if (dt := _parse_dt(i.get("reported_at"))) is not None and (now - dt).days > 7]
+    if old:
+        actions.append(f"{len(old)} incident(s) ouvert(s) depuis plus de 7 jours : planifier la relance.")
+    by_district: dict[str, int] = {}
+    for i in open_incs:
+        by_district[str(i.get("district", "?"))] = by_district.get(str(i.get("district", "?")), 0) + 1
+    grouped = [d for d, n in by_district.items() if n >= 2]
+    if grouped:
+        actions.append(f"Tournée groupée possible : {', '.join(sorted(grouped))}.")
+    if not actions:
+        actions.append("Aucune action urgente : maintenir la surveillance.")
+
+    slides = [
+        {"kind": "cover",
+         "title": f"Briefing WASH — {district or 'Territoire'}",
+         "subtitle": f"{now.day} {FRENCH_MONTHS[now.month]} {now.year} · {district or 'tous districts'}",
+         "lines": [],
+         "stats": [
+             {"label": "Incidents ouverts", "value": str(len(open_incs))},
+             {"label": "Élèves affectés", "value": _fmt_int(affected)},
+             {"label": "Écoles suivies", "value": str(len(schools))},
+         ]},
+        {"kind": "bullets", "title": "Priorités", "lines": priorities, "stats": []},
+        {"kind": "bullets", "title": "Actions recommandées", "lines": actions, "stats": []},
+    ]
+    return {
+        "district": district or None,
+        "slides": slides,
+        "total": len(slides),
+        "generated_at": now.isoformat(),
+    }
+
+
+def tool_territory_overview(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Vue géographique du territoire : écoles géolocalisées + urgences ouvertes."""
+    district = str(args.get("district") or "").strip().lower()
+    weights = {"critical": 10.0, "high": 5.0, "medium": 2.0, "low": 0.5}
+    points: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for school in context.get("schools", []):
+        if district and str(school.get("district", "")).lower() != district:
+            continue
+        open_incs = [i for i in _open_incidents(context) if i.get("school_id") == school.get("school_id")]
+        affected = sum(int(i.get("affected_students", 0) or 0) for i in open_incs)
+        top = max(
+            (str(i.get("urgency", "low")) for i in open_incs),
+            key=lambda u: weights.get(u, 0.0),
+            default=None,
+        )
+        lat = school.get("latitude", school.get("lat"))
+        lng = school.get("longitude", school.get("lng"))
+        try:
+            lat = float(lat) if lat is not None else None
+            lng = float(lng) if lng is not None else None
+        except (TypeError, ValueError):
+            lat, lng = None, None
+        if lat is None or lng is None:
+            missing.append(str(school.get("school_name", "?")))
+            continue
+        points.append({
+            "school_id": school.get("school_id"),
+            "school_name": school.get("school_name"),
+            "district": school.get("district"),
+            "lat": lat,
+            "lng": lng,
+            "open_incidents": len(open_incs),
+            "affected_students": affected,
+            "top_urgency": top,
+        })
+    return {
+        "district": args.get("district"),
+        "schools": points,
+        "missing_gps": missing,
+        "total": len(points),
+        "open_incidents": sum(s["open_incidents"] for s in points),
+    }
+
+
 def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Tendances mensuelles d'une école : pannes, coûts de réparation, jours sans service."""
     school = _resolve_school(context, args.get("school"))
@@ -255,6 +372,8 @@ TOOL_EXECUTORS = {
     "explain_incident": tool_explain_incident,
     "prepare_report": tool_prepare_report,
     "repair_trends": tool_repair_trends,
+    "territory_overview": tool_territory_overview,
+    "build_briefing": tool_build_briefing,
 }
 
 AGENT_TOOLS: list[dict[str, Any]] = [
@@ -310,6 +429,32 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                     "months": {"type": "integer", "description": "Nombre de mois d'historique (1 à 12, défaut 3)"},
                 },
                 "required": ["school"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_briefing",
+            "description": "Génère un mini-dossier de briefing (diaporama) : couverture chiffrée, priorités, actions recommandées.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "district": {"type": "string", "description": "Filtrer sur un district (optionnel)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "territory_overview",
+            "description": "Vue géographique du territoire : écoles géolocalisées avec urgences et incidents ouverts. À utiliser pour toute carte ou question 'où'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "district": {"type": "string", "description": "Filtrer sur un district (optionnel)"},
+                },
             },
         },
     },

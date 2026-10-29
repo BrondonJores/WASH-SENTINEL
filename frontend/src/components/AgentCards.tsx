@@ -6,6 +6,10 @@ import type { AgentCard } from '../lib/api';
 import { ThresholdGauge } from './ThresholdGauge';
 import { TrendChart } from './TrendChart';
 import type { TrendSeries } from './TrendChart';
+import { TerritoryLegend, TerritoryMap } from './TerritoryMap';
+import { SlideDeck } from './SlideDeck';
+import type { DeckSlide } from './SlideDeck';
+import type { TerritoryPoint } from './TerritoryMap';
 
 // ---------- Helpers défensifs (les observations tools varient) ----------
 
@@ -423,6 +427,86 @@ function GenericCard({ card }: { card: AgentCard }) {
 
 // ---------- Entrées ----------
 
+function TerritoryMapCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+  const schools = asArray<unknown>(data.schools);
+  const missing = asArray<unknown>(data.missing_gps)
+    .map((m) => fmtText(m))
+    .filter((m) => m !== '');
+  const points: TerritoryPoint[] = [];
+  schools.forEach((s, i) => {
+    const rec = asRecord(s);
+    const lat = rec.lat;
+    const lng = rec.lng;
+    if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    points.push({
+      key: `s${i}`,
+      name: typeof rec.school_name === 'string' ? rec.school_name : `École ${i + 1}`,
+      district: typeof rec.district === 'string' ? rec.district : '',
+      lat,
+      lng,
+      openIncidents: typeof rec.open_incidents === 'number' ? rec.open_incidents : 0,
+      affectedStudents: typeof rec.affected_students === 'number' ? rec.affected_students : 0,
+      topUrgency: typeof rec.top_urgency === 'string' ? rec.top_urgency : null,
+    });
+  });
+  return (
+    <CardShell title={title} kicker="Territoire">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Écoles géolocalisées" value={fmtInt(data.total)} />
+        <Stat label="Incidents ouverts" value={fmtInt(data.open_incidents)} />
+      </div>
+      <div className="mt-3">
+        <TerritoryLegend />
+      </div>
+      <div className="mt-3">
+        {points.length > 0 ? (
+          <TerritoryMap points={points} />
+        ) : (
+          <p className="text-sm text-stone-600 dark:text-stone-400">
+            Aucune école géolocalisée pour ce territoire.
+          </p>
+        )}
+      </div>
+      {missing.length > 0 && (
+        <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+          Sans GPS : {missing.join(', ')}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
+function BriefingDeckCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+  const slides: DeckSlide[] = [];
+  asArray<unknown>(data.slides).forEach((s) => {
+    const rec = asRecord(s);
+    const kind = rec.kind === 'cover' || rec.kind === 'stats' ? rec.kind : 'bullets';
+    const lines = asArray<unknown>(rec.lines)
+      .map((l) => fmtText(l))
+      .filter((l) => l !== '');
+    const stats = asArray<unknown>(rec.stats)
+      .map((st) => {
+        const r = asRecord(st);
+        return { label: fmtText(r.label), value: fmtText(r.value) };
+      })
+      .filter((st) => st.label !== '' || st.value !== '');
+    slides.push({
+      kind,
+      title: fmtText(rec.title) || 'Sans titre',
+      subtitle: fmtText(rec.subtitle) || undefined,
+      lines,
+      stats,
+      note: fmtText(rec.note) || undefined,
+    });
+  });
+  if (slides.length === 0) return null;
+  return (
+    <CardShell title={title} kicker="Briefing">
+      <SlideDeck slides={slides} />
+    </CardShell>
+  );
+}
+
 export function AgentCardView({ card }: { card: AgentCard }) {
   const data = asRecord(card.data);
   switch (card.type) {
@@ -438,6 +522,10 @@ export function AgentCardView({ card }: { card: AgentCard }) {
       return <TrendCard title={card.title} data={data} />;
     case 'report_confirmation':
       return <ConfirmationCard title={card.title} data={data} />;
+    case 'territory_map':
+      return <TerritoryMapCard title={card.title} data={data} />;
+    case 'briefing_deck':
+      return <BriefingDeckCard title={card.title} data={data} />;
     default:
       return <GenericCard card={card} />;
   }
