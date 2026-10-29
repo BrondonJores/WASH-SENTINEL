@@ -149,6 +149,15 @@ class WashAiEngineService implements AiEngineClient
         return $this->client()->post($this->baseUrl . '/v1/wash/copilot/replace-vs-repair', $schoolHistory)->throw()->json();
     }
 
+    public function agentChat(string $message, array $history, array $context): array
+    {
+        return $this->client()->post($this->baseUrl . '/v1/agent/chat', [
+            'message' => $message,
+            'history' => $history,
+            'context' => $context,
+        ])->throw()->json();
+    }
+
     public function dispatchPlan(string $district, array $schools): array
     {
         return $this->client()->post($this->baseUrl . '/v1/wash/equity/dispatch-plan', [

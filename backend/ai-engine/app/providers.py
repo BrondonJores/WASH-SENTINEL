@@ -86,6 +86,20 @@ class BaseLLMProvider:
             "base_url": self.base_url,
         }
 
+    async def chat(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        """Conversation avec function-calling natif.
+
+        Retourne {"raw": message assistant natif, "content": str,
+        "tool_calls": [{"id", "name", "arguments"}]}.
+        """
+        raise NotImplementedError
+
+    def format_tool_result(self, name: str, result: Any, call_id: str | None = None) -> dict[str, Any]:
+        """Forme le message d'observation d'outil au format natif du provider."""
+        raise NotImplementedError
+
 
 class OllamaProvider(BaseLLMProvider):
     """Driver modèles locaux via Ollama (Llama, Gemma, Llava, nomic-embed...)."""
@@ -161,6 +175,37 @@ class OllamaProvider(BaseLLMProvider):
                 continue
         return []
 
+
+    async def chat(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.1},
+        }
+        if tools:
+            payload["tools"] = tools
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(f"{self.base_url}/api/chat", json=payload)
+            response.raise_for_status()
+            msg = response.json().get("message", {})
+        calls: list[dict[str, Any]] = []
+        for tc in msg.get("tool_calls", []) or []:
+            fn = tc.get("function", {})
+            args = fn.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            calls.append({"id": None, "name": fn.get("name", ""), "arguments": args if isinstance(args, dict) else {}})
+        return {"raw": msg, "content": msg.get("content", "") or "", "tool_calls": calls}
+
+    def format_tool_result(self, name: str, result: Any, call_id: str | None = None) -> dict[str, Any]:
+        content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        return {"role": "tool", "content": content}
 
 class OpenAICompatibleProvider(BaseLLMProvider):
     """Driver API externes au format OpenAI (OpenAI, Groq, Together, Mistral, Ollama /v1...)."""
@@ -258,6 +303,36 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                 continue
         return []
 
+
+    async def chat(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": 0.1}
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/chat/completions", headers=self._headers(), json=payload
+            )
+            response.raise_for_status()
+            msg = response.json()["choices"][0]["message"]
+        calls: list[dict[str, Any]] = []
+        for tc in msg.get("tool_calls", []) or []:
+            fn = tc.get("function", {})
+            args = fn.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            calls.append({"id": tc.get("id"), "name": fn.get("name", ""), "arguments": args if isinstance(args, dict) else {}})
+        raw = {"role": "assistant", "content": msg.get("content"), "tool_calls": msg.get("tool_calls")}
+        return {"raw": raw, "content": msg.get("content") or "", "tool_calls": calls}
+
+    def format_tool_result(self, name: str, result: Any, call_id: str | None = None) -> dict[str, Any]:
+        content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        return {"role": "tool", "tool_call_id": call_id, "content": content}
 
 PROVIDER_REGISTRY: dict[str, type[BaseLLMProvider]] = {
     "ollama": OllamaProvider,

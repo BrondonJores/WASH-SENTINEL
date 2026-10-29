@@ -18,24 +18,7 @@ class WashAgentController extends Controller
             'district' => ['nullable', 'string', 'max:128'],
         ]);
 
-        $schools = School::query()
-            ->when($validated['district'] ?? null, fn ($q, $v) => $q->where('district', $v))
-            ->withCount('incidents')
-            ->withSum('maintenanceLogs', 'cost_amount')
-            ->withSum('maintenanceLogs', 'days_without_service')
-            ->take(30)->get();
-
-        $schoolsData = $schools->map(fn (School $s) => [
-            'school_id' => $s->id,
-            'school_name' => $s->name,
-            'district' => $s->district,
-            'equipment_type' => $s->equipment_type,
-            'installation_year' => $s->installation_year,
-            'estimated_replacement_cost' => (float) $s->estimated_replacement_cost,
-            'incident_count' => (int) $s->incidents_count,
-            'total_repair_cost' => (float) ($s->maintenance_logs_sum_cost_amount ?? 0),
-            'total_days_without_service' => (int) ($s->maintenance_logs_sum_days_without_service ?? 0),
-        ])->all();
+        $schoolsData = $this->maintenanceProfiles($validated['district'] ?? null);
 
         $response = $ai->copilotChat($validated['user_query'], $validated['district'] ?? null, $schoolsData);
 
@@ -142,5 +125,76 @@ class WashAgentController extends Controller
         $validated = $request->validate(['text' => ['required', 'string', 'max:1000']]);
 
         return response()->json($ai->synthesize($validated['text']));
+    }
+    public function converse(Request $request, AiEngineClient $ai)
+    {
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'max:2000'],
+            'history' => ['nullable', 'array', 'max:20'],
+            'history.*.role' => ['required_with:history', 'in:user,assistant,tool'],
+            'history.*.content' => ['required_with:history', 'string', 'max:2000'],
+            'district' => ['nullable', 'string', 'max:128'],
+        ]);
+
+        $response = $ai->agentChat(
+            $validated['message'],
+            $validated['history'] ?? [],
+            [
+                'schools' => $this->maintenanceProfiles($validated['district'] ?? null),
+                'incidents' => $this->openIncidentSnapshots($validated['district'] ?? null),
+            ],
+        );
+
+        AiAnalysis::create([
+            'analysis_type' => 'agent',
+            'input_payload' => ['message' => $validated['message']],
+            'output_payload' => $response,
+        ]);
+
+        return response()->json($response);
+    }
+
+    protected function maintenanceProfiles(?string $district): array
+    {
+        return School::query()
+            ->when($district, fn ($q, $v) => $q->where('district', $v))
+            ->withCount('incidents')
+            ->withSum('maintenanceLogs', 'cost_amount')
+            ->withSum('maintenanceLogs', 'days_without_service')
+            ->take(30)->get()
+            ->map(fn (School $s) => [
+                'school_id' => $s->id,
+                'school_name' => $s->name,
+                'district' => $s->district,
+                'equipment_type' => $s->equipment_type,
+                'installation_year' => $s->installation_year,
+                'estimated_replacement_cost' => (float) $s->estimated_replacement_cost,
+                'incident_count' => (int) $s->incidents_count,
+                'total_repair_cost' => (float) ($s->maintenance_logs_sum_cost_amount ?? 0),
+                'total_days_without_service' => (int) ($s->maintenance_logs_sum_days_without_service ?? 0),
+            ])->all();
+    }
+
+    protected function openIncidentSnapshots(?string $district): array
+    {
+        return Incident::with('school:id,name,district')
+            ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
+            ->open()->latest()->take(50)->get()
+            ->map(fn (Incident $i) => [
+                'id' => $i->id,
+                'school_id' => $i->school_id,
+                'school_name' => $i->school->name,
+                'district' => $i->school->district,
+                'reference_code' => $i->reference_code,
+                'title' => $i->title,
+                'category' => $i->category,
+                'issue_type' => $i->issue_type,
+                'urgency' => $i->urgency,
+                'status' => $i->status,
+                'priority_score' => (float) $i->priority_score,
+                'affected_students' => (int) $i->affected_students,
+                'summary' => $i->ai_summary ?: $i->title,
+                'reported_at' => $i->created_at->toIso8601String(),
+            ])->all();
     }
 }

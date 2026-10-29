@@ -41,6 +41,8 @@ interface AiEngineClient
 
     public function replaceVsRepair(array $schoolHistory): array;
 
+    public function agentChat(string $message, array $history, array $context): array;
+
     public function dispatchPlan(string $district, array $schools): array;
 
     public function synthesize(string $text, string $voice = 'fr_FR-upmc-medium'): array;

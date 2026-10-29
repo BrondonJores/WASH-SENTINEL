@@ -292,3 +292,36 @@ class SttTestResponse(BaseModel):
     error: str | None = None
     driver: str = ""
     language: str = ""
+
+
+# ==========================================
+# 11. Agent Conversationnel Unifié
+# ==========================================
+
+class ChatTurn(BaseModel):
+    role: str = Field(..., description="user, assistant ou tool")
+    content: str
+
+
+class AgentContext(BaseModel):
+    schools: list[dict[str, Any]] = Field(default_factory=list, description="Écoles avec agrégats de maintenance")
+    incidents: list[dict[str, Any]] = Field(default_factory=list, description="Incidents avec école, urgence et dates")
+
+
+class AgentChatRequest(BaseModel):
+    message: str = Field(..., description="Message de l'utilisateur")
+    history: list[ChatTurn] = Field(default_factory=list, description="Historique court de conversation")
+    context: AgentContext = Field(default_factory=AgentContext, description="Données factuelles fournies par Laravel")
+
+
+class AgentCard(BaseModel):
+    type: str = Field(..., description="school_analysis, school_ranking, district_summary, incident_detail, report_confirmation")
+    title: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentChatResponse(BaseModel):
+    answer: str
+    tools_executed: list[str] = Field(default_factory=list)
+    cards: list[AgentCard] = Field(default_factory=list)
+    model_used: str = ""

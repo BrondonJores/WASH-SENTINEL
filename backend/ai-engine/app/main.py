@@ -4,6 +4,7 @@ from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from .agent_loop import AgentLoop
 from .decision_agent import DecisionAgent
 from .duplicate_detector import DuplicateDetector
 from .epidemic_detector import EpidemicDetector
@@ -16,6 +17,8 @@ from .repair_advisor import RepairAdvisor
 from .schemas import (
     DecisionCopilotRequest,
     DecisionCopilotResponse,
+    AgentChatRequest,
+    AgentChatResponse,
     DuplicateCheckRequest,
     DuplicateCheckResponse,
     EpidemicClusterRequest,
@@ -353,3 +356,18 @@ async def test_stt(payload: SttTestRequest) -> SttTestResponse:
         )
     except Exception as exc:
         return SttTestResponse(ok=False, error=f"{type(exc).__name__}: {str(exc)[:300]}", language=payload.language)
+# ==========================================
+# 12. Agent Conversationnel Unifié (Dashboardless)
+# ==========================================
+@app.post("/v1/agent/chat", response_model=AgentChatResponse)
+async def agent_chat(request: Request, payload: AgentChatRequest) -> AgentChatResponse:
+    """Boucle agentique réelle : le LLM choisit ses outils (function-calling natif),
+    Python les exécute sur les données Laravel, et des cartes structurées sont
+    renvoyées pour le widget omniprésent."""
+    try:
+        return await AgentLoop(_llm(request)).chat(payload)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur de l'agent conversationnel : {str(exc)}"
+        ) from exc

@@ -28,7 +28,8 @@ class DecisionAgent:
     def __init__(self, llm: BaseLLMProvider):
         self.llm = llm
 
-    def evaluate_school_equipment(self, school: SchoolMaintenanceHistory) -> ReplaceVsRepairAnalysis:
+    @staticmethod
+    def evaluate_school_equipment(school: SchoolMaintenanceHistory) -> ReplaceVsRepairAnalysis:
         """
         Matrice d'arbitrage financier et opérationnel : Réparer vs Remplacer.
         Calcule le ratio Capex/Opex et la criticité du service.

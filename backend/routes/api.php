@@ -27,6 +27,7 @@ Route::prefix('v1/wash')->group(function () {
     Route::get('/incidents/{incident}', [WashIncidentController::class, 'show']);
 
     Route::post('/agent/chat', [WashAgentController::class, 'copilotChat']);
+    Route::post('/agent/converse', [WashAgentController::class, 'converse']);
     Route::post('/agent/dispatch-plan', [WashAgentController::class, 'dispatchPlan']);
     Route::post('/agent/epidemic-scan', [WashAgentController::class, 'epidemicScan']);
     Route::post('/agent/synthesize', [WashAgentController::class, 'synthesize']);
