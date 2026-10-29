@@ -44,7 +44,35 @@ WASH Sentinel turns every chaotic field report into **one triaged, deduplicated,
 5. **Model independence** — switch local ↔ cloud LLM/STT **at runtime from the admin Settings page**. No redeploy, no code change. API keys encrypted at rest.
 6. **Runs where it's needed** — full local stack on a CPU-only i5 (Llama 3.2 3B, ONNX int8 ASR). Cloud profiles available for zero-GPU demo day.
 
-## 4. 🎬 3-minute jury demo script
+## 4. Not a CRUD: the engineering under the hood 🛠️
+
+A CRUD stores tickets. Sentinel **reasons over them** — with swappable AI, audible math and graceful degradation:
+
+| A basic CRUD… | WASH Sentinel… |
+|---|---|
+| Stores a text field | Extracts strict JSON (category, urgency, students, hazard) + priority score |
+| Hardcodes one model | Hot-swaps LLM/STT at runtime via DB profiles + `X-LLM-*` / `X-STT-*` headers |
+| Speaks one language | Routes each school to its language (`default_language` → `X-STT-Language` header) |
+| Serves FIFO / loudest first | Ranks by a transparent equity formula — auditable note included |
+| Repairs forever | Arbitrates repair-vs-replace with a Capex/Opex matrix |
+| Dies when the AI is down | Falls back to deterministic rules — reporting never stops |
+| Silent writes | Journals every AI decision in `ai_analyses` |
+
+**The math is explicit, not magic** (all in `backend/ai-engine/app/`):
+
+| Decision | Formula / rule | Code |
+|---|---|---|
+| Priority score (0–100) | `urgency × 0.35 + health_hazard × 0.35 + students_affected × 0.30` | `extractor.py` |
+| Fairness score (0–100) | `days_without_water × 0.30 + urgency × 0.25 + girls_impact × 0.25 + isolation × 0.20` | `equity_dispatcher.py` |
+| Replace vs repair | `repairs ≥ 55%` of new-equipment price, or `≥ 4` breakdowns, or `≥ 30` days without service → `REPLACE_EQUIPMENT` (`≥ 30%` / `≥ 2` → `MONITOR_CLOSELY`) | `decision_agent.py` |
+| Duplicates | embedding cosine similarity `≥ 0.80` → attached to the parent incident | `duplicate_detector.py` |
+
+**Modularity is structural, not promised:**
+- Python: every agent is typed on `BaseLLMProvider` / `BaseSTTProvider` abstractions — Ollama and any OpenAI-compatible API are interchangeable drivers behind a registry.
+- PHP: controllers depend on contracts (`AiEngineClient`, `IncidentTriage`, `WhatsAppClient`), bound once in `AppServiceProvider` — swap the AI engine or the WhatsApp vendor without touching a controller.
+- The agent loop (`AgentLoop`, max 5 iterations, native function-calling) returns **typed cards** (`AgentCard`: incident cards, trend charts, dispatch plans) through `/v1/agent/chat` — clients render what the agent decides, never the reverse.
+
+## 5. 🎬 3-minute jury demo script
 
 _Golden path with example outputs — run it live after `./start.sh`._
 
@@ -55,7 +83,7 @@ _Golden path with example outputs — run it live after `./start.sh`._
 5. **Equity** — *« Plan this week's tours »* → forgotten rural school ranked #1 over the downtown drip, grouped route saving 100+ km of fuel, official transparency note generated.
 6. **WhatsApp** — same report via the WhatsApp simulator → identical pipeline, confirmation reply.
 
-## 5. Architecture
+## 6. Architecture
 
 ```text
   Directors / Citizens                    Territory managers / Admins
@@ -91,7 +119,7 @@ WASH-SENTINEL/
 └── models/                  # local voice models (git-ignored)
 ```
 
-## 6. Quickstart
+## 7. Quickstart
 
 **Prerequisites:** Docker + Docker Compose (Docker Desktop on Windows/WSL works).
 
@@ -116,7 +144,7 @@ The script creates missing `.env` files, builds and starts all containers, runs 
 
 > If `APP_PORT` changes in `.env`, mirror it in `VITE_API_URL` (e.g. `http://localhost:8080/api`).
 
-## 7. No local models? Use a cloud API in 60 seconds ☁️
+## 8. No local models? Use a cloud API in 60 seconds ☁️
 
 Ollama pulls can fail on restricted networks — the stack stays fully usable via an external OpenAI-compatible endpoint (Groq, Together, OpenAI, Meta Llama API…):
 
@@ -126,7 +154,7 @@ Ollama pulls can fail on restricted networks — the stack stays fully usable vi
 
 Same flow for speech: `API cloud (OpenAI / Groq)` STT profile with `whisper-1`. Local Ollama can be (re)pulled anytime with `docker compose exec ollama ollama pull llama3.2:3b`.
 
-## 8. API overview
+## 9. API overview
 
 **Laravel** (`/api/v1`): `POST /auth/token` · `GET /wash/schools|reports|incidents` · `POST /wash/reports` · `POST /wash/agent/chat|converse|dispatch-plan|epidemic-scan` · `GET|POST /admin/model-profiles|stt-profiles` (+ `/activate`, `/test`) · `POST /whatsapp/webhook` (+ `GET` verify).
 
@@ -134,27 +162,30 @@ Same flow for speech: `API cloud (OpenAI / Groq)` STT profile with `whisper-1`. 
 
 Full interactive reference: http://localhost:8000/docs
 
-## 9. Voice & local languages 🗣️
+## 10. Voice & local languages: first-class, not translated 🗣️
 
-- **Whisper.cpp** (local, CPU) for French voice notes.
-- **Meta Omnilingual ASR** via `sherpa-onnx` (ONNX int8, CPU-friendly): 1,600 languages including **Douala (`dua_Latn`)**, Bassa, Ewondo. Each school sets its `default_language`.
+Most apps bolt a translator onto French. Sentinel routes **each school to its own language**:
+
+- **Per-school language**: `schools.default_language` (e.g. `dua_Latn` for Douala) flows into every transcription via the `X-STT-Language` header — the right ASR path is chosen per request, not per deployment.
+- **Meta Omnilingual ASR** via `sherpa-onnx` (ONNX int8, CPU-friendly): 1,600 languages including **Douala (`dua_Latn`)**, Bassa, Ewondo.
+- **Whisper.cpp** (local, CPU) for French voice notes; **cloud STT** (`whisper-1`…) one click away in AI Settings.
 - **Piper TTS** speaks confirmations back ("Your report WASH-2026-0042 is registered, priority HIGH…").
 
 To enable Omnilingual, drop the [~700 MB model + tokens](https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12) into `models/omnilingual/` and activate the profile in AI Settings.
 
-## 10. WhatsApp channel 💬
+## 11. WhatsApp channel 💬
 
 `MetaWhatsAppService` (Cloud API) + `ProcessWhatsAppMessage` job + `school_contacts` routing: directors report from WhatsApp, Sentinel replies with the reference code and status. A **simulator mode** replays the full flow for jury demos without Meta credentials; set `WHATSAPP_*` in `backend/.env` + webhook to go live.
 
-## 11. Engineering you can audit 🔒
+## 12. Engineering you can audit 🔒
 
-- **SOLID**: PHP contracts (`AiEngineClient`, `IncidentTriage`, `WhatsAppClient`) with container bindings; Python abstractions (`BaseLLMProvider`, `BaseSTTProvider`) + registries — agents depend on interfaces, never on Ollama.
+- **SOLID, concretely**: controllers depend on contracts bound once in `AppServiceProvider` (`AiEngineClient → WashAiEngineService`, `IncidentTriage → IncidentTriageService`, `WhatsAppClient → MetaWhatsAppService`); Python agents take `BaseLLMProvider`, never a concrete driver (`AgentLoop(llm: BaseLLMProvider)`).
 - **Security**: Sanctum tokens, Spatie RBAC (reporter / technician / admin), API keys encrypted in DB (masked in UI), strict request validation, rate limiting on auth/report/webhook endpoints, every AI decision journaled in `ai_analyses`.
-- **Resilience**: deterministic triage fallbacks keep reporting alive if the AI engine is down.
+- **Resilience**: three fallback layers (extraction → `fallback-rules`, vision, duplicates) keep reporting alive if the AI engine is down.
 - **Tests**: PHPUnit suite (triage, duplicates, RBAC, WhatsApp, agent loop, notifications) green; Python probes cover LLM/STT/agent wiring.
 - **Traceability**: 100% fresh code, committed step by step — no copy-paste from previous projects.
 
-## 12. Roadmap
+## 13. Roadmap
 
 - [ ] Public agent widget (chat + cards/charts, express report, tracking by reference, FR/Douala toggle)
 - [ ] Admin pilot console (incidents, schools, notifications UI)
