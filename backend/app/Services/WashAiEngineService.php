@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Contracts\AiEngineClient;
 use App\Models\AiModelProfile;
+use App\Models\AiSttProfile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
@@ -31,9 +32,23 @@ class WashAiEngineService implements AiEngineClient
         return $this->activeProfile()?->llmHeaders() ?? [];
     }
 
+    public function activeSttProfile(): ?AiSttProfile
+    {
+        try {
+            return Cache::remember(AiSttProfile::CACHE_KEY, 60, fn () => AiSttProfile::active());
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    public function sttHeaders(): array
+    {
+        return $this->activeSttProfile()?->sttHeaders() ?? [];
+    }
+
     protected function client()
     {
-        return Http::withHeaders($this->profileHeaders())->timeout($this->timeout);
+        return Http::withHeaders([...$this->profileHeaders(), ...$this->sttHeaders()])->timeout($this->timeout);
     }
 
     public function health(): array
@@ -49,6 +64,16 @@ class WashAiEngineService implements AiEngineClient
     public function testProfile(array $profile): array
     {
         return Http::timeout(45)->post($this->baseUrl . '/v1/admin/test-provider', $profile)->throw()->json();
+    }
+
+    public function sttTypes(): array
+    {
+        return Http::timeout(15)->get($this->baseUrl . '/v1/admin/stt-types')->throw()->json();
+    }
+
+    public function testSttProfile(array $payload): array
+    {
+        return Http::timeout(120)->post($this->baseUrl . '/v1/admin/test-stt', $payload)->throw()->json();
     }
 
     public function triage(?string $text, ?string $audioPath, ?string $schoolName): array

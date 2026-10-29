@@ -267,3 +267,28 @@ class ProviderTestResponse(BaseModel):
     error: str | None = None
     provider: str = ""
     model: str = ""
+
+
+# ==========================================
+# 10. Administration des Providers STT
+# ==========================================
+
+class SttTestRequest(BaseModel):
+    driver: str = Field("whisper_cpp", description="whisper_cpp, omnilingual_onnx ou cloud_whisper")
+    base_url: str | None = None
+    model: str | None = None
+    tokens: str | None = None
+    api_key: str | None = None
+    language: str = Field("fr", description="Code langue (fr, dua_Latn, ...)")
+    audio_base64: str = Field(..., description="Échantillon audio encodé en base64")
+    filename: str = "test.wav"
+    timeout: float = 60.0
+
+
+class SttTestResponse(BaseModel):
+    ok: bool
+    latency_ms: int = 0
+    transcript: str = ""
+    error: str | None = None
+    driver: str = ""
+    language: str = ""

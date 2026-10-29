@@ -11,6 +11,7 @@ from .equity_dispatcher import EquityDispatcher
 from .extractor import WashExtractor
 from .image_analyzer import ImageAnalyzer
 from .providers import PROVIDER_TYPES, OllamaProvider, llm_from_headers, provider_from_profile
+from .stt_providers import STT_PROVIDER_TYPES, stt_from_headers, stt_from_profile
 from .repair_advisor import RepairAdvisor
 from .schemas import (
     DecisionCopilotRequest,
@@ -24,6 +25,8 @@ from .schemas import (
     ImageAnalysisResponse,
     ProviderTestRequest,
     ProviderTestResponse,
+    SttTestRequest,
+    SttTestResponse,
     RepairPlanRequest,
     RepairPlanResponse,
     ReplaceVsRepairAnalysis,
@@ -76,6 +79,7 @@ def health() -> dict[str, Any]:
             "embeddings": default_llm.embed_model,
         },
         "providers": [p["id"] for p in PROVIDER_TYPES],
+        "stt_drivers": [d["id"] for d in STT_PROVIDER_TYPES],
         "capabilities": [
             "text_extraction",
             "voice_transcription",
@@ -224,16 +228,19 @@ def evaluate_replace_vs_repair(request: Request, school: SchoolMaintenanceHistor
 # ==========================================
 @app.post("/v1/voice/transcribe", response_model=VoiceTranscriptionResponse)
 async def transcribe_audio(
+    request: Request,
     audio: UploadFile = File(...),
     language: str = Form("fr"),
 ) -> VoiceTranscriptionResponse:
-    """Transcrit une note vocale d'urgence via Whisper.cpp."""
+    """Transcrit une note vocale via le provider STT actif (Whisper, Omnilingual ou cloud)."""
     try:
         audio_bytes = await audio.read()
+        stt_language = request.headers.get("x-stt-language") or language
         return voice_service.transcribe(
             audio_bytes=audio_bytes,
             filename=audio.filename or "audio.wav",
-            language=language,
+            language=stt_language,
+            stt=stt_from_headers(request.headers),
         )
     except Exception as exc:
         raise HTTPException(
@@ -274,7 +281,7 @@ async def triage_report(
 
     if audio is not None:
         audio_bytes = await audio.read()
-        transcription_res = voice_service.transcribe(audio_bytes, audio.filename or "audio.wav", "fr")
+        transcription_res = voice_service.transcribe(audio_bytes, audio.filename or "audio.wav", request.headers.get("x-stt-language") or "fr", stt_from_headers(request.headers))
         raw_content = transcription_res.transcript
         transcription_meta = transcription_res.dict()
 
@@ -314,3 +321,35 @@ async def test_provider(payload: ProviderTestRequest) -> ProviderTestResponse:
         )
     except Exception as exc:
         return ProviderTestResponse(ok=False, error=f"{type(exc).__name__}: {str(exc)[:300]}")
+# ==========================================
+# 11. Administration des Providers STT (page Settings)
+# ==========================================
+@app.get("/v1/admin/stt-types")
+def list_stt_types() -> dict[str, Any]:
+    """Descripteurs des moteurs de transcription : pilote le formulaire dynamique de la page Settings."""
+    return {"drivers": STT_PROVIDER_TYPES}
+
+
+@app.post("/v1/admin/test-stt", response_model=SttTestResponse)
+async def test_stt(payload: SttTestRequest) -> SttTestResponse:
+    """Teste un profil STT sur un échantillon audio (bouton Tester de la page Settings)."""
+    import base64 as _base64
+    import binascii as _binascii
+
+    try:
+        audio_bytes = _base64.b64decode(payload.audio_base64)
+    except _binascii.Error as exc:
+        raise HTTPException(status_code=422, detail="audio_base64 invalide.") from exc
+    try:
+        provider = stt_from_profile(payload.model_dump())
+        result = provider.test(audio_bytes, payload.filename, payload.language)
+        return SttTestResponse(
+            ok=result["ok"],
+            latency_ms=result["latency_ms"],
+            transcript=result["transcript"],
+            error=result["error"],
+            driver=provider.driver_name,
+            language=result["language"],
+        )
+    except Exception as exc:
+        return SttTestResponse(ok=False, error=f"{type(exc).__name__}: {str(exc)[:300]}", language=payload.language)

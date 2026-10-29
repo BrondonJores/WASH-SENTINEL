@@ -17,7 +17,7 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
-        $this->call([AiModelProfileSeeder::class]);
+        $this->call([AiModelProfileSeeder::class, AiSttProfileSeeder::class]);
 
         User::factory()->create([
             'name' => 'Test User',

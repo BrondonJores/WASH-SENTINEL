@@ -3,6 +3,7 @@
 namespace App\Contracts;
 
 use App\Models\AiModelProfile;
+use App\Models\AiSttProfile;
 
 interface AiEngineClient
 {
@@ -10,11 +11,19 @@ interface AiEngineClient
 
     public function profileHeaders(): array;
 
+    public function activeSttProfile(): ?AiSttProfile;
+
+    public function sttHeaders(): array;
+
     public function health(): array;
 
     public function providerTypes(): array;
 
     public function testProfile(array $profile): array;
+
+    public function sttTypes(): array;
+
+    public function testSttProfile(array $payload): array;
 
     public function triage(?string $text, ?string $audioPath, ?string $schoolName): array;
 

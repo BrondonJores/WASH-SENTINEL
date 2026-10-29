@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Admin\WashModelProfileController;
+use App\Http\Controllers\Api\Admin\WashSttProfileController;
 use App\Http\Controllers\Api\WashAgentController;
 use App\Http\Controllers\Api\WashIncidentController;
 use App\Http\Controllers\Api\WashReportController;
@@ -43,4 +44,8 @@ Route::prefix('v1/admin')->middleware('auth:sanctum')->group(function () {
     Route::apiResource('/model-profiles', WashModelProfileController::class)->parameters(['model-profiles' => 'modelProfile']);
     Route::post('/model-profiles/{modelProfile}/activate', [WashModelProfileController::class, 'activate']);
     Route::post('/model-profiles/{modelProfile}/test', [WashModelProfileController::class, 'test']);
+    Route::get('/stt-types', [WashSttProfileController::class, 'sttTypes']);
+    Route::apiResource('/stt-profiles', WashSttProfileController::class)->parameters(['stt-profiles' => 'sttProfile']);
+    Route::post('/stt-profiles/{sttProfile}/activate', [WashSttProfileController::class, 'activate']);
+    Route::post('/stt-profiles/{sttProfile}/test', [WashSttProfileController::class, 'test']);
 });
