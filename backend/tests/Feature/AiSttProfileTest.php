@@ -15,6 +15,7 @@ class AiSttProfileTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->seed(\Database\Seeders\WashRoleSeeder::class);
         Cache::forget(AiSttProfile::CACHE_KEY);
     }
 
@@ -72,6 +73,7 @@ class AiSttProfileTest extends TestCase
     public function test_admin_can_activate_a_profile(): void
     {
         $user = User::factory()->create();
+        $user->givePermissionTo('manage ai settings');
         $whisper = AiSttProfile::create([
             'name' => 'Whisper', 'driver' => 'whisper_cpp', 'is_active' => true,
         ]);
@@ -89,6 +91,7 @@ class AiSttProfileTest extends TestCase
     public function test_admin_cannot_delete_the_active_profile(): void
     {
         $user = User::factory()->create();
+        $user->givePermissionTo('manage ai settings');
         $profile = AiSttProfile::create([
             'name' => 'Whisper', 'driver' => 'whisper_cpp', 'is_active' => true,
         ]);

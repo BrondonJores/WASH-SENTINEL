@@ -15,6 +15,7 @@ class AiModelProfileTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->seed(\Database\Seeders\WashRoleSeeder::class);
         Cache::forget(AiModelProfile::CACHE_KEY);
     }
 
@@ -68,6 +69,7 @@ class AiModelProfileTest extends TestCase
     public function test_admin_can_activate_a_profile(): void
     {
         $user = User::factory()->create();
+        $user->givePermissionTo('manage ai settings');
         $local = AiModelProfile::create([
             'name' => 'Local', 'provider' => 'ollama',
             'base_url' => 'http://ollama:11434', 'model' => 'a', 'is_active' => true,
@@ -88,6 +90,7 @@ class AiModelProfileTest extends TestCase
     public function test_admin_cannot_delete_the_active_profile(): void
     {
         $user = User::factory()->create();
+        $user->givePermissionTo('manage ai settings');
         $profile = AiModelProfile::create([
             'name' => 'Local', 'provider' => 'ollama',
             'base_url' => 'http://ollama:11434', 'model' => 'a', 'is_active' => true,

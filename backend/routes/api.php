@@ -31,15 +31,15 @@ Route::prefix('v1/wash')->group(function () {
     Route::get('/agent/schools/{school}/replace-vs-repair', [WashAgentController::class, 'replaceVsRepair']);
 
     Route::middleware('auth:sanctum')->group(function () {
-        Route::post('/schools', [WashSchoolController::class, 'store']);
-        Route::patch('/incidents/{incident}/status', [WashIncidentController::class, 'updateStatus']);
-        Route::post('/incidents/{incident}/assign', [WashIncidentController::class, 'assign']);
-        Route::post('/incidents/{incident}/override-priority', [WashIncidentController::class, 'overridePriority']);
-        Route::post('/incidents/{incident}/maintenance-logs', [WashIncidentController::class, 'storeMaintenanceLog']);
+        Route::post('/schools', [WashSchoolController::class, 'store'])->middleware('permission:manage schools');
+        Route::patch('/incidents/{incident}/status', [WashIncidentController::class, 'updateStatus'])->middleware('permission:update incident status');
+        Route::post('/incidents/{incident}/assign', [WashIncidentController::class, 'assign'])->middleware('permission:assign incidents');
+        Route::post('/incidents/{incident}/override-priority', [WashIncidentController::class, 'overridePriority'])->middleware('permission:override ai priority');
+        Route::post('/incidents/{incident}/maintenance-logs', [WashIncidentController::class, 'storeMaintenanceLog'])->middleware('permission:update incident status');
     });
 });
 
-Route::prefix('v1/admin')->middleware('auth:sanctum')->group(function () {
+Route::prefix('v1/admin')->middleware(['auth:sanctum', 'permission:manage ai settings'])->group(function () {
     Route::get('/provider-types', [WashModelProfileController::class, 'providerTypes']);
     Route::apiResource('/model-profiles', WashModelProfileController::class)->parameters(['model-profiles' => 'modelProfile']);
     Route::post('/model-profiles/{modelProfile}/activate', [WashModelProfileController::class, 'activate']);
