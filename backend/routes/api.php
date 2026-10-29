@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\Admin\WashModelProfileController;
 use App\Http\Controllers\Api\Admin\WashSttProfileController;
+use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\WashAgentController;
 use App\Http\Controllers\Api\WashIncidentController;
 use App\Http\Controllers\Api\WashNotificationController;
@@ -20,14 +21,14 @@ Route::prefix('v1/wash')->group(function () {
     Route::get('/schools/{school}', [WashSchoolController::class, 'show']);
 
     Route::get('/reports', [WashReportController::class, 'index']);
-    Route::post('/reports', [WashReportController::class, 'store']);
+    Route::post('/reports', [WashReportController::class, 'store'])->middleware('throttle:60,1');
     Route::get('/reports/{report}', [WashReportController::class, 'show']);
 
     Route::get('/incidents', [WashIncidentController::class, 'index']);
     Route::get('/incidents/{incident}', [WashIncidentController::class, 'show']);
 
     Route::post('/agent/chat', [WashAgentController::class, 'copilotChat']);
-    Route::post('/agent/converse', [WashAgentController::class, 'converse']);
+    Route::post('/agent/converse', [WashAgentController::class, 'converse'])->middleware('throttle:30,1');
     Route::post('/agent/dispatch-plan', [WashAgentController::class, 'dispatchPlan']);
     Route::post('/agent/epidemic-scan', [WashAgentController::class, 'epidemicScan']);
     Route::post('/agent/synthesize', [WashAgentController::class, 'synthesize']);
@@ -61,5 +62,10 @@ Route::prefix('v1/notifications')->middleware('auth:sanctum')->group(function ()
 
 Route::prefix('v1/whatsapp')->group(function () {
     Route::get('/webhook', [WashWhatsAppController::class, 'verify']);
-    Route::post('/webhook', [WashWhatsAppController::class, 'receive']);
+    Route::post('/webhook', [WashWhatsAppController::class, 'receive'])->middleware('throttle:60,1');
+});
+
+Route::prefix('v1/auth')->group(function () {
+    Route::post('/token', [AuthController::class, 'token'])->middleware('throttle:10,1');
+    Route::delete('/token', [AuthController::class, 'destroy'])->middleware('auth:sanctum');
 });
