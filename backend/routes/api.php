@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Admin\WashSttProfileController;
 use App\Http\Controllers\Api\WashAgentController;
 use App\Http\Controllers\Api\WashIncidentController;
 use App\Http\Controllers\Api\WashNotificationController;
+use App\Http\Controllers\Api\WashWhatsAppController;
 use App\Http\Controllers\Api\WashReportController;
 use App\Http\Controllers\Api\WashSchoolController;
 use Illuminate\Http\Request;
@@ -55,4 +56,9 @@ Route::prefix('v1/notifications')->middleware('auth:sanctum')->group(function ()
     Route::get('/', [WashNotificationController::class, 'index']);
     Route::post('/read-all', [WashNotificationController::class, 'readAll']);
     Route::post('/{notification}/read', [WashNotificationController::class, 'read']);
+});
+
+Route::prefix('v1/whatsapp')->group(function () {
+    Route::get('/webhook', [WashWhatsAppController::class, 'verify']);
+    Route::post('/webhook', [WashWhatsAppController::class, 'receive']);
 });

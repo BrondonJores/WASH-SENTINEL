@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Services\WashWhatsAppService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -9,19 +10,10 @@ class ProcessWhatsAppMessage implements ShouldQueue
 {
     use Queueable;
 
-    /**
-     * Create a new job instance.
-     */
-    public function __construct()
-    {
-        //
-    }
+    public function __construct(public array $payload) {}
 
-    /**
-     * Execute the job.
-     */
-    public function handle(): void
+    public function handle(WashWhatsAppService $service): void
     {
-        //
+        $service->handlePayload($this->payload);
     }
 }

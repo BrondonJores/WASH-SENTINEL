@@ -39,4 +39,13 @@ return [
         'url' => env('AI_ENGINE_URL', 'http://ai-engine:8000'),
         'timeout' => env('AI_ENGINE_TIMEOUT', 120),
     ],
+
+    'whatsapp' => [
+        'base_url' => env('WHATSAPP_BASE_URL', 'https://graph.facebook.com/v21.0'),
+        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID', ''),
+        'access_token' => env('WHATSAPP_ACCESS_TOKEN', ''),
+        'verify_token' => env('WHATSAPP_VERIFY_TOKEN', ''),
+        'app_secret' => env('WHATSAPP_APP_SECRET', ''),
+        'simulator' => env('WHATSAPP_SIMULATOR', false),
+    ],
 ];

@@ -6,6 +6,7 @@ use App\Models\Incident;
 use App\Models\MaintenanceLog;
 use App\Models\Report;
 use App\Models\School;
+use App\Models\SchoolContact;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -34,6 +35,15 @@ class WashDemoSeeder extends Seeder
         foreach ($this->schools() as $data) {
             $schools[$data['code']] = School::updateOrCreate(['code' => $data['code']], $data);
         }
+
+        SchoolContact::updateOrCreate(
+            ['phone' => '237600112233'],
+            ['school_id' => $schools['DOU-BON-001']->id, 'name' => 'Clarisse Eko', 'role' => 'directrice', 'is_verified' => true]
+        );
+        SchoolContact::updateOrCreate(
+            ['phone' => '237600778899'],
+            ['school_id' => $schools['RUR-NGOK-004']->id, 'name' => 'Paul Mbarga', 'role' => 'directeur', 'is_verified' => true]
+        );
 
         $bonanjo = Incident::firstOrCreate(
             ['title' => 'Pompe principale hors service', 'school_id' => $schools['DOU-BON-001']->id],

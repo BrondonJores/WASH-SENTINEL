@@ -1,0 +1,27 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "123456789",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"display_phone_number": "237600000000", "phone_number_id": "999"},
+            "contacts": [{"profile": {"name": "Clarisse Eko"}, "wa_id": "237600112233"}],
+            "messages": [
+              {
+                "from": "237600112233",
+                "id": "wamid.AUDIO001",
+                "timestamp": "1760000000",
+                "type": "audio",
+                "audio": {"mime_type": "audio/ogg; codecs=opus", "id": "MEDIA_AUDIO_1", "voice": true}
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
