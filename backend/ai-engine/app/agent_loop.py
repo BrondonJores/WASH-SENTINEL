@@ -15,6 +15,8 @@ Règles impératives :
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
 - Si l'utilisateur signale une panne, appelle prepare_report puis demande confirmation avant tout enregistrement.
 - Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).
+- Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
+- Si un outil renvoie une erreur, corrige tes arguments avec les valeurs exactes fournies et réessaie au lieu d'abandonner.
 - Les données détaillées sont affichées dans des cartes séparées : ne recopie pas tout dans ta réponse.
 """
 

@@ -42,6 +42,14 @@ def _resolve_school(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
     return None
 
 
+def _school_choices(context: dict[str, Any], limit: int = 10) -> str:
+    """Noms + ids valides, pour guider le retry du modèle en cas d'erreur."""
+    choices = []
+    for school in context.get("schools", [])[:limit]:
+        choices.append(f"{school.get('school_name', '?')} (id {school.get('school_id')})")
+    return ", ".join(choices) if choices else "aucune école dans le contexte"
+
+
 def _month_buckets(months: int, now: datetime) -> list[tuple[int, int]]:
     buckets = []
     year, month = now.year, now.month
@@ -59,7 +67,7 @@ def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[s
     school_id = args.get("school_id")
     school = next((s for s in context.get("schools", []) if s.get("school_id") == school_id), None)
     if not school:
-        return {"error": f"École {school_id} introuvable dans le contexte."}
+        return {"error": f"École {school_id} introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un id exact."}
     open_incs = [i for i in _open_incidents(context) if i.get("school_id") == school_id]
     history = SchoolMaintenanceHistory(
         school_id=school["school_id"],
@@ -185,7 +193,7 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     """Tendances mensuelles d'une école : pannes, coûts de réparation, jours sans service."""
     school = _resolve_school(context, args.get("school"))
     if not school:
-        return {"error": f"École '{args.get('school')}' introuvable. Précisez son nom ou son identifiant."}
+        return {"error": f"École '{args.get('school')}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."}
     months = min(max(int(args.get("months", 3) or 3), 1), 12)
     school_id = school["school_id"]
     now = datetime.now(timezone.utc)

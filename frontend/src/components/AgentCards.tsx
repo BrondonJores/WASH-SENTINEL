@@ -3,6 +3,9 @@ import type { ReactNode } from 'react';
 import { Badge, Button, Card, ConfidenceMeter } from './ui';
 import { Icon } from './icons';
 import type { AgentCard } from '../lib/api';
+import { ThresholdGauge } from './ThresholdGauge';
+import { TrendChart } from './TrendChart';
+import type { TrendSeries } from './TrendChart';
 
 // ---------- Helpers défensifs (les observations tools varient) ----------
 
@@ -232,7 +235,14 @@ function AnalysisCard({ title, data }: { title: string; data: Record<string, unk
             {ratio === null ? (
               <p className="font-mono text-sm font-semibold tabular-nums">—</p>
             ) : (
-              <ConfidenceMeter value={ratio} />
+              <ThresholdGauge
+                value={ratio}
+                display={`${fmtNum1(ratio)} %`}
+                thresholds={[
+                  { value: 30, label: '30 %', tone: 'warn' },
+                  { value: 55, label: '55 %', tone: 'danger' },
+                ]}
+              />
             )}
           </div>
         </div>
@@ -317,13 +327,19 @@ function DistrictCard({ title, data }: { title: string; data: Record<string, unk
 }
 
 function TrendCard({ title, data }: { title: string; data: Record<string, unknown> }) {
-  const labels = asArray<string>(data.labels);
+  const labels = asArray<unknown>(data.labels).map((l, i) =>
+    typeof l === 'string' && l !== '' ? l : `M${i + 1}`,
+  );
   const datasets = asArray<{ label?: unknown; data?: unknown; kind?: unknown }>(data.datasets);
-  const bars = datasets.find((d) => d.kind === 'bar') ?? datasets[0];
-  const values = asArray<number>(bars?.data).map((v) => (typeof v === 'number' ? v : 0));
   const figures = asRecord(data.figures);
-  const max = Math.max(1, ...values);
-  const n = Math.max(1, values.length);
+  const palette = ['#0d9488', '#d97706', '#e11d48', '#0284c7'];
+  const series: TrendSeries[] = datasets.map((d, i) => ({
+    key: `s${i}`,
+    label: typeof d.label === 'string' && d.label !== '' ? d.label : `Série ${i + 1}`,
+    kind: d.kind === 'line' ? 'line' : 'bar',
+    data: asArray<number>(d.data).map((v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)),
+    color: palette[i % palette.length],
+  }));
   return (
     <CardShell
       title={title}
@@ -343,59 +359,14 @@ function TrendCard({ title, data }: { title: string; data: Record<string, unknow
         <Stat label="Jours sans service" value={fmtInt(figures.total_days_lost)} />
         <Stat label="Coût / mois" value={fmtInt(figures.avg_cost_per_month)} />
       </div>
-      {values.length > 0 && (
+      {labels.length > 0 && series.length > 0 ? (
         <div className="mt-3">
-          <p className="mb-1 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-            {bars && typeof bars.label === 'string' ? bars.label : 'Valeurs'}
-          </p>
-          <svg viewBox="0 0 400 132" className="w-full" role="img" aria-label="Graphe des tendances">
-            <line x1="0" y1="108" x2="400" y2="108" className="stroke-stone-300 dark:stroke-stone-700" />
-            {values.map((v, i) => {
-              const h = Math.round((v / max) * 96);
-              const slot = 390 / n;
-              const w = Math.max(8, slot - 10);
-              const x = 5 + i * slot + (slot - w) / 2;
-              return (
-                <g key={i}>
-                  <rect
-                    x={x}
-                    y={108 - h}
-                    width={w}
-                    height={h}
-                    rx={3}
-                    className="fill-teal-700 dark:fill-teal-500"
-                  >
-                    <title>{`${labels[i] ?? `M${i + 1}`} : ${new Intl.NumberFormat('fr-FR').format(v)}`}</title>
-                  </rect>
-                  <text
-                    x={x + w / 2}
-                    y={122}
-                    textAnchor="middle"
-                    fontSize="9"
-                    className="fill-stone-500 font-mono dark:fill-stone-400"
-                  >
-                    {(labels[i] ?? `M${i + 1}`).slice(0, 6)}
-                  </text>
-                </g>
-              );
-            })}
-          </svg>
+          <TrendChart labels={labels} series={series} />
         </div>
-      )}
-      {datasets.filter((d) => d !== bars).length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {datasets
-            .filter((d) => d !== bars)
-            .map((d, i) => {
-              const total = asArray<number>(d.data).reduce((s, v) => s + (typeof v === 'number' ? v : 0), 0);
-              return (
-                <Badge key={i}>
-                  {typeof d.label === 'string' ? d.label : `Série ${i + 2}`} :{' '}
-                  {new Intl.NumberFormat('fr-FR').format(total)}
-                </Badge>
-              );
-            })}
-        </div>
+      ) : (
+        <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
+          Pas assez de données pour tracer la tendance.
+        </p>
       )}
     </CardShell>
   );

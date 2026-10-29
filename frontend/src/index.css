@@ -86,3 +86,25 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .orb-breathe, .orb-spin-slow, .orb-ripple { animation: none; }
 }
+
+@keyframes orb-swirl {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orb-talk {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.07); }
+}
+
+@keyframes orb-eq {
+  0%, 100% { transform: scaleY(0.3); opacity: 0.5; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+.orb-swirl { animation: orb-swirl 14s linear infinite; }
+.orb-talk { animation: orb-talk 1.4s ease-in-out infinite; }
+.orb-eq { animation: orb-eq 1.1s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-swirl, .orb-talk, .orb-eq { animation: none; }
+}

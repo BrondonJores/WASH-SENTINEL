@@ -160,8 +160,8 @@ export default function ConsolePage() {
               {m.tools.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">outils :</span>
-                  {m.tools.map((t) => (
-                    <Badge key={t} className="font-mono">
+                  {m.tools.map((t, j) => (
+                    <Badge key={`${t}-${j}`} className="font-mono">
                       {t}
                     </Badge>
                   ))}

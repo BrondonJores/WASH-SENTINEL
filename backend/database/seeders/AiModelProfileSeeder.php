@@ -38,5 +38,37 @@ class AiModelProfileSeeder extends Seeder
                 'is_default' => false,
             ]
         );
+
+        // Modeles deja telecharges (ollama-local : gemma3:1b comme think-tank, gemma2:2b).
+        // Importer les blobs une fois (voir README), puis Tester + Activer depuis Reglages IA.
+        AiModelProfile::updateOrCreate(
+            ['name' => 'Gemma 3 1B — tests (Ollama)'],
+            [
+                'provider' => 'ollama',
+                'base_url' => env('OLLAMA_URL', 'http://ollama:11434'),
+                'model' => 'gemma3:1b',
+                'vision_model' => null,
+                'embed_model' => null,
+                'api_key' => null,
+                'timeout' => 120,
+                'is_active' => false,
+                'is_default' => false,
+            ]
+        );
+
+        AiModelProfile::updateOrCreate(
+            ['name' => 'Gemma 2 2B — tests (Ollama)'],
+            [
+                'provider' => 'ollama',
+                'base_url' => env('OLLAMA_URL', 'http://ollama:11434'),
+                'model' => 'gemma2:2b',
+                'vision_model' => null,
+                'embed_model' => null,
+                'api_key' => null,
+                'timeout' => 120,
+                'is_active' => false,
+                'is_default' => false,
+            ]
+        );
     }
 }

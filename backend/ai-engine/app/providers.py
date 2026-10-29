@@ -17,6 +17,88 @@ def parse_json_response(raw: str) -> dict[str, Any]:
         return json.loads(cleaned)
 
 
+def raise_for_ollama(response: httpx.Response, model: str) -> None:
+    """Traduit les erreurs HTTP d'Ollama en messages actionnables.
+
+    Ollama répond 404 quand le modèle demandé n'est pas téléchargé :
+    sans traduction, l'UI affiche une 500 brute incompréhensible.
+    """
+    if response.status_code == 404:
+        raise RuntimeError(
+            f"Modèle Ollama '{model}' introuvable (404). "
+            "Vérifiez 'ollama list' ou activez un autre profil depuis Réglages IA."
+        )
+    response.raise_for_status()
+
+
+def _iter_json_blocks(text: str) -> list[str]:
+    """Yield les blocs {...} équilibrés de premier niveau (ignore le reste)."""
+    blocks: list[str] = []
+    depth = 0
+    start = -1
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    blocks.append(text[start:i + 1])
+                    start = -1
+    return blocks
+
+
+def extract_text_tool_calls(content: str, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Repli poor-man's tool calling : certains petits modèles (ex. qwen 3B)
+    émettent l'appel d'outil en JSON texte au lieu du champ natif `tool_calls`.
+
+    Ne convertit que les noms d'outils connus (définitions fournies).
+    """
+    known: set[str] = set()
+    for t in tools or []:
+        fn = (t.get("function") or {}) if isinstance(t, dict) else {}
+        if isinstance(fn, dict) and fn.get("name"):
+            known.add(fn["name"])
+    if not known or not content:
+        return []
+    for candidate in _iter_json_blocks(content):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        items = data if isinstance(data, list) else [data]
+        calls: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if name not in known:
+                continue
+            args = item.get("arguments", {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
+            calls.append({"id": None, "name": name, "arguments": args if isinstance(args, dict) else {}})
+        if calls:
+            return calls
+    return []
+
+
 VISION_FALLBACK = {
     "is_wash_related": True,
     "infrastructure_detected": "Point d'eau / Tuyauterie scolaire",
@@ -137,7 +219,7 @@ class OllamaProvider(BaseLLMProvider):
                     "options": {"temperature": 0.1},
                 },
             )
-            response.raise_for_status()
+            raise_for_ollama(response, self.model)
             return parse_json_response(response.json().get("response", "{}"))
 
     async def generate_vision_json(self, prompt: str, image_base64: str, system: str = "") -> dict[str, Any]:
@@ -188,8 +270,18 @@ class OllamaProvider(BaseLLMProvider):
         if tools:
             payload["tools"] = tools
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(f"{self.base_url}/api/chat", json=payload)
-            response.raise_for_status()
+            try:
+                response = await client.post(f"{self.base_url}/api/chat", json=payload)
+                raise_for_ollama(response, self.model)
+            except httpx.HTTPStatusError as exc:
+                if not tools or exc.response.status_code != 400:
+                    raise
+                # Petit modèle sans function-calling (ex. gemma 1B/2B) :
+                # on rejoue sans outils plutôt que d'échouer.
+                print(f"[ollama] {self.model} refuse les outils (400), repli sans tools.")
+                payload = {k: v for k, v in payload.items() if k != "tools"}
+                response = await client.post(f"{self.base_url}/api/chat", json=payload)
+                raise_for_ollama(response, self.model)
             msg = response.json().get("message", {})
         calls: list[dict[str, Any]] = []
         for tc in msg.get("tool_calls", []) or []:
@@ -201,7 +293,12 @@ class OllamaProvider(BaseLLMProvider):
                 except json.JSONDecodeError:
                     args = {}
             calls.append({"id": None, "name": fn.get("name", ""), "arguments": args if isinstance(args, dict) else {}})
-        return {"raw": msg, "content": msg.get("content", "") or "", "tool_calls": calls}
+        content = msg.get("content", "") or ""
+        if not calls and tools:
+            calls = extract_text_tool_calls(content, tools)
+            if calls:
+                content = ""
+        return {"raw": msg, "content": content, "tool_calls": calls}
 
     def format_tool_result(self, name: str, result: Any, call_id: str | None = None) -> dict[str, Any]:
         content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
