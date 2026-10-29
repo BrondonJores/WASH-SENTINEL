@@ -9,16 +9,11 @@ import type {
   SttTestResult,
 } from '../lib/api';
 import ProfileForm from '../components/ProfileForm';
+import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import type { FormInitial } from '../components/ProfileForm';
 
 type Kind = 'llm' | 'stt';
 
-const btnSecondary =
-  'rounded-md border border-stone-300 px-3 py-1.5 text-sm font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-50';
-const btnPrimary =
-  'rounded-md bg-teal-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-teal-900 disabled:opacity-50';
-const btnDanger =
-  'rounded-md border border-stone-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50';
 
 function typeLabel(types: ProviderType[], id: string): string {
   return types.find((t) => t.id === id)?.label ?? id;
@@ -136,17 +131,25 @@ export default function SettingsPage() {
     });
   };
 
-  if (loading) return <p className="text-sm text-stone-600">Chargement des réglages…</p>;
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-8 w-56" />
+        <Skeleton className="h-28 w-full" />
+        <Skeleton className="h-28 w-full" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-10">
       <div>
-        <h1 className="text-xl font-bold">Réglages IA</h1>
-        <p className="mt-1 text-sm text-stone-600">
-          Basculez le moteur entre modèle local et API externe, sans redémarrage. Un seul profil actif par famille.
-        </p>
+        <PageHeader
+          title="Réglages IA"
+          description="Basculez le moteur entre modèle local et API externe, sans redémarrage. Un seul profil actif par famille."
+        />
         {error && (
-          <div className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
             {error}{' '}
             <button onClick={() => void load()} className="font-semibold underline">
               Réessayer
@@ -248,12 +251,12 @@ function ProfileSection(props: SectionProps) {
     <section>
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <p className="text-sm text-stone-600">{description}</p>
+          <h2 className="text-base font-semibold">{title}</h2>
+          <p className="text-sm text-stone-600 dark:text-stone-400">{description}</p>
         </div>
-        <button onClick={props.onNew} className={btnPrimary}>
+        <Button variant="primary" onClick={props.onNew}>
           Nouveau profil
-        </button>
+        </Button>
       </div>
 
       {editing?.kind === kind && editing.id === null && (
@@ -273,27 +276,19 @@ function ProfileSection(props: SectionProps) {
 
       <div className="space-y-3">
         {profiles.map((p) => (
-          <article key={p.id} className="rounded-lg border border-stone-200 bg-white p-4">
+          <Card key={p.id} className="p-4">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-semibold">{p.name}</h3>
-              <span className="rounded bg-stone-100 px-2 py-0.5 text-xs text-stone-700">
-                {typeLabel(types, driverOf(p))}
-              </span>
-              {p.is_active && (
-                <span className="rounded bg-teal-800 px-2 py-0.5 text-xs font-semibold text-white">ACTIF</span>
-              )}
+              <Badge>{typeLabel(types, driverOf(p))}</Badge>
+              {p.is_active && <Badge tone="accent">ACTIF</Badge>}
               {p.last_test_status && (
-                <span
-                  className={`rounded px-2 py-0.5 text-xs ${
-                    p.last_test_status === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                  }`}
-                >
+                <Badge tone={p.last_test_status === 'success' ? 'success' : 'danger'} className="font-mono tabular-nums">
                   test {p.last_test_status === 'success' ? 'réussi' : 'échoué'}
                   {p.last_test_latency_ms ? ` · ${p.last_test_latency_ms} ms` : ''}
-                </span>
+                </Badge>
               )}
             </div>
-            <p className="mt-1 text-sm text-stone-600">
+            <p className="mt-1 font-mono text-[13px] text-stone-600 dark:text-stone-400">
               {modelOf(p)}
               {p.api_key_masked ? ` · clé ${p.api_key_masked}` : ''}
             </p>
@@ -304,26 +299,30 @@ function ProfileSection(props: SectionProps) {
                   type="file"
                   accept="audio/*"
                   onChange={(e) => props.onFile?.(p.id, e.target.files?.[0])}
-                  className="text-sm text-stone-600"
+                  className="text-sm text-stone-600 dark:text-stone-400"
                 />
               </div>
             )}
 
             <div className="mt-3 flex flex-wrap gap-2">
-              <button onClick={() => props.onTest(p.id)} disabled={busy !== null} className={btnPrimary}>
+              <Button variant="primary" onClick={() => props.onTest(p.id)} disabled={busy !== null}>
                 Tester
-              </button>
+              </Button>
               {!p.is_active && (
-                <button onClick={() => props.onActivate(p.id)} disabled={busy !== null} className={btnSecondary}>
+                <Button onClick={() => props.onActivate(p.id)} disabled={busy !== null}>
                   Activer
-                </button>
+                </Button>
               )}
-              <button onClick={() => props.onEdit(p.id)} disabled={busy !== null} className={btnSecondary}>
+              <Button onClick={() => props.onEdit(p.id)} disabled={busy !== null}>
                 Modifier
-              </button>
-              <button onClick={() => props.onDelete(p.id, p.name)} disabled={busy !== null || p.is_active} className={btnDanger}>
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => props.onDelete(p.id, p.name)}
+                disabled={busy !== null || p.is_active}
+              >
                 Supprimer
-              </button>
+              </Button>
             </div>
 
             {tests[p.id] && <TestResultView result={tests[p.id]} />}
@@ -332,6 +331,7 @@ function ProfileSection(props: SectionProps) {
               <div className="mt-4">
                 <ProfileForm
                   key={`${kind}-${p.id}`}
+                  framed={false}
                   kind={kind}
                   types={types}
                   initial={editingInitial}
@@ -342,9 +342,13 @@ function ProfileSection(props: SectionProps) {
                 />
               </div>
             )}
-          </article>
+          </Card>
         ))}
-        {profiles.length === 0 && <p className="text-sm text-stone-600">Aucun profil pour le moment.</p>}
+        {profiles.length === 0 && (
+          <Card>
+            <EmptyState icon="sliders" title="Aucun profil" description="Créez votre premier profil pour activer ce moteur." />
+          </Card>
+        )}
       </div>
     </section>
   );
@@ -355,7 +359,9 @@ function TestResultView({ result }: { result: LlmTestResult | SttTestResult }) {
   return (
     <div
       className={`mt-3 rounded-md border p-3 text-sm ${
-        result.ok ? 'border-green-300 bg-green-50 text-green-900' : 'border-red-300 bg-red-50 text-red-900'
+        result.ok
+          ? 'border-green-300 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-200'
+          : 'border-red-300 bg-red-50 text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-200'
       }`}
     >
       <p className="font-semibold">

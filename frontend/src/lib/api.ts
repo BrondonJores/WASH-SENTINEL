@@ -89,6 +89,24 @@ export interface ProfilePayload {
   timeout?: number;
 }
 
+export interface ChatHistoryMessage {
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
+}
+
+export interface AgentCard {
+  type: string;
+  title: string;
+  data: Record<string, unknown>;
+}
+
+export interface AgentChatResponse {
+  answer: string;
+  tools_executed: string[];
+  cards: AgentCard[];
+  model_used: string;
+}
+
 const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost/api';
 
 let token: string | null = localStorage.getItem('wash_admin_token');
@@ -158,6 +176,11 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   logout: () => req<{ message: string }>('/v1/auth/token', { method: 'DELETE' }),
+  converse: (message: string, history: ChatHistoryMessage[]) =>
+    req<AgentChatResponse>('/v1/wash/agent/converse', {
+      method: 'POST',
+      body: JSON.stringify({ message, history }),
+    }),
   providerTypes: () => req<{ providers: ProviderType[] }>('/v1/admin/provider-types'),
   modelProfiles: () => req<ModelProfile[]>('/v1/admin/model-profiles'),
   createModelProfile: (p: ProfilePayload) =>

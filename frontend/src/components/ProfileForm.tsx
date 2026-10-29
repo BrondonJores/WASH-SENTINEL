@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import type { ProfilePayload, ProviderType } from '../lib/api';
+import { Button } from './ui';
 
 export interface FormInitial {
   providerId: string;
@@ -12,6 +13,7 @@ export interface FormInitial {
 }
 
 interface Props {
+  framed?: boolean;
   kind: 'llm' | 'stt';
   types: ProviderType[];
   initial: FormInitial | null;
@@ -22,9 +24,9 @@ interface Props {
 }
 
 const inputCls =
-  'w-full rounded-md border border-stone-300 px-3 py-2 text-sm focus:border-teal-700 focus:outline-none';
+  'w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-teal-700 focus:outline-none dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100';
 
-export default function ProfileForm({ kind, types, initial, submitting, serverError, onSubmit, onCancel }: Props) {
+export default function ProfileForm({ framed = true, kind, types, initial, submitting, serverError, onSubmit, onCancel }: Props) {
   const isEdit = initial !== null;
   const [providerId, setProviderId] = useState(initial?.providerId ?? types[0]?.id ?? '');
   const [name, setName] = useState(initial?.name ?? '');
@@ -35,7 +37,7 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
   const [language, setLanguage] = useState(initial?.language ?? 'fr');
 
   const type = types.find((t) => t.id === providerId) ?? types[0];
-  if (!type) return <p className="text-sm text-stone-600">Types de providers indisponibles.</p>;
+  if (!type) return <p className="text-sm text-stone-600 dark:text-stone-400">Types de providers indisponibles.</p>;
 
   const setValue = (field: string, v: string) => setValues((m) => ({ ...m, [field]: v }));
   const clean = (v: string | undefined) => (v && v.trim() !== '' ? v.trim() : undefined);
@@ -76,10 +78,17 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
   };
 
   return (
-    <form onSubmit={submit} className="space-y-4 rounded-lg border border-teal-800 bg-stone-50 p-5">
+    <form
+      onSubmit={submit}
+      className={
+        framed
+          ? 'space-y-4 rounded-lg border border-stone-200 bg-white p-5 dark:border-stone-800 dark:bg-stone-900'
+          : 'space-y-4 border-t border-stone-200 pt-4 dark:border-stone-800'
+      }
+    >
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
-          <label htmlFor={`name-${kind}`} className="mb-1 block text-sm font-medium text-stone-700">
+          <label htmlFor={`name-${kind}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
             Nom du profil
           </label>
           <input
@@ -92,7 +101,7 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
           />
         </div>
         <div>
-          <label htmlFor={`provider-${kind}`} className="mb-1 block text-sm font-medium text-stone-700">
+          <label htmlFor={`provider-${kind}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
             Fournisseur
           </label>
           <select
@@ -107,16 +116,16 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
               </option>
             ))}
           </select>
-          <p className="mt-1 text-xs text-stone-500">{type.description}</p>
+          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{type.description}</p>
         </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         {type.fields.map((f) => (
           <div key={f.name}>
-            <label htmlFor={`${kind}-${f.name}`} className="mb-1 block text-sm font-medium text-stone-700">
+            <label htmlFor={`${kind}-${f.name}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
               {f.label}
-              {f.required && <span className="text-red-700"> *</span>}
+              {f.required && <span className="text-red-700 dark:text-red-400"> *</span>}
             </label>
             <input
               id={`${kind}-${f.name}`}
@@ -133,8 +142,8 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
-          <label htmlFor={`key-${kind}`} className="mb-1 block text-sm font-medium text-stone-700">
-            Clé API {type.api_key_required && !isEdit ? <span className="text-red-700">*</span> : '(optionnelle)'}
+          <label htmlFor={`key-${kind}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
+            Clé API {type.api_key_required && !isEdit ? <span className="text-red-700 dark:text-red-400">*</span> : '(optionnelle)'}
           </label>
           <input
             id={`key-${kind}`}
@@ -147,7 +156,7 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
           />
         </div>
         <div>
-          <label htmlFor={`timeout-${kind}`} className="mb-1 block text-sm font-medium text-stone-700">
+          <label htmlFor={`timeout-${kind}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
             Timeout (secondes)
           </label>
           <input
@@ -165,7 +174,7 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
       {kind === 'stt' && (
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label htmlFor="stt-language" className="mb-1 block text-sm font-medium text-stone-700">
+            <label htmlFor="stt-language" className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
               Langue par défaut
             </label>
             <input
@@ -177,7 +186,7 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
             />
           </div>
           <div>
-            <label htmlFor="stt-threads" className="mb-1 block text-sm font-medium text-stone-700">
+            <label htmlFor="stt-threads" className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
               Threads CPU
             </label>
             <input
@@ -193,23 +202,15 @@ export default function ProfileForm({ kind, types, initial, submitting, serverEr
         </div>
       )}
 
-      {serverError && <p className="text-sm font-medium text-red-700">{serverError}</p>}
+      {serverError && <p className="text-sm font-medium text-red-700 dark:text-red-400">{serverError}</p>}
 
       <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded-md bg-teal-800 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-900 disabled:opacity-50"
-        >
+        <Button type="submit" variant="primary" disabled={submitting}>
           {submitting ? 'Enregistrement…' : isEdit ? 'Mettre à jour' : 'Créer le profil'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-md border border-stone-300 px-4 py-2 text-sm font-medium text-stone-700 hover:bg-stone-100"
-        >
+        </Button>
+        <Button type="button" onClick={onCancel}>
           Annuler
-        </button>
+        </Button>
       </div>
     </form>
   );

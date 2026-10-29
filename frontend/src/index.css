@@ -1,7 +1,88 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
 body {
-  background: #ffffff;
-  color: #1c1917;
-  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--color-white);
+  color: var(--color-stone-900);
+}
+
+.dark body {
+  background-color: var(--color-stone-950);
+  color: var(--color-stone-100);
+}
+
+::selection {
+  background-color: var(--color-teal-700);
+  color: #fff;
+}
+
+.dark ::selection {
+  background-color: var(--color-teal-500);
+  color: var(--color-stone-950);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-stone-300) transparent;
+}
+
+.dark * {
+  scrollbar-color: var(--color-stone-700) transparent;
+}
+
+/* Grille technique très faible (fond login / panneaux ops). */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgb(0 0 0 / 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(0 0 0 / 0.05) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.dark .bg-grid {
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px);
+}
+
+/* Orbe Sentinel : états animés (coupés si reduced-motion). */
+.orb-core {
+  background: radial-gradient(circle at 35% 30%, #99f6e4, #14b8a6 45%, #0f766e 70%, #134e4a);
+  box-shadow:
+    inset -8px -10px 24px rgb(0 0 0 / 0.35),
+    0 0 0 1px rgb(20 184 166 / 0.25);
+}
+
+.dark .orb-core {
+  background: radial-gradient(circle at 35% 30%, #5eead4, #0d9488 45%, #115e59 70%, #042f2e);
+  box-shadow:
+    inset -8px -10px 24px rgb(0 0 0 / 0.5),
+    0 0 24px rgb(20 184 166 / 0.25);
+}
+
+@keyframes orb-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.045); }
+}
+
+@keyframes orb-spin-slow {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orb-ripple {
+  0% { transform: scale(0.62); opacity: 0.8; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+.orb-breathe { animation: orb-breathe 4.5s ease-in-out infinite; }
+.orb-spin-slow { animation: orb-spin-slow 7s linear infinite; }
+.orb-ripple { animation: orb-ripple 2.2s ease-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-breathe, .orb-spin-slow, .orb-ripple { animation: none; }
 }
