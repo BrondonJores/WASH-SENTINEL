@@ -21,6 +21,39 @@ def _open_incidents(context: dict[str, Any]) -> list[dict[str, Any]]:
     return [i for i in context.get("incidents", []) if i.get("status") not in ("resolved", "closed")]
 
 
+FRENCH_MONTHS = ["", "janvier", "février", "mars", "avril", "mai", "juin",
+                 "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+
+
+def _resolve_school(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
+    schools = context.get("schools", [])
+    try:
+        wanted = int(ref)
+        for school in schools:
+            if school.get("school_id") == wanted:
+                return school
+    except (TypeError, ValueError):
+        pass
+    hint = str(ref or "").strip().lower()
+    if hint:
+        for school in schools:
+            if hint in str(school.get("school_name", "")).lower():
+                return school
+    return None
+
+
+def _month_buckets(months: int, now: datetime) -> list[tuple[int, int]]:
+    buckets = []
+    year, month = now.year, now.month
+    for _ in range(months):
+        buckets.append((year, month))
+        month -= 1
+        if month == 0:
+            month, year = 12, year - 1
+    buckets.reverse()
+    return buckets
+
+
 def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Analyse complète d'une école : pannes ouvertes, coûts, arbitrage réparer/remplacer."""
     school_id = args.get("school_id")
@@ -148,12 +181,72 @@ def tool_prepare_report(args: dict[str, Any], context: dict[str, Any]) -> dict[s
     }
 
 
+def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Tendances mensuelles d'une école : pannes, coûts de réparation, jours sans service."""
+    school = _resolve_school(context, args.get("school"))
+    if not school:
+        return {"error": f"École '{args.get('school')}' introuvable. Précisez son nom ou son identifiant."}
+    months = min(max(int(args.get("months", 3) or 3), 1), 12)
+    school_id = school["school_id"]
+    now = datetime.now(timezone.utc)
+
+    logs = [l for l in context.get("maintenance_logs", []) if l.get("school_id") == school_id]
+    recent = [i for i in context.get("recent_incidents", []) if i.get("school_id") == school_id]
+
+    def month_key(value: Any) -> tuple[int, int] | None:
+        dt = _parse_dt(value)
+        return (dt.year, dt.month) if dt else None
+
+    buckets = _month_buckets(months, now)
+    labels, incident_counts, costs, days_lost = [], [], [], []
+    for year, month in buckets:
+        labels.append(f"{FRENCH_MONTHS[month]} {year}")
+        incident_counts.append(sum(1 for i in recent if month_key(i.get("reported_at")) == (year, month)))
+        month_logs = [l for l in logs if month_key(l.get("repaired_at")) == (year, month)]
+        costs.append(round(sum(float(l.get("cost_amount", 0) or 0) for l in month_logs), 2))
+        days_lost.append(sum(int(l.get("days_without_service", 0) or 0) for l in month_logs))
+
+    total_cost = round(sum(costs), 2)
+    total_incidents = sum(incident_counts)
+    total_days = sum(days_lost)
+    avg_cost = round(total_cost / months, 2)
+    previous = costs[:-1]
+    avg_previous = sum(previous) / len(previous) if previous else 0.0
+    if avg_previous <= 0:
+        trend = "stable" if costs[-1] <= 0 else "up"
+    else:
+        ratio = (costs[-1] - avg_previous) / avg_previous
+        trend = "up" if ratio > 0.15 else ("down" if ratio < -0.15 else "stable")
+    currency = next((str(l.get("currency") or "XAF") for l in logs if l.get("currency")), "XAF")
+
+    return {
+        "school_id": school_id,
+        "school_name": school.get("school_name"),
+        "months": months,
+        "labels": labels,
+        "datasets": [
+            {"label": f"Coût réparations ({currency})", "data": costs, "kind": "bar"},
+            {"label": "Pannes signalées", "data": incident_counts, "kind": "line"},
+            {"label": "Jours sans service", "data": days_lost, "kind": "line"},
+        ],
+        "figures": {
+            "total_cost": total_cost,
+            "currency": currency,
+            "total_incidents": total_incidents,
+            "total_days_lost": total_days,
+            "avg_cost_per_month": avg_cost,
+            "trend_direction": trend,
+        },
+    }
+
+
 TOOL_EXECUTORS = {
     "analyze_school": tool_analyze_school,
     "rank_schools_by_need": tool_rank_schools_by_need,
     "summarize_district": tool_summarize_district,
     "explain_incident": tool_explain_incident,
     "prepare_report": tool_prepare_report,
+    "repair_trends": tool_repair_trends,
 }
 
 AGENT_TOOLS: list[dict[str, Any]] = [
@@ -194,6 +287,21 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {"incident_id": {"type": "integer", "description": "Identifiant de l'incident"}},
                 "required": ["incident_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "repair_trends",
+            "description": "Tendances mensuelles d'une école sur N mois : pannes, coûts de réparation, jours sans service. À utiliser pour tout historique, tendance ou graphique.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"},
+                    "months": {"type": "integer", "description": "Nombre de mois d'historique (1 à 12, défaut 3)"},
+                },
+                "required": ["school"],
             },
         },
     },

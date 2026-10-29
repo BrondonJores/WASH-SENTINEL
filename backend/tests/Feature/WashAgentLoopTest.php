@@ -27,6 +27,15 @@ class WashAgentLoopTest extends TestCase
         $school = School::create([
             'name' => 'École de Bonanjo', 'code' => 'DOU-BON-001', 'district' => 'Wouri',
         ]);
+        \App\Models\MaintenanceLog::create([
+            'incident_id' => Incident::create([
+                'school_id' => $school->id, 'title' => 'Ancienne panne',
+                'category' => 'water_point', 'issue_type' => 'leak',
+                'status' => 'resolved', 'urgency' => 'low',
+            ])->id,
+            'school_id' => $school->id,
+            'cost_amount' => 50000, 'repaired_at' => now()->subMonth(),
+        ]);
         Incident::create([
             'school_id' => $school->id, 'title' => 'Pompe cassée',
             'category' => 'water_point', 'issue_type' => 'total_breakdown',
@@ -47,6 +56,8 @@ class WashAgentLoopTest extends TestCase
             str_ends_with($request->url(), '/v1/agent/chat')
             && count($request->data()['context']['schools'] ?? []) === 1
             && count($request->data()['context']['incidents'] ?? []) === 1
+            && count($request->data()['context']['recent_incidents'] ?? []) === 2
+            && count($request->data()['context']['maintenance_logs'] ?? []) === 1
         );
         $this->assertEquals(1, AiAnalysis::where('analysis_type', 'agent')->count());
     }

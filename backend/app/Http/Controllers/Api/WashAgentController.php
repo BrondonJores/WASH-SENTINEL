@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\AiAnalysis;
 use App\Models\Incident;
+use App\Models\MaintenanceLog;
 use App\Models\School;
 use App\Contracts\AiEngineClient;
 use Illuminate\Http\Request;
@@ -142,6 +143,8 @@ class WashAgentController extends Controller
             [
                 'schools' => $this->maintenanceProfiles($validated['district'] ?? null),
                 'incidents' => $this->openIncidentSnapshots($validated['district'] ?? null),
+                'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
+                'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
             ],
         );
 
@@ -172,6 +175,35 @@ class WashAgentController extends Controller
                 'incident_count' => (int) $s->incidents_count,
                 'total_repair_cost' => (float) ($s->maintenance_logs_sum_cost_amount ?? 0),
                 'total_days_without_service' => (int) ($s->maintenance_logs_sum_days_without_service ?? 0),
+            ])->all();
+    }
+
+    protected function recentIncidentSnapshots(?string $district): array
+    {
+        return Incident::with('school:id,name,district')
+            ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
+            ->where('created_at', '>=', now()->subMonths(12))
+            ->latest()->take(200)->get()
+            ->map(fn (Incident $i) => [
+                'id' => $i->id,
+                'school_id' => $i->school_id,
+                'reported_at' => $i->created_at->toIso8601String(),
+            ])->all();
+    }
+
+    protected function maintenanceLogSnapshots(?string $district): array
+    {
+        return MaintenanceLog::with('school:id,name,district')
+            ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
+            ->latest()->take(200)->get()
+            ->map(fn (MaintenanceLog $l) => [
+                'id' => $l->id,
+                'school_id' => $l->school_id,
+                'incident_id' => $l->incident_id,
+                'cost_amount' => (float) $l->cost_amount,
+                'currency' => $l->currency,
+                'repaired_at' => $l->repaired_at?->toIso8601String(),
+                'days_without_service' => (int) $l->days_without_service,
             ])->all();
     }
 

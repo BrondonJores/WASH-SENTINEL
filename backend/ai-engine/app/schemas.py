@@ -306,6 +306,8 @@ class ChatTurn(BaseModel):
 class AgentContext(BaseModel):
     schools: list[dict[str, Any]] = Field(default_factory=list, description="Écoles avec agrégats de maintenance")
     incidents: list[dict[str, Any]] = Field(default_factory=list, description="Incidents avec école, urgence et dates")
+    recent_incidents: list[dict[str, Any]] = Field(default_factory=list, description="Historique 12 mois pour tendances")
+    maintenance_logs: list[dict[str, Any]] = Field(default_factory=list, description="Coûts de réparation pour tendances")
 
 
 class AgentChatRequest(BaseModel):

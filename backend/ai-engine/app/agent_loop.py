@@ -14,6 +14,7 @@ Règles impératives :
 - Ne devine jamais : utilise tes outils pour obtenir les faits (écoles, incidents, chiffres).
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
 - Si l'utilisateur signale une panne, appelle prepare_report puis demande confirmation avant tout enregistrement.
+- Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).
 - Les données détaillées sont affichées dans des cartes séparées : ne recopie pas tout dans ta réponse.
 """
 
@@ -101,6 +102,12 @@ class AgentLoop:
                 cards.append(AgentCard(
                     type="report_confirmation",
                     title="Confirmer le signalement",
+                    data=observation,
+                ))
+            elif name == "repair_trends":
+                cards.append(AgentCard(
+                    type="trend_chart",
+                    title=f"Tendances — {observation.get('school_name', '?')} ({observation.get('months', 3)} mois)",
                     data=observation,
                 ))
         return cards
