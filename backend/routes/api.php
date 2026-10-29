@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\Admin\WashModelProfileController;
 use App\Http\Controllers\Api\Admin\WashSttProfileController;
 use App\Http\Controllers\Api\WashAgentController;
 use App\Http\Controllers\Api\WashIncidentController;
+use App\Http\Controllers\Api\WashNotificationController;
 use App\Http\Controllers\Api\WashReportController;
 use App\Http\Controllers\Api\WashSchoolController;
 use Illuminate\Http\Request;
@@ -48,4 +49,10 @@ Route::prefix('v1/admin')->middleware(['auth:sanctum', 'permission:manage ai set
     Route::apiResource('/stt-profiles', WashSttProfileController::class)->parameters(['stt-profiles' => 'sttProfile']);
     Route::post('/stt-profiles/{sttProfile}/activate', [WashSttProfileController::class, 'activate']);
     Route::post('/stt-profiles/{sttProfile}/test', [WashSttProfileController::class, 'test']);
+});
+
+Route::prefix('v1/notifications')->middleware('auth:sanctum')->group(function () {
+    Route::get('/', [WashNotificationController::class, 'index']);
+    Route::post('/read-all', [WashNotificationController::class, 'readAll']);
+    Route::post('/{notification}/read', [WashNotificationController::class, 'read']);
 });

@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Report extends Model
 {
     protected $fillable = [
-        'incident_id', 'school_id', 'reporter_id', 'channel',
+        'incident_id', 'school_id', 'reporter_id', 'channel', 'source',
         'raw_content', 'audio_path', 'photo_path',
         'is_duplicate', 'duplicate_of_incident_id',
         'duplicate_similarity_score', 'raw_ai_extraction',

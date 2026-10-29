@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class School extends Model
 {
     protected $fillable = [
-        'name', 'code', 'district', 'latitude', 'longitude',
+        'name', 'code', 'district', 'default_language', 'latitude', 'longitude',
         'student_count', 'female_students', 'teacher_count', 'broken_toilets',
         'distance_from_center_km', 'equipment_type', 'installation_year',
         'estimated_replacement_cost', 'contact_phone',
@@ -34,6 +34,11 @@ class School extends Model
     public function reports(): HasMany
     {
         return $this->hasMany(Report::class);
+    }
+
+    public function contacts(): HasMany
+    {
+        return $this->hasMany(SchoolContact::class);
     }
 
     public function maintenanceLogs(): HasMany

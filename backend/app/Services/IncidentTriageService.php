@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Contracts\AiEngineClient;
 use App\Contracts\IncidentTriage;
+use App\Notifications\CriticalIncidentNotification;
 use App\Models\AiAnalysis;
 use App\Models\Incident;
 use App\Models\Report;
@@ -17,7 +18,7 @@ class IncidentTriageService implements IncidentTriage
 {
     public function __construct(protected AiEngineClient $ai) {}
 
-    public function ingest(School $school, string $channel, ?string $message, ?UploadedFile $audio, ?UploadedFile $photo, ?User $reporter = null): array
+    public function ingest(School $school, string $channel, ?string $message, ?UploadedFile $audio, ?UploadedFile $photo, ?User $reporter = null, string $source = 'web'): array
     {
         $audioPath = $audio ? $audio->store('reports/audio', 'public') : null;
         $photoPath = $photo ? $photo->store('reports/photos', 'public') : null;
@@ -28,6 +29,7 @@ class IncidentTriageService implements IncidentTriage
                 $message,
                 $audio ? storage_path('app/public/' . $audioPath) : null,
                 $school->name,
+                $school->default_language,
             );
             $rawText = (string) ($triage['raw_text'] ?? $message ?? '');
             $extraction = $triage['extraction']['data'] ?? $triage['extraction'] ?? [];
@@ -70,6 +72,7 @@ class IncidentTriageService implements IncidentTriage
             'school_id' => $school->id,
             'reporter_id' => $reporter?->id,
             'channel' => $channel,
+            'source' => $source,
             'raw_content' => $rawText,
             'audio_path' => $audioPath,
             'photo_path' => $photoPath,
@@ -114,6 +117,10 @@ class IncidentTriageService implements IncidentTriage
             'processing_ms' => (int) (microtime(true) * 1000) - $started,
         ]);
 
+        if (!$report->is_duplicate && $incident->urgency === 'critical') {
+            $this->notifyCritical($incident);
+        }
+
         return [
             'report' => $report->fresh(),
             'incident' => $incident->fresh('school'),
@@ -121,6 +128,17 @@ class IncidentTriageService implements IncidentTriage
             'extraction' => $extraction,
             'visual' => $visual,
         ];
+    }
+
+    protected function notifyCritical(Incident $incident): void
+    {
+        try {
+            User::role(['wash_admin', 'maintenance_agent'])->each(
+                fn (User $user) => $user->notify(new CriticalIncidentNotification($incident))
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Critical notification failed: ' . $e->getMessage());
+        }
     }
 
     protected function fallbackExtraction(string $rawText): array

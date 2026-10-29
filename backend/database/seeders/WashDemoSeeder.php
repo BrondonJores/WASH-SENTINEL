@@ -146,7 +146,7 @@ class WashDemoSeeder extends Seeder
                 'estimated_replacement_cost' => 1500000.0, 'contact_phone' => '+237 6 00 55 66',
             ],
             [
-                'name' => 'École Rurale de Ngok', 'code' => 'RUR-NGOK-004', 'district' => 'Mvila',
+                'name' => 'École Rurale de Ngok', 'code' => 'RUR-NGOK-004', 'district' => 'Mvila', 'default_language' => 'dua_Latn',
                 'latitude' => 2.91670000, 'longitude' => 11.15000000,
                 'student_count' => 210, 'female_students' => 195, 'teacher_count' => 6,
                 'broken_toilets' => 3, 'distance_from_center_km' => 72.0,
@@ -154,7 +154,7 @@ class WashDemoSeeder extends Seeder
                 'estimated_replacement_cost' => 3200000.0, 'contact_phone' => '+237 6 00 77 88',
             ],
             [
-                'name' => 'École de Nkol', 'code' => 'RUR-NKOL-005', 'district' => 'Mvila',
+                'name' => 'École de Nkol', 'code' => 'RUR-NKOL-005', 'district' => 'Mvila', 'default_language' => 'dua_Latn',
                 'latitude' => 2.95000000, 'longitude' => 11.10000000,
                 'student_count' => 160, 'female_students' => 80, 'teacher_count' => 5,
                 'broken_toilets' => 0, 'distance_from_center_km' => 65.0,

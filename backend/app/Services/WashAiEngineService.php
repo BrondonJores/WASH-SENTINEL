@@ -76,9 +76,12 @@ class WashAiEngineService implements AiEngineClient
         return Http::timeout(120)->post($this->baseUrl . '/v1/admin/test-stt', $payload)->throw()->json();
     }
 
-    public function triage(?string $text, ?string $audioPath, ?string $schoolName): array
+    public function triage(?string $text, ?string $audioPath, ?string $schoolName, ?string $language = null): array
     {
         $request = $this->client();
+        if ($language) {
+            $request = $request->withHeaders(['X-STT-Language' => $language]);
+        }
         if ($audioPath) {
             $request = $request->attach('audio', file_get_contents($audioPath), basename($audioPath));
         }

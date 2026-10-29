@@ -25,7 +25,7 @@ interface AiEngineClient
 
     public function testSttProfile(array $payload): array;
 
-    public function triage(?string $text, ?string $audioPath, ?string $schoolName): array;
+    public function triage(?string $text, ?string $audioPath, ?string $schoolName, ?string $language = null): array;
 
     public function extract(string $rawText, ?string $schoolName = null): array;
 
