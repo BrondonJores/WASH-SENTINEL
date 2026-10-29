@@ -117,3 +117,65 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .dock-panel { transition: none; }
 }
+
+/* Console immersive : streaming, entrées, ambiance d'état. */
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg-in { animation: msg-in 220ms ease-out both; }
+
+.cards-in > * { animation: msg-in 260ms ease-out both; }
+.cards-in > *:nth-child(2) { animation-delay: 90ms; }
+.cards-in > *:nth-child(3) { animation-delay: 180ms; }
+.cards-in > *:nth-child(4) { animation-delay: 270ms; }
+
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.stream-caret {
+  display: inline-block;
+  width: 8px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background-color: var(--color-teal-700);
+  animation: caret-blink 0.9s step-end infinite;
+}
+
+.dark .stream-caret { background-color: var(--color-teal-400); }
+
+.sense { transition: opacity 400ms ease-out; }
+.sense-idle {
+  background: radial-gradient(60% 42% at 50% 0%, rgb(20 184 166 / 0.08), transparent 70%);
+  opacity: 0.7;
+}
+.dark .sense-idle {
+  background: radial-gradient(60% 42% at 50% 0%, rgb(20 184 166 / 0.12), transparent 70%);
+}
+.sense-busy {
+  background: radial-gradient(60% 42% at 50% 0%, rgb(20 184 166 / 0.16), transparent 70%);
+}
+.dark .sense-busy {
+  background: radial-gradient(60% 42% at 50% 0%, rgb(20 184 166 / 0.2), transparent 70%);
+}
+.sense-error {
+  background: radial-gradient(60% 42% at 50% 0%, rgb(225 29 72 / 0.09), transparent 70%);
+}
+
+@keyframes sense-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.sense-thinking { animation: sense-pulse 2.4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-in, .cards-in > * { animation: none; }
+  .stream-caret { animation: none; }
+  .sense { transition: none; }
+  .sense-thinking { animation: none; }
+}

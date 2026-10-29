@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .agent_tools import AGENT_TOOLS, TOOL_EXECUTORS
@@ -18,10 +19,16 @@ Règles impératives :
 - Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).
 - Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
 - Si un outil renvoie une erreur, corrige tes arguments avec les valeurs exactes fournies et réessaie au lieu d'abandonner.
+- N'appelle jamais deux fois le même outil avec les mêmes arguments : quand tu as le résultat, réponds.
 - Les données détaillées sont affichées dans des cartes séparées : ne recopie pas tout dans ta réponse.
 """
 
 MAX_ITERATIONS = 5
+
+REPEAT_NUDGE = (
+    "Tu as déjà appelé cet outil avec ces mêmes arguments : le résultat est plus haut. "
+    "N'appelle plus aucun outil et réponds maintenant à l'utilisateur en français."
+)
 
 
 class AgentLoop:
@@ -38,6 +45,8 @@ class AgentLoop:
         messages.append({"role": "user", "content": req.message})
 
         executed: list[tuple[str, dict[str, Any]]] = []
+        seen: set[tuple[str, str]] = set()
+        nudged = False
         answer = ""
         for _ in range(MAX_ITERATIONS):
             reply = await self.llm.chat(messages, AGENT_TOOLS)
@@ -46,9 +55,16 @@ class AgentLoop:
             if not calls:
                 answer = reply.get("content", "")
                 break
+            fresh = False
             for call in calls:
                 name = call.get("name", "")
                 arguments = call.get("arguments", {}) or {}
+                key = (name, json.dumps(arguments, sort_keys=True, default=str))
+                if key in seen:
+                    messages.append(self.llm.format_tool_result(name, {"note": REPEAT_NUDGE}, call.get("id")))
+                    continue
+                seen.add(key)
+                fresh = True
                 executor = TOOL_EXECUTORS.get(name)
                 if executor is None:
                     observation: dict[str, Any] = {"error": f"Outil inconnu : {name}."}
@@ -59,6 +75,10 @@ class AgentLoop:
                         observation = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
                 executed.append((name, observation))
                 messages.append(self.llm.format_tool_result(name, observation, call.get("id")))
+            if not fresh:
+                if nudged:
+                    break
+                nudged = True
         else:
             answer = answer or "Voici ce que j'ai trouvé à partir des données disponibles."
 
@@ -113,4 +133,12 @@ class AgentLoop:
                     title=f"Tendances — {observation.get('school_name', '?')} ({observation.get('months', 3)} mois)",
                     data=observation,
                 ))
-        return cards
+        unique: list[AgentCard] = []
+        fingerprints: set[str] = set()
+        for card in cards:
+            fingerprint = f"{card.type}|{card.title}|{json.dumps(card.data, sort_keys=True, default=str)}"
+            if fingerprint in fingerprints:
+                continue
+            fingerprints.add(fingerprint)
+            unique.append(card)
+        return unique
