@@ -8,7 +8,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { path: '/admin', label: 'Console IA', icon: 'chat' },
+  { path: '/', label: 'Sentinel', icon: 'chat' },
   { path: '/admin/incidents', label: 'Interventions', icon: 'alert' },
   { path: '/admin/ecoles', label: 'Écoles', icon: 'school' },
   { path: '/admin/signalements', label: 'Signalements', icon: 'inbox' },

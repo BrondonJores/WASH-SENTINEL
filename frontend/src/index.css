@@ -108,3 +108,12 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .orb-swirl, .orb-talk, .orb-eq { animation: none; }
 }
+
+/* Dock immersif : glisse depuis le bord gauche (immobile si reduced-motion). */
+.dock-panel {
+  transition: transform 220ms ease-out, visibility 220ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-panel { transition: none; }
+}

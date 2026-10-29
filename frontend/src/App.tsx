@@ -50,7 +50,7 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/admin" element={authed(<ConsolePage />)} />
+            <Route path="/" element={authed(<ConsolePage />)} />
             <Route
               path="/admin/incidents"
               element={authed(
@@ -107,7 +107,7 @@ export default function App() {
               )}
             />
             <Route path="/admin/reglages" element={adminOnly(<SettingsPage />)} />
-            <Route path="/" element={<Navigate to="/admin" replace />} />
+            <Route path="/admin" element={<Navigate to="/" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AuthProvider>

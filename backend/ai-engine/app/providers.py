@@ -22,11 +22,21 @@ def raise_for_ollama(response: httpx.Response, model: str) -> None:
 
     Ollama répond 404 quand le modèle demandé n'est pas téléchargé :
     sans traduction, l'UI affiche une 500 brute incompréhensible.
+    Pour les autres erreurs, le corps de réponse d'Ollama (qui contient
+    la vraie raison, ex. {"error": ...}) est inclus dans le message.
+    On préserve HTTPStatusError pour ne pas casser le repli sans-tools.
     """
     if response.status_code == 404:
         raise RuntimeError(
             f"Modèle Ollama '{model}' introuvable (404). "
             "Vérifiez 'ollama list' ou activez un autre profil depuis Réglages IA."
+        )
+    if response.is_error:
+        body = " ".join(response.text.split())[:300]
+        raise httpx.HTTPStatusError(
+            f"Ollama {response.status_code} pour '{model}': {body or 'sans détail'}.",
+            request=response.request,
+            response=response,
         )
     response.raise_for_status()
 
