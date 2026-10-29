@@ -64,10 +64,10 @@ def _month_buckets(months: int, now: datetime) -> list[tuple[int, int]]:
 
 def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Analyse complète d'une école : pannes ouvertes, coûts, arbitrage réparer/remplacer."""
-    school_id = args.get("school_id")
-    school = next((s for s in context.get("schools", []) if s.get("school_id") == school_id), None)
+    school = _resolve_school(context, args.get("school", args.get("school_id")))
     if not school:
-        return {"error": f"École {school_id} introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un id exact."}
+        return {"error": f"École '{args.get('school', args.get('school_id'))}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."}
+    school_id = school["school_id"]
     open_incs = [i for i in _open_incidents(context) if i.get("school_id") == school_id]
     history = SchoolMaintenanceHistory(
         school_id=school["school_id"],
@@ -262,11 +262,11 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "analyze_school",
-            "description": "Analyse complète d'une école : pannes ouvertes, coûts de maintenance et arbitrage réparer-remplacer.",
+            "description": "Analyse complète d'une école (nom approximatif accepté) : pannes ouvertes, coûts de maintenance et arbitrage réparer-remplacer.",
             "parameters": {
                 "type": "object",
-                "properties": {"school_id": {"type": "integer", "description": "Identifiant de l'école"}},
-                "required": ["school_id"],
+                "properties": {"school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"}},
+                "required": ["school"],
             },
         },
     },
