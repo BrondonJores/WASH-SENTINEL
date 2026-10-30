@@ -29,11 +29,19 @@ export function SentinelOrb({
   className = '',
 }: {
   state?: OrbState;
-  size?: 'lg' | 'sm';
+  size?: 'hero' | 'xl' | 'lg' | 'sm';
   className?: string;
 }) {
-  const box = size === 'lg' ? 'h-52 w-52 sm:h-60 sm:w-60' : 'h-12 w-12';
-  const core = size === 'lg' ? 'inset-10 sm:inset-12' : 'inset-1';
+  const box =
+    size === 'hero'
+      ? 'h-[clamp(280px,42vh,440px)] w-[clamp(280px,42vh,440px)]'
+      : size === 'xl'
+        ? 'h-72 w-72 sm:h-80 sm:w-80'
+        : size === 'lg'
+          ? 'h-52 w-52 sm:h-60 sm:w-60'
+          : 'h-12 w-12';
+  const core =
+    size === 'hero' ? 'inset-[12%]' : size === 'xl' ? 'inset-12 sm:inset-14' : size === 'lg' ? 'inset-10 sm:inset-12' : 'inset-1';
   const vocal = state === 'listening' || state === 'speaking';
   const coreAnim = state === 'idle' ? 'orb-breathe' : state === 'speaking' ? 'orb-talk' : '';
 
@@ -48,10 +56,22 @@ export function SentinelOrb({
           />
         </>
       )}
+      {size === 'hero' && (
+        <>
+          <span
+            className="orb-ripple absolute inset-0 rounded-full border border-teal-500/40"
+            style={{ animationDuration: '5s' }}
+          />
+          <span
+            className="orb-ripple absolute inset-0 rounded-full border border-teal-500/25"
+            style={{ animationDuration: '5s', animationDelay: '2.5s' }}
+          />
+        </>
+      )}
       {state === 'thinking' && (
         <span className="orb-spin-slow absolute inset-1 rounded-full border border-dashed border-teal-500/60 sm:inset-2" />
       )}
-      {size === 'lg' && vocal && (
+      {size !== 'sm' && vocal && (
         <span className="absolute inset-0" aria-hidden="true">
           {Array.from({ length: EQ_BARS }, (_, i) => (
             <span
@@ -67,7 +87,9 @@ export function SentinelOrb({
           ))}
         </span>
       )}
-      {size === 'lg' && <span className="absolute inset-6 rounded-full bg-teal-500/15 blur-2xl sm:inset-8" />}
+      {size !== 'sm' && (
+        <span className="absolute inset-6 rounded-full bg-teal-500/15 blur-2xl sm:inset-8" />
+      )}
       <span className={`absolute overflow-hidden rounded-full ${core} ${coreAnim}`}>
         <span
           className="orb-swirl absolute -inset-[35%]"
@@ -80,9 +102,12 @@ export function SentinelOrb({
         <span className="orb-core absolute inset-0 rounded-full opacity-90" />
         <span className="absolute left-[22%] top-[14%] h-[22%] w-[30%] rounded-full bg-white/25 blur-md" />
       </span>
-      {size === 'lg' && (
+      {(size === 'lg' || size === 'xl') && (
         <span className="absolute inset-0 flex items-center justify-center">
-          <Icon name={state === 'thinking' ? 'chat' : 'droplet'} className="h-8 w-8 text-white/90" />
+          <Icon
+            name={state === 'thinking' ? 'chat' : 'droplet'}
+            className={size === 'xl' ? 'h-10 w-10 text-white/90' : 'h-8 w-8 text-white/90'}
+          />
         </span>
       )}
     </div>

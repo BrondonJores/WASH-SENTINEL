@@ -1,10 +1,13 @@
 <?php
 
+use App\Http\Controllers\Api\Admin\WashAiAnalysisController;
 use App\Http\Controllers\Api\Admin\WashModelProfileController;
 use App\Http\Controllers\Api\Admin\WashSttProfileController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\WashAgentController;
 use App\Http\Controllers\Api\WashIncidentController;
+use App\Http\Controllers\Api\WashProjectController;
+use App\Http\Controllers\Api\WashConversationController;
 use App\Http\Controllers\Api\WashNotificationController;
 use App\Http\Controllers\Api\WashWhatsAppController;
 use App\Http\Controllers\Api\WashReportController;
@@ -24,6 +27,7 @@ Route::prefix('v1/wash')->group(function () {
     Route::post('/reports', [WashReportController::class, 'store'])->middleware('throttle:60,1');
     Route::get('/reports/{report}', [WashReportController::class, 'show']);
 
+    Route::get('/overview', [WashIncidentController::class, 'overview']);
     Route::get('/incidents', [WashIncidentController::class, 'index']);
     Route::get('/incidents/{incident}', [WashIncidentController::class, 'show']);
 
@@ -40,10 +44,18 @@ Route::prefix('v1/wash')->group(function () {
         Route::post('/incidents/{incident}/assign', [WashIncidentController::class, 'assign'])->middleware('permission:assign incidents');
         Route::post('/incidents/{incident}/override-priority', [WashIncidentController::class, 'overridePriority'])->middleware('permission:override ai priority');
         Route::post('/incidents/{incident}/maintenance-logs', [WashIncidentController::class, 'storeMaintenanceLog'])->middleware('permission:update incident status');
+        Route::get('/assignable-users', [WashIncidentController::class, 'assignableUsers'])->middleware('permission:assign incidents');
+        Route::get('/library', [WashConversationController::class, 'library']);
+        Route::apiResource('/projects', WashProjectController::class)->only(['index', 'store', 'update', 'destroy']);
+        Route::post('/conversations', [WashConversationController::class, 'store']);
+        Route::patch('/conversations/{conversation}', [WashConversationController::class, 'update']);
+        Route::delete('/conversations/{conversation}', [WashConversationController::class, 'destroy']);
+        Route::put('/conversations/{conversation}/messages', [WashConversationController::class, 'replaceMessages']);
     });
 });
 
 Route::prefix('v1/admin')->middleware(['auth:sanctum', 'permission:manage ai settings'])->group(function () {
+    Route::get('/ai-analyses', [WashAiAnalysisController::class, 'index']);
     Route::get('/provider-types', [WashModelProfileController::class, 'providerTypes']);
     Route::apiResource('/model-profiles', WashModelProfileController::class)->parameters(['model-profiles' => 'modelProfile']);
     Route::post('/model-profiles/{modelProfile}/activate', [WashModelProfileController::class, 'activate']);

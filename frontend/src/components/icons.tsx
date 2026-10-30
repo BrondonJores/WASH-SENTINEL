@@ -24,7 +24,10 @@ export type IconName =
   | 'arrow-right'
   | 'shield'
   | 'clock'
-  | 'user';
+  | 'user'
+  | 'folder'
+  | 'edit'
+  | 'trash';
 
 const PATHS: Record<IconName, ReactNode> = {
   droplet: <path d="M12 3c3.2 4.1 6 7.2 6 10.6a6 6 0 1 1-12 0C6 10.2 8.8 7.1 12 3z" />,
@@ -123,6 +126,15 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <circle cx="12" cy="8" r="4" />
       <path d="M4 21c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5" />
+    </>
+  ),
+  folder: <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" />,
+  edit: <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />,
+  trash: (
+    <>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
     </>
   ),
 };

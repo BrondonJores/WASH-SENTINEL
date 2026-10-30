@@ -16,7 +16,7 @@ export interface DeckSlide {
 }
 
 const navBtn =
-  'flex h-8 w-8 items-center justify-center rounded-md border border-stone-200 text-stone-600 hover:bg-stone-100 dark:border-stone-800 dark:text-stone-300 dark:hover:bg-stone-800';
+  'flex h-8 w-8 items-center justify-center rounded-md border border-line text-ink-soft transition-[background-color,transform] duration-150 ease-snap hover:bg-raised active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100';
 
 export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
   const total = slides.length;
@@ -43,7 +43,7 @@ export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
         <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-teal-300">
           Briefing Sentinel
         </p>
-        <p className="mt-3 text-2xl font-bold tracking-tight">{slide.title}</p>
+        <p className="mt-3 font-display text-2xl font-bold tracking-tight">{slide.title}</p>
         {slide.subtitle && <p className="mt-1 text-sm text-teal-200/80">{slide.subtitle}</p>}
         {slide.stats.length > 0 && (
           <div className="mx-auto mt-6 grid w-full max-w-lg grid-cols-3 gap-3">
@@ -57,14 +57,14 @@ export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
         )}
       </div>
     ) : (
-      <div className="min-h-64 rounded-xl border border-stone-200 bg-white px-6 py-5 dark:border-stone-800 dark:bg-stone-900">
+      <div className="min-h-64 px-1 py-2">
         <p className="text-lg font-bold tracking-tight">{slide.title}</p>
         {slide.stats.length > 0 && (
           <div className="mt-3 grid grid-cols-3 gap-3">
             {slide.stats.map((s, i) => (
-              <div key={i} className="rounded-lg bg-stone-50 px-2 py-3 text-center dark:bg-stone-800/60">
+              <div key={i} className="rounded-lg bg-raised px-2 py-3 text-center">
                 <p className="font-mono text-lg font-bold tabular-nums">{s.value}</p>
-                <p className="mt-1 text-[11px] leading-tight text-stone-600 dark:text-stone-400">{s.label}</p>
+                <p className="mt-1 text-[11px] leading-tight text-ink-soft">{s.label}</p>
               </div>
             ))}
           </div>
@@ -73,7 +73,7 @@ export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
           <ul className="mt-3 space-y-2">
             {slide.lines.map((l, i) => (
               <li key={i} className="flex gap-2 text-sm leading-relaxed">
-                <span aria-hidden="true" className="font-mono font-bold text-teal-700 dark:text-teal-400">
+                <span aria-hidden="true" className="font-mono font-bold text-accent">
                   ›
                 </span>
                 <span>{l}</span>
@@ -82,7 +82,7 @@ export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
           </ul>
         )}
         {slide.note && (
-          <p className="mt-3 text-xs text-stone-500 dark:text-stone-400">{slide.note}</p>
+          <p className="mt-3 text-xs text-ink-faint">{slide.note}</p>
         )}
       </div>
     );
@@ -109,14 +109,14 @@ export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
                 aria-label={`Aller à la slide ${i + 1}`}
                 className={`h-1.5 rounded-full transition-all ${
                   i === index
-                    ? 'w-6 bg-teal-700 dark:bg-teal-400'
-                    : 'w-1.5 bg-stone-300 hover:bg-stone-400 dark:bg-stone-700 dark:hover:bg-stone-600'
+                    ? 'w-6 bg-accent'
+                    : 'w-1.5 bg-line hover:bg-ink-faint'
                 }`}
               />
             ))}
           </div>
           <div className="flex-1" />
-          <span className="font-mono text-[11px] tabular-nums text-stone-500 dark:text-stone-400">
+          <span className="font-mono text-[11px] tabular-nums text-ink-faint">
             {index + 1} / {total}
           </span>
         </div>

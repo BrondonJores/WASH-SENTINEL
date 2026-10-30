@@ -3,11 +3,11 @@ import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { Button, Card, LiveClock, StatusDot } from '../components/ui';
-import { Icon } from '../components/icons';
+import { SentinelAvatar } from '../components/SentinelAvatar';
 
 const inputCls =
-  'w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-teal-700 focus:outline-none dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100';
-const labelCls = 'mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300';
+  'w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none';
+const labelCls = 'mb-1 block text-sm font-medium text-ink-soft';
 
 export default function LoginPage() {
   const { user, login } = useAuth();
@@ -32,15 +32,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="bg-grid flex min-h-screen items-center justify-center bg-stone-100 px-4 dark:bg-stone-950">
-      <div className="w-full max-w-sm">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-canvas px-4">
+      <div aria-hidden="true" className="ambient" />
+      <div className="relative z-10 w-full max-w-sm">
         <div className="mb-6 flex items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-800 text-white dark:bg-teal-500 dark:text-stone-950">
-            <Icon name="droplet" className="h-6 w-6" />
-          </span>
+          <SentinelAvatar className="h-12 w-12 shrink-0" />
           <div>
-            <h1 className="text-xl font-bold tracking-tight">WASH Sentinel</h1>
-            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-stone-500 dark:text-stone-400">
+            <h1 className="font-display text-xl font-bold tracking-tight">WASH Sentinel</h1>
+            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
               Console ops — accès restreint
             </p>
           </div>
@@ -75,19 +74,19 @@ export default function LoginPage() {
                 className={inputCls}
               />
             </div>
-            {error && <p className="text-sm font-medium text-red-700 dark:text-red-400">{error}</p>}
+            {error && <p className="text-sm font-medium text-danger">{error}</p>}
             <Button type="submit" variant="primary" disabled={busy} className="w-full">
               {busy ? 'Connexion…' : 'Se connecter'}
             </Button>
           </form>
         </Card>
         <div className="mt-4 flex items-center justify-between">
-          <p className="font-mono text-[11px] text-stone-500 dark:text-stone-400">
+          <p className="font-mono text-[11px] text-ink-faint">
             démo : admin@wash.cm / tech@wash.cm / directeur@ecole.cm
           </p>
           <span className="flex items-center gap-1.5">
             <StatusDot tone="live" pulse />
-            <LiveClock className="text-stone-500 dark:text-stone-400" />
+            <LiveClock className="text-ink-faint" />
           </span>
         </div>
       </div>

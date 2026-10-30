@@ -18,9 +18,10 @@ export default function Layout({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <div className="min-h-screen bg-white text-stone-900 dark:bg-stone-950 dark:text-stone-100">
+    <div className="relative min-h-screen overflow-x-clip bg-canvas text-ink">
+      <div aria-hidden="true" className="ambient" />
       <EdgeDock onSearch={() => setPaletteOpen(true)} />
-      <main className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6">{children}</main>
+      <main className="relative z-10 mx-auto w-full max-w-7xl px-4 py-5 sm:px-8">{children}</main>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );

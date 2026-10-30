@@ -128,7 +128,15 @@ def tool_rank_schools_by_need(args: dict[str, Any], context: dict[str, Any]) -> 
     ranking.sort(key=lambda r: r["need_score"], reverse=True)
     for position, row in enumerate(ranking, start=1):
         row["rank"] = position
-    return {"ranking": ranking, "total": len(ranking)}
+    if len(ranking) >= 2:
+        gap = ranking[0]["need_score"] - ranking[1]["need_score"]
+        insight = (f"{ranking[0]['school_name']} devance {ranking[1]['school_name']} "
+                   f"de {_fmt_1(gap)} points.")
+    elif ranking:
+        insight = f"{ranking[0]['school_name']} est la seule école en difficulté."
+    else:
+        insight = "Aucune école en difficulté pour le moment."
+    return {"ranking": ranking, "total": len(ranking), "insight": insight}
 
 
 def tool_summarize_district(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -139,12 +147,26 @@ def tool_summarize_district(args: dict[str, Any], context: dict[str, Any]) -> di
     for i in open_incs:
         by_urgency[str(i.get("urgency", "?"))] = by_urgency.get(str(i.get("urgency", "?")), 0) + 1
         by_category[str(i.get("category", "?"))] = by_category.get(str(i.get("category", "?")), 0) + 1
+    if by_category and open_incs:
+        top_cat = max(by_category, key=lambda k: by_category[k])
+        n = int(by_category[top_cat])
+        total = len(open_incs)
+        label = CAT_FR.get(top_cat, top_cat)
+        if n == total:
+            insight = (f"Tous les {total} {_plural(total, 'incident ouvert', 'incidents ouverts')} "
+                       f"concernent « {label} ».")
+        else:
+            insight = (f"En tête : {n} {_plural(n, 'incident', 'incidents')} "
+                       f"« {label} » sur {total} au total.")
+    else:
+        insight = "Aucun incident ouvert sur ce territoire."
     return {
         "open_incidents": len(open_incs),
         "by_urgency": by_urgency,
         "by_category": by_category,
         "total_affected_students": sum(int(i.get("affected_students", 0) or 0) for i in open_incs),
         "schools_involved": sorted({str(i.get("school_name", "?")) for i in open_incs}),
+        "insight": insight,
     }
 
 
@@ -154,7 +176,12 @@ def tool_explain_incident(args: dict[str, Any], context: dict[str, Any]) -> dict
     incident = next((i for i in context.get("incidents", []) if i.get("id") == incident_id), None)
     if not incident:
         return {"error": f"Incident {incident_id} introuvable dans le contexte."}
+    dt = _parse_dt(incident.get("reported_at"))
+    since = f", signalé le {dt.day} {FRENCH_MONTHS[dt.month]}" if dt else ""
+    insight = (f"Priorité {_fmt_1(incident.get('priority_score', 0))}/100 : "
+               f"{_fmt_int(incident.get('affected_students', 0))} élèves affectés{since}.")
     return {
+        "insight": insight,
         "id": incident.get("id"),
         "reference_code": incident.get("reference_code"),
         "school_name": incident.get("school_name"),
@@ -199,6 +226,21 @@ def _fmt_int(n: Any) -> str:
         return "0"
 
 
+def _plural(count: int, singular: str, plural: str) -> str:
+    return singular if count == 1 else plural
+
+
+def _fmt_1(value: Any) -> str:
+    try:
+        return f"{float(value):.1f}".replace(".", ",")
+    except (TypeError, ValueError):
+        return "0,0"
+
+
+CAT_FR = {"water_point": "point d'eau", "toilets_latrines": "latrines",
+          "handwashing": "lavage des mains", "sewage_drainage": "évacuation"}
+
+
 def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Assemble un mini-dossier de briefing (diaporama) déterministe."""
     district = str(args.get("district") or "").strip()
@@ -226,11 +268,17 @@ def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[s
     crit = [i for i in open_incs if str(i.get("urgency")) == "critical"]
     if crit:
         names = ", ".join(sorted({str(i.get("school_name", "?")) for i in crit}))
-        actions.append(f"Intervenir en priorité sur {len(crit)} incident(s) critique(s) : {names}.")
+        actions.append(
+            f"Intervenir en priorité sur "
+            f"{_plural(len(crit), '1 incident critique', f'{len(crit)} incidents critiques')} : {names}."
+        )
     old = [i for i in open_incs
            if (dt := _parse_dt(i.get("reported_at"))) is not None and (now - dt).days > 7]
     if old:
-        actions.append(f"{len(old)} incident(s) ouvert(s) depuis plus de 7 jours : planifier la relance.")
+        actions.append(
+            f"{_plural(len(old), '1 incident ouvert', f'{len(old)} incidents ouverts')} "
+            "depuis plus de 7 jours : planifier la relance."
+        )
     by_district: dict[str, int] = {}
     for i in open_incs:
         by_district[str(i.get("district", "?"))] = by_district.get(str(i.get("district", "?")), 0) + 1
@@ -297,12 +345,21 @@ def tool_territory_overview(args: dict[str, Any], context: dict[str, Any]) -> di
             "affected_students": affected,
             "top_urgency": top,
         })
+    crit = sum(1 for s in points if s["top_urgency"] == "critical")
+    if crit:
+        insight = (f"{crit} {_plural(crit, 'urgence critique', 'urgences critiques')} "
+                   f"sur {len(points)} écoles géolocalisées.")
+    elif points:
+        insight = f"{len(points)} écoles géolocalisées, aucune urgence critique."
+    else:
+        insight = "Aucune école géolocalisée sur ce territoire."
     return {
         "district": args.get("district"),
         "schools": points,
         "missing_gps": missing,
         "total": len(points),
         "open_incidents": sum(s["open_incidents"] for s in points),
+        "insight": insight,
     }
 
 
@@ -344,10 +401,17 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         trend = "up" if ratio > 0.15 else ("down" if ratio < -0.15 else "stable")
     currency = next((str(l.get("currency") or "XAF") for l in logs if l.get("currency")), "XAF")
 
+    if total_cost > 0 and costs:
+        peak = max(range(len(costs)), key=lambda i: costs[i])
+        share = round(costs[peak] / total_cost * 100)
+        insight = f"{share} % des coûts concentrés en {labels[peak].lower()}."
+    else:
+        insight = "Aucun coût de réparation sur la période."
     return {
         "school_id": school_id,
         "school_name": school.get("school_name"),
         "months": months,
+        "insight": insight,
         "labels": labels,
         "datasets": [
             {"label": f"Coût réparations ({currency})", "data": costs, "kind": "bar"},

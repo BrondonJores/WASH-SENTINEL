@@ -137,6 +137,8 @@ class BuildBriefingTest(unittest.TestCase):
         self.assertIn("critique", prio["lines"][0])
         self.assertTrue(any("critique" in a for a in actions["lines"]))
         self.assertTrue(any("7 jours" in a for a in actions["lines"]))
+        for line in actions["lines"]:
+            self.assertNotIn("(s)", line)
 
     def test_district_filter(self) -> None:
         res = TOOL_EXECUTORS["build_briefing"]({"district": "Mvila"}, BRIEFING_CONTEXT)
@@ -148,3 +150,99 @@ class BuildBriefingTest(unittest.TestCase):
         self.assertEqual(res["slides"][0]["stats"][0]["value"], "0")
         self.assertIn("calme plat", res["slides"][1]["lines"][0])
         self.assertIn("surveillance", res["slides"][2]["lines"][0])
+
+
+class InsightTest(unittest.TestCase):
+    def test_rank_insight(self) -> None:
+        ctx = {"schools": [{"school_id": 1}, {"school_id": 2}], "incidents": [
+            {"school_id": 1, "status": "reported", "urgency": "critical",
+             "affected_students": 100, "reported_at": None},
+            {"school_id": 2, "status": "reported", "urgency": "low",
+             "affected_students": 0, "reported_at": None},
+        ]}
+        # noms requis pour la phrase
+        ctx["schools"][0]["school_name"] = "E1"
+        ctx["schools"][1]["school_name"] = "E2"
+        res = TOOL_EXECUTORS["rank_schools_by_need"]({}, ctx)
+        self.assertIn("devance", res["insight"])
+        self.assertIn("points", res["insight"])
+
+    def test_rank_single_insight(self) -> None:
+        ctx = {"schools": [{"school_id": 1, "school_name": "E1"}], "incidents": [
+            {"school_id": 1, "status": "reported", "urgency": "high",
+             "affected_students": 10, "reported_at": None}]}
+        res = TOOL_EXECUTORS["rank_schools_by_need"]({}, ctx)
+        self.assertIn("seule école", res["insight"])
+
+    def test_trends_insight(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        first = now.replace(day=1)
+        prev = (first - timedelta(days=1)).replace(day=1)
+        ctx = {"schools": [{"school_id": 1, "school_name": "E1"}],
+               "maintenance_logs": [
+                   {"school_id": 1, "repaired_at": first.isoformat(),
+                    "cost_amount": 90000, "currency": "XAF", "days_without_service": 2},
+                   {"school_id": 1, "repaired_at": prev.isoformat(),
+                    "cost_amount": 10000, "currency": "XAF", "days_without_service": 0}],
+               "recent_incidents": []}
+        res = TOOL_EXECUTORS["repair_trends"]({"school": 1, "months": 2}, ctx)
+        self.assertIn("90 %", res["insight"])
+        self.assertIn("concentrés en", res["insight"])
+
+    def test_district_insight(self) -> None:
+        ctx = {"incidents": [
+            {"status": "reported", "urgency": "critical", "category": "water_point",
+             "affected_students": 10, "school_name": "E1"},
+            {"status": "reported", "urgency": "high", "category": "water_point",
+             "affected_students": 5, "school_name": "E1"},
+            {"status": "reported", "urgency": "low", "category": "toilets_latrines",
+             "affected_students": 0, "school_name": "E2"},
+        ]}
+        res = TOOL_EXECUTORS["summarize_district"]({}, ctx)
+        self.assertIn("point d'eau", res["insight"])
+        self.assertIn("2 incidents", res["insight"])
+
+    def test_incident_insight(self) -> None:
+        ctx = {"incidents": [{"id": 5, "school_name": "E", "district": "W",
+                              "title": "Pompe cassée", "category": "water_point",
+                              "urgency": "critical", "status": "triaged",
+                              "priority_score": 94, "affected_students": 450,
+                              "summary": "x", "reported_at": "2026-10-20T00:00:00Z"}]}
+        res = TOOL_EXECUTORS["explain_incident"]({"incident_id": 5}, ctx)
+        self.assertIn("94,0/100", res["insight"])
+        self.assertIn("octobre", res["insight"])
+
+    def test_territory_insight(self) -> None:
+        res = TOOL_EXECUTORS["territory_overview"]({}, TERRITORY_CONTEXT)
+        self.assertIn("1 urgence critique", res["insight"])
+
+
+class DistrictInsightTest(unittest.TestCase):
+    """Le résumé du district ne dit plus « sur 3 » quand tout est homogène."""
+
+    def test_all_same_category(self) -> None:
+        from app.agent_tools import tool_summarize_district
+        obs = tool_summarize_district({}, {
+            "incidents": [
+                {"urgency": "critical", "category": "water_point",
+                 "school_name": "A", "affected_students": 1, "status": "reported"},
+                {"urgency": "high", "category": "water_point",
+                 "school_name": "B", "affected_students": 2, "status": "reported"},
+            ],
+        })
+        self.assertIn("Tous les 2 incidents ouverts", obs["insight"])
+
+    def test_mixed_categories(self) -> None:
+        from app.agent_tools import tool_summarize_district
+        obs = tool_summarize_district({}, {
+            "incidents": [
+                {"urgency": "critical", "category": "water_point",
+                 "school_name": "A", "affected_students": 1, "status": "reported"},
+                {"urgency": "high", "category": "water_point",
+                 "school_name": "B", "affected_students": 2, "status": "reported"},
+                {"urgency": "low", "category": "toilets_latrines",
+                 "school_name": "C", "affected_students": 3, "status": "reported"},
+            ],
+        })
+        self.assertIn("sur 3 au total", obs["insight"])

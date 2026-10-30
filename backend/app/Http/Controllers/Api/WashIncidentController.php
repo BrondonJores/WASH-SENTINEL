@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\AiAnalysis;
 use App\Models\Incident;
+use App\Models\School;
+use App\Models\User;
 use App\Contracts\AiEngineClient;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -23,6 +25,19 @@ class WashIncidentController extends Controller
             ->latest();
 
         return response()->json($query->paginate(20));
+    }
+
+    public function overview()
+    {
+        $open = Incident::open();
+
+        return response()->json([
+            'open_incidents' => (clone $open)->count(),
+            'affected_students' => (clone $open)->sum('affected_students'),
+            'critical_incidents' => (clone $open)->where('urgency', 'critical')->count(),
+            'schools_tracked' => School::count(),
+            'schools_with_open' => (clone $open)->distinct()->count('school_id'),
+        ]);
     }
 
     public function show(Request $request, Incident $incident, AiEngineClient $ai)
@@ -102,5 +117,14 @@ class WashIncidentController extends Controller
         ]);
 
         return response()->json(['message' => 'Intervention journalisée.', 'log' => $log], 201);
+    }
+
+    public function assignableUsers()
+    {
+        $users = User::role(['maintenance_agent', 'wash_admin'])
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
+        return response()->json($users);
     }
 }

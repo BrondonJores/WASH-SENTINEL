@@ -30,6 +30,31 @@ REPEAT_NUDGE = (
     "N'appelle plus aucun outil et réponds maintenant à l'utilisateur en français."
 )
 
+NO_TOOL_NUDGE = (
+    "STOP. Tu as répondu à une question de données SANS appeler d'outil, "
+    "c'est strictement interdit : tu dois appeler l'outil adapté MAINTENANT "
+    "(rank_schools_by_need, summarize_district, analyze_school, repair_trends, "
+    "explain_incident, territory_overview ou build_briefing). "
+    "N'écris aucun texte, appelle juste l'outil."
+)
+
+DATA_QUESTION_HINTS = (
+    "quel", "combien", "liste", "montre", "affiche", "carte",
+    "tendance", "analyse", "résume", "resume", "briefing", "diaporama",
+    "où", "ou ", "état", "etat", "besoin", "aide", "panne",
+    "incident", "école", "ecole", "district", "graphique", "graphe",
+    "coût", "cout", "budget", "intervention", "répar", "remplac",
+)
+
+
+REFUSAL_PATTERNS = (
+    "je suis désolé",
+    "je ne peux pas vous aider",
+    "je ne peux pas répondre",
+    "désolé, mais je ne peux",
+    "impossible de vous aider",
+)
+
 
 def _fmt_int(value: Any) -> str:
     try:
@@ -193,14 +218,7 @@ class AgentLoop:
                     continue
                 seen.add(key)
                 fresh = True
-                executor = TOOL_EXECUTORS.get(name)
-                if executor is None:
-                    observation: dict[str, Any] = {"error": f"Outil inconnu : {name}."}
-                else:
-                    try:
-                        observation = executor(arguments, context)
-                    except Exception as exc:
-                        observation = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+                observation = self._execute_tool(name, arguments, context)
                 executed.append((name, observation))
                 messages.append(self.llm.format_tool_result(name, observation, call.get("id")))
             if not fresh:
@@ -210,7 +228,10 @@ class AgentLoop:
         else:
             answer = self._fallback_answer(executed)
 
-        if not answer.strip():
+        if not executed and answer.strip() and self._looks_like_data_question(req.message):
+            answer = await self._force_tool_pass(messages, context, executed)
+
+        if not answer.strip() or self._is_bogus_refusal(answer, executed):
             answer = self._fallback_answer(executed)
 
         return AgentChatResponse(
@@ -219,6 +240,65 @@ class AgentLoop:
             cards=self._build_cards(executed),
             model_used=self.llm.model,
         )
+
+    def _execute_tool(self, name: str, arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        executor = TOOL_EXECUTORS.get(name)
+        if executor is None:
+            return {"error": f"Outil inconnu : {name}."}
+        try:
+            return executor(arguments, context)
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+    @staticmethod
+    def _looks_like_data_question(message: str) -> bool:
+        """Heuristique large : en cas de doute on exige un outil.
+
+        Les salutations, remerciements et confirmations (« oui », « merci »)
+        ne correspondent à aucun indice et passent sans recadrage.
+        """
+        lowered = message.lower()
+        return any(h in lowered for h in DATA_QUESTION_HINTS)
+
+    async def _force_tool_pass(
+        self,
+        messages: list[dict[str, Any]],
+        context: dict[str, Any],
+        executed: list[tuple[str, dict[str, Any]]],
+    ) -> str:
+        """Dernier recadrage : réponse directe à une question de données.
+
+        On exige un appel d'outil immédiat. S'il obéit, on le laisse conclure
+        sur les observations ; sinon, réponse honnête (jamais d'invention).
+        """
+        messages.append({"role": "user", "content": NO_TOOL_NUDGE})
+        retry = await self.llm.chat(messages, AGENT_TOOLS)
+        messages.append(retry["raw"])
+        for call in retry.get("tool_calls", []):
+            name = call.get("name", "")
+            arguments = call.get("arguments", {}) or {}
+            observation = self._execute_tool(name, arguments, context)
+            executed.append((name, observation))
+            messages.append(self.llm.format_tool_result(name, observation, call.get("id")))
+        if not executed:
+            return self._fallback_answer(executed)
+        final = await self.llm.chat(messages, AGENT_TOOLS)
+        messages.append(final["raw"])
+        answer = final.get("content", "")
+        if not answer.strip() or self._is_bogus_refusal(answer, executed):
+            return self._fallback_answer(executed)
+        return answer
+
+    def _is_bogus_refusal(self, answer: str, executed: list[tuple[str, dict[str, Any]]]) -> bool:
+        """Un refus poli alors qu'un outil a réussi = bug du petit modèle.
+
+        On le remplace par le résumé déterministe. Un refus sans donnée
+        réussie (hors sujet, école introuvable) est conservé tel quel.
+        """
+        lowered = answer.lower()
+        if not any(p in lowered for p in REFUSAL_PATTERNS):
+            return False
+        return any("error" not in observation for _, observation in executed)
 
     def _fallback_answer(self, executed: list[tuple[str, dict[str, Any]]]) -> str:
         """Résumé humain déterministe quand le modèle ne conclut pas.

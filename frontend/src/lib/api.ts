@@ -107,6 +107,52 @@ export interface AgentChatResponse {
   model_used: string;
 }
 
+export interface TerritoryPulse {
+  open_incidents: number;
+  affected_students: number;
+  critical_incidents: number;
+  schools_tracked: number;
+  schools_with_open: number;
+}
+
+export interface LibraryProject {
+  id: number;
+  name: string;
+  conversations_count: number;
+  created_at: string;
+}
+
+export interface LibraryMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  tools: string[];
+  cards: AgentCard[];
+  model: string | null;
+  created_at: string;
+}
+
+export interface LibraryConversation {
+  id: number;
+  project_id: number | null;
+  title: string;
+  updated_at: string;
+  messages: LibraryMessage[];
+}
+
+export interface LibraryPayload {
+  projects: LibraryProject[];
+  conversations: LibraryConversation[];
+}
+
+export interface MessagePayload {
+  role: 'user' | 'assistant';
+  content: string;
+  tools: string[];
+  cards: AgentCard[];
+  model: string;
+}
+
 const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost/api';
 
 let token: string | null = localStorage.getItem('wash_admin_token');
@@ -181,6 +227,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ message, history }),
     }),
+  overview: () => req<TerritoryPulse>('/v1/wash/overview'),
+  library: () => req<LibraryPayload>('/v1/wash/library'),
+  createProject: (name: string) =>
+    req<LibraryProject>('/v1/wash/projects', { method: 'POST', body: JSON.stringify({ name }) }),
+  renameProject: (id: number, name: string) =>
+    req<LibraryProject>(`/v1/wash/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  deleteProject: (id: number) =>
+    req<{ message: string }>(`/v1/wash/projects/${id}`, { method: 'DELETE' }),
+  createConversation: (p: { title: string; project_id: number | null; messages: MessagePayload[] }) =>
+    req<LibraryConversation>('/v1/wash/conversations', { method: 'POST', body: JSON.stringify(p) }),
+  replaceMessages: (id: number, messages: MessagePayload[]) =>
+    req<LibraryConversation>(`/v1/wash/conversations/${id}/messages`, {
+      method: 'PUT',
+      body: JSON.stringify({ messages }),
+    }),
+  deleteConversation: (id: number) =>
+    req<{ message: string }>(`/v1/wash/conversations/${id}`, { method: 'DELETE' }),
   providerTypes: () => req<{ providers: ProviderType[] }>('/v1/admin/provider-types'),
   modelProfiles: () => req<ModelProfile[]>('/v1/admin/model-profiles'),
   createModelProfile: (p: ProfilePayload) =>
@@ -209,4 +275,212 @@ export const api = {
     if (language) form.append('language', language);
     return reqMultipart<SttTestResult>(`/v1/admin/stt-profiles/${id}/test`, form);
   },
+  schools: (params?: { district?: string; search?: string; page?: number }) =>
+    req<Paginated<School>>(`/v1/wash/schools${qs(params ?? {})}`),
+  school: (id: number) => req<School>(`/v1/wash/schools/${id}`),
+  createSchool: (payload: SchoolPayload) =>
+    req<{ message: string; school: School }>('/v1/wash/schools', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  incidents: (params?: {
+    school_id?: number;
+    status?: string;
+    urgency?: string;
+    district?: string;
+    page?: number;
+  }) => req<Paginated<Incident>>(`/v1/wash/incidents${qs(params ?? {})}`),
+  incident: (id: number) => req<{ incident: Incident }>(`/v1/wash/incidents/${id}`),
+  updateIncidentStatus: (id: number, status: string) =>
+    req<{ message: string; incident: Incident }>(`/v1/wash/incidents/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
+  assignIncident: (id: number, user_id: number) =>
+    req<{ message: string; incident: Incident }>(`/v1/wash/incidents/${id}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id }),
+    }),
+  overridePriority: (id: number, payload: { priority_score: number; urgency?: string }) =>
+    req<{ message: string; incident: Incident }>(`/v1/wash/incidents/${id}/override-priority`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  storeMaintenanceLog: (id: number, payload: MaintenanceLogPayload) =>
+    req<{ message: string; log: MaintenanceLog }>(`/v1/wash/incidents/${id}/maintenance-logs`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  assignableUsers: () => req<AssignableUser[]>('/v1/wash/assignable-users'),
+  reports: (params?: { school_id?: number; incident_id?: number; page?: number }) =>
+    req<Paginated<Report>>(`/v1/wash/reports${qs(params ?? {})}`),
+  report: (id: number) => req<Report>(`/v1/wash/reports/${id}`),
+  createReport: (payload: { school_id: number; message: string }) =>
+    req<{ message: string; is_duplicate: boolean; report: Report; incident: Incident }>(
+      '/v1/wash/reports',
+      { method: 'POST', body: JSON.stringify({ ...payload, channel: 'text' }) },
+    ),
+  notifications: () => req<Paginated<AppNotification>>('/v1/notifications'),
+  readNotification: (id: string) =>
+    req<{ message: string }>(`/v1/notifications/${id}/read`, { method: 'POST' }),
+  readAllNotifications: () =>
+    req<{ message: string }>('/v1/notifications/read-all', { method: 'POST' }),
+  aiAnalyses: (params?: { analysis_type?: string; incident_id?: number; page?: number }) =>
+    req<Paginated<AiAnalysis>>(`/v1/admin/ai-analyses${qs(params ?? {})}`),
 };
+
+export interface Paginated<T> {
+  data: T[];
+  current_page: number;
+  last_page: number;
+  total: number;
+}
+
+export interface SchoolRef {
+  id: number;
+  name: string;
+  district: string;
+}
+
+export interface MaintenanceLog {
+  id: number;
+  incident_id: number;
+  school_id: number;
+  cost_amount: number;
+  currency: string | null;
+  repaired_at: string | null;
+  days_without_service: number | null;
+  notes: string | null;
+  performed_by: number | null;
+  created_at: string;
+}
+
+export interface MaintenanceLogPayload {
+  cost_amount: number;
+  currency?: string;
+  repaired_at?: string;
+  days_without_service?: number;
+  notes?: string;
+}
+
+export interface AiAnalysis {
+  id: number;
+  incident_id: number | null;
+  report_id: number | null;
+  analysis_type: string;
+  input_payload: Record<string, unknown> | null;
+  output_payload: Record<string, unknown> | null;
+  model_used: string | null;
+  confidence: number | null;
+  processing_ms: number | null;
+  created_at: string;
+  incident?: { id: number; reference_code: string; title: string; school?: SchoolRef };
+  report?: { id: number; school_id: number; channel: string; is_duplicate: boolean };
+}
+
+export interface Report {
+  id: number;
+  incident_id: number | null;
+  school_id: number;
+  reporter_id: number | null;
+  channel: string;
+  source: string | null;
+  raw_content: string;
+  audio_path: string | null;
+  photo_path: string | null;
+  is_duplicate: boolean;
+  duplicate_of_incident_id: number | null;
+  duplicate_similarity_score: number | null;
+  raw_ai_extraction: Record<string, unknown> | null;
+  created_at: string;
+  school?: SchoolRef;
+  incident?: { id: number; reference_code: string; title: string; urgency: string; status: string };
+  ai_analyses?: AiAnalysis[];
+}
+
+export interface Incident {
+  id: number;
+  school_id: number;
+  reference_code: string;
+  title: string;
+  category: string;
+  issue_type: string | null;
+  status: string;
+  urgency: string;
+  health_hazard: string | null;
+  priority_score: number;
+  affected_students: number;
+  ai_summary: string | null;
+  ai_tags: string[] | null;
+  assigned_to_user_id: number | null;
+  resolved_at: string | null;
+  created_at: string;
+  school?: SchoolRef;
+  assignee?: { id: number; name: string } | null;
+  reports_count?: number;
+  reports?: Report[];
+  ai_analyses?: AiAnalysis[];
+  maintenance_logs?: MaintenanceLog[];
+}
+
+export interface School {
+  id: number;
+  name: string;
+  code: string;
+  district: string;
+  default_language: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  student_count: number;
+  female_students: number | null;
+  teacher_count: number | null;
+  broken_toilets: number | null;
+  distance_from_center_km: number | null;
+  equipment_type: string | null;
+  installation_year: number | null;
+  estimated_replacement_cost: number | null;
+  contact_phone: string | null;
+  open_incidents_count?: number;
+  reports_count?: number;
+  maintenance_logs_count?: number;
+  open_incidents?: Incident[];
+  maintenance_logs?: MaintenanceLog[];
+}
+
+export interface SchoolPayload {
+  name: string;
+  code: string;
+  district: string;
+  latitude?: number;
+  longitude?: number;
+  student_count?: number;
+  female_students?: number;
+  teacher_count?: number;
+  distance_from_center_km?: number;
+  equipment_type?: string;
+  installation_year?: number;
+  estimated_replacement_cost?: number;
+  contact_phone?: string;
+}
+
+export interface AppNotification {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface AssignableUser {
+  id: number;
+  name: string;
+}
+
+function qs(params: Record<string, string | number | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== '') q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}

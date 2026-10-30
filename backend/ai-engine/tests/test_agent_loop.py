@@ -31,6 +31,20 @@ CALL_DISTRICT = {
 }
 
 
+FULL_CONTEXT = AgentContext(
+    schools=[
+        {"school_id": 1, "school_name": "E1", "district": "Wouri"},
+        {"school_id": 2, "school_name": "E2", "district": "Mvila"},
+    ],
+    incidents=list(CONTEXT.incidents),
+)
+
+
+def _call(name: str, args: dict) -> dict:
+    return {"raw": {"role": "assistant", "content": ""}, "content": "",
+            "tool_calls": [{"id": "1", "name": name, "arguments": args}]}
+
+
 class StubLLM:
     """Provider scripté : rejoue les réponses puis répète la dernière."""
 
@@ -183,3 +197,65 @@ class BriefingCardTest(unittest.TestCase):
             "slides": [{"stats": [{"value": "2"}]}]})])
         self.assertIn("3 slides", text)
         self.assertIn("carte", text)
+
+
+class BogusRefusalTest(unittest.IsolatedAsyncioTestCase):
+    REFUSAL = ("Je suis désolé, mais je ne peux pas vous aider davantage "
+               "avec cette demande.")
+
+    def _refusal_reply(self) -> dict:
+        return {"raw": {"role": "assistant", "content": self.REFUSAL},
+                "content": self.REFUSAL, "tool_calls": []}
+
+    async def test_refusal_after_success_replaced(self) -> None:
+        loop = AgentLoop(StubLLM([CALL_DISTRICT, self._refusal_reply()]))
+        res = await loop.chat(AgentChatRequest(message="résume", context=CONTEXT))
+        self.assertNotIn("ne peux pas vous aider", res.answer)
+        self.assertIn("carte", res.answer)
+        self.assertIn("incidents ouverts", res.answer)
+
+    async def test_refusal_without_success_kept(self) -> None:
+        loop = AgentLoop(StubLLM([
+            _call("analyze_school", {"school": "XYZ"}),
+            self._refusal_reply(),
+        ]))
+        res = await loop.chat(AgentChatRequest(message="analyse XYZ", context=FULL_CONTEXT))
+        self.assertIn("ne peux pas vous aider", res.answer)
+
+
+def _say(text: str) -> dict:
+    return {"raw": {"role": "assistant", "content": text}, "content": text, "tool_calls": []}
+
+
+class NoToolGuardTest(unittest.IsolatedAsyncioTestCase):
+    """Un modèle qui répond aux données sans outil est recadré, jamais cru."""
+
+    async def test_direct_data_answer_forces_tool_retry(self) -> None:
+        loop = AgentLoop(StubLLM([
+            _say("Les écoles avec le plus de pannes sont : Ecole A et Ecole B."),
+            _call("rank_schools_by_need", {}),
+            _say("Bonanjo en tête."),
+        ]))
+        res = await loop.chat(AgentChatRequest(
+            message="Quelles écoles ont le plus besoin d'aide ?", context=FULL_CONTEXT))
+        self.assertEqual(res.tools_executed, ["rank_schools_by_need"])
+        self.assertEqual(res.answer, "Bonanjo en tête.")
+        self.assertEqual(len(res.cards), 1)
+
+    async def test_greeting_without_tool_passes_through(self) -> None:
+        stub = StubLLM([_say("Bonjour !")])
+        loop = AgentLoop(stub)
+        res = await loop.chat(AgentChatRequest(message="Bonjour", context=CONTEXT))
+        self.assertEqual(res.answer, "Bonjour !")
+        self.assertEqual(res.tools_executed, [])
+        self.assertEqual(stub.calls, 1)
+
+    async def test_stubborn_no_tool_falls_back_honestly(self) -> None:
+        loop = AgentLoop(StubLLM([
+            _say("Il y a 3 écoles sans eau."),
+            _say("Toujours 3 écoles, promis."),
+        ]))
+        res = await loop.chat(AgentChatRequest(
+            message="Combien d'écoles sont sans eau ?", context=CONTEXT))
+        self.assertEqual(res.tools_executed, [])
+        self.assertIn("pas pu récupérer de données", res.answer)

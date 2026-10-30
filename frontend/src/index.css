@@ -1,19 +1,56 @@
 @import "tailwindcss";
+@import "@fontsource-variable/bricolage-grotesque";
 
 @custom-variant dark (&:where(.dark, .dark *));
+
+.dark {
+  --color-primary: var(--color-teal-500);
+  --color-primary-strong: var(--color-teal-400);
+  --color-primary-foreground: var(--color-stone-950);
+  --color-accent: var(--color-teal-400);
+  --color-canvas: var(--color-stone-950);
+  --color-card: var(--color-stone-900);
+  --color-raised: var(--color-stone-800);
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-ink: var(--color-stone-100);
+  --color-ink-soft: var(--color-stone-400);
+  --color-ink-faint: var(--color-stone-500);
+  --color-danger: var(--color-red-400);
+  --color-danger-strong: var(--color-red-300);
+  --color-danger-foreground: var(--color-stone-950);
+  --color-danger-soft: var(--color-red-950);
+}
 
 @theme {
   --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --color-primary: var(--color-teal-800);
+  --color-primary-strong: var(--color-teal-900);
+  --color-primary-foreground: var(--color-white);
+  --color-accent: var(--color-teal-700);
+  --color-canvas: var(--color-stone-100);
+  --color-card: var(--color-white);
+  --color-raised: var(--color-stone-50);
+  --color-line: var(--color-stone-200);
+  --color-ink: var(--color-stone-900);
+  --color-ink-soft: var(--color-stone-600);
+  --color-ink-faint: var(--color-stone-500);
+  --color-danger: var(--color-red-700);
+  --color-danger-strong: var(--color-red-800);
+  --color-danger-foreground: var(--color-white);
+  --color-danger-soft: var(--color-red-50);
+  --ease-snap: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 body {
-  background-color: var(--color-white);
+  background-color: var(--color-canvas);
   color: var(--color-stone-900);
 }
 
 .dark body {
-  background-color: var(--color-stone-950);
+  background-color: var(--color-canvas);
   color: var(--color-stone-100);
 }
 
@@ -50,16 +87,289 @@ body {
     linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px);
 }
 
+/* Verre liquide : translucide, flou, reflet spéculaire haut. Bordure propre incluse. */
+.glass {
+  background: color-mix(in oklch, var(--color-card) 72%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  border: 1px solid rgb(255 255 255 / 0.16);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    inset 0 -1px 0 rgb(255 255 255 / 0.06),
+    0 8px 32px rgb(0 0 0 / 0.12);
+}
+
+.dark .glass {
+  background: color-mix(in oklch, var(--color-card) 62%, transparent);
+  border-color: rgb(255 255 255 / 0.1);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    inset 0 -1px 0 rgb(0 0 0 / 0.3),
+    0 8px 32px rgb(0 0 0 / 0.45);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--color-card);
+  }
+}
+
+/* Scène d'accueil immersive : lagon lumineux / abysses sombres, plein écran. */
+.scene-bg {
+  position: absolute;
+  inset: -3rem;
+  translate: calc(var(--px, 0) * -14px) calc(var(--py, 0) * -14px);
+  background:
+    radial-gradient(60rem 42rem at 50% 30%, rgb(153 246 228 / 0.55), transparent 62%),
+    radial-gradient(80rem 60rem at 50% 120%, rgb(20 184 166 / 0.22), transparent 60%),
+    linear-gradient(to bottom, #f0fdfa, var(--color-canvas));
+}
+
+.dark .scene-bg {
+  background:
+    radial-gradient(60rem 42rem at 50% 28%, rgb(20 184 166 / 0.22), transparent 62%),
+    radial-gradient(90rem 60rem at 50% 125%, rgb(13 148 136 / 0.16), transparent 60%),
+    linear-gradient(to bottom, #02181f, #03181d 55%, var(--color-canvas));
+}
+
+.scene-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgb(4 47 46 / 0.14));
+}
+
+.dark .scene-bg::after {
+  background: radial-gradient(120% 90% at 50% 45%, transparent 52%, rgb(0 0 0 / 0.45));
+}
+
+/* Discussion : le même monde, apaisé et fixe pendant le scroll. */
+.scene-calm { opacity: 0.5; }
+.scene-fixed { position: fixed; }
+
+/* Réflexion : trois gouttes qui respirent. */
+.think-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  animation: think-breathe 1.2s ease-in-out infinite;
+}
+
+.think-dot:nth-child(2) { animation-delay: 0.15s; }
+.think-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes think-breathe {
+  0%, 100% { transform: translateY(0); opacity: 0.45; }
+  50% { transform: translateY(-4px); opacity: 1; }
+}
+
+.scene-drift {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(70px);
+  pointer-events: none;
+}
+
+.scene-drift-a {
+  width: 34rem;
+  height: 34rem;
+  left: 8%;
+  top: 6%;
+  background: rgb(45 212 191 / 0.28);
+  translate: calc(var(--px, 0) * 36px) calc(var(--py, 0) * 36px);
+  animation: scene-drift-a 26s ease-in-out infinite alternate;
+}
+
+.scene-drift-b {
+  width: 30rem;
+  height: 30rem;
+  right: 6%;
+  bottom: 4%;
+  background: rgb(13 148 136 / 0.22);
+  translate: calc(var(--px, 0) * -28px) calc(var(--py, 0) * -28px);
+  animation: scene-drift-b 32s ease-in-out infinite alternate;
+}
+
+.dark .scene-drift-a { background: rgb(20 184 166 / 0.16); }
+.dark .scene-drift-b { background: rgb(14 116 144 / 0.18); }
+
+@keyframes scene-drift-a {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(6rem, 4rem, 0) scale(1.15); }
+}
+
+@keyframes scene-drift-b {
+  from { transform: translate3d(0, 0, 0) scale(1.1); }
+  to { transform: translate3d(-5rem, -3rem, 0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-drift-a, .scene-drift-b { animation: none; }
+}
+
+/* Composer monumental : halo teal au focus. */
+.composer-hero {
+  position: relative;
+  transition: box-shadow 200ms var(--ease-snap), border-color 200ms var(--ease-snap);
+}
+
+.composer-hero:focus-within {
+  border-color: rgb(20 184 166 / 0.55);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.2),
+    0 0 0 4px rgb(20 184 166 / 0.18),
+    0 8px 32px rgb(0 0 0 / 0.15);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-hero { transition: none; }
+}
+
+/* Vie de la scène : parallaxe souris (propriété translate, sans conflit). */
+.scene-parallax {
+  translate: calc(var(--px, 0) * 16px) calc(var(--py, 0) * 16px);
+}
+
+/* Naissance de l'orbe : émerge du flou à l'ouverture. */
+@keyframes orb-birth {
+  from { transform: scale(0.72); filter: blur(14px); opacity: 0; }
+  to { transform: scale(1); filter: blur(0); opacity: 1; }
+}
+
+.orb-birth { animation: orb-birth 1.4s var(--ease-snap) both; }
+
+/* Titre ancré dans la scène. */
+.scene-title { text-shadow: 0 2px 40px rgb(4 47 46 / 0.18); }
+.dark .scene-title { text-shadow: 0 2px 50px rgb(45 212 191 / 0.25); }
+
+/* Vague du prénom : courant en pointillés défilants, ligne pleine si réduit. */
+.wave-flow {
+  stroke-dasharray: 10 14;
+  animation: wave-flow 1.1s linear infinite;
+}
+
+@keyframes wave-flow {
+  to { stroke-dashoffset: -24; }
+}
+
+/* Hint rotatif : réutilise l'entrée des messages. */
+.hint-in {
+  display: inline-block;
+  animation: msg-in 380ms var(--ease-snap) both;
+}
+
+/* Bulles : la vie sous-marine du lagon. Positions via style inline. */
+.bubble {
+  position: absolute;
+  bottom: -4rem;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 32% 30%, rgb(255 255 255 / 0.7), rgb(153 246 228 / 0.25));
+  border: 1px solid rgb(255 255 255 / 0.35);
+  animation-name: bubble-rise;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@keyframes bubble-rise {
+  0% { transform: translate3d(0, 0, 0); opacity: 0; }
+  8% { opacity: 0.8; }
+  25% { transform: translate3d(12px, -28vh, 0); }
+  50% { transform: translate3d(-12px, -55vh, 0); opacity: 0.7; }
+  75% { transform: translate3d(10px, -82vh, 0); }
+  100% { transform: translate3d(0, -108vh, 0); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-birth { animation: none; }
+  .bubble { display: none; }
+}
+
+/* Barre d'eau : aura liquide tournoyante au focus (statique si non supporté). */
+@property --flow-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.composer-aura {
+  position: absolute;
+  inset: -3px;
+  border-radius: 19px;
+  z-index: -1;
+  background: conic-gradient(from var(--flow-angle, 0deg), #2dd4bf, #0e7490, #5eead4, #115e59, #2dd4bf);
+  filter: blur(12px);
+  opacity: 0;
+  transition: opacity 300ms ease;
+  pointer-events: none;
+}
+
+.composer-hero:focus-within .composer-aura {
+  opacity: 0.6;
+  animation: flow-spin 3.5s linear infinite;
+}
+
+@keyframes flow-spin {
+  to { --flow-angle: 360deg; }
+}
+
+/* Bouton goutte : carré à pointe adoucie, tourné à 45°, icône redressée. */
+.btn-drop {
+  border-radius: 4px 50% 50% 50%;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #2dd4bf 0%, #0d9488 55%, #0f766e 100%);
+  box-shadow:
+    0 4px 18px rgb(20 184 166 / 0.45),
+    inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+
+/* Vaguelettes : respiration horizontale. */
+.wave-drift { animation: wave-drift 3.2s ease-in-out infinite; }
+
+@keyframes wave-drift {
+  0%, 100% { transform: translateX(-2px); }
+  50% { transform: translateX(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-hero:focus-within .composer-aura { animation: none; }
+  .wave-drift { animation: none; }
+}
+
+/* Fond ambiant : halo teal discret sous le verre (aucun asset). */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(52rem 32rem at 85% -10%, rgb(20 184 166 / 0.14), transparent 60%),
+    radial-gradient(44rem 30rem at -10% 20%, rgb(13 148 136 / 0.1), transparent 60%),
+    radial-gradient(60rem 40rem at 50% 115%, rgb(15 118 110 / 0.12), transparent 60%);
+}
+
+.dark .ambient {
+  background:
+    radial-gradient(52rem 32rem at 85% -10%, rgb(45 212 191 / 0.12), transparent 60%),
+    radial-gradient(44rem 30rem at -10% 20%, rgb(20 184 166 / 0.08), transparent 60%),
+    radial-gradient(60rem 40rem at 50% 115%, rgb(13 148 136 / 0.16), transparent 62%);
+}
+
 /* Orbe Sentinel : états animés (coupés si reduced-motion). */
 .orb-core {
-  background: radial-gradient(circle at 35% 30%, #99f6e4, #14b8a6 45%, #0f766e 70%, #134e4a);
+  background: radial-gradient(circle at 35% 30%, #99f6e4, #2dd4bf 30%, #14b8a6 48%, #0f766e 68%, #134e4a 85%, #042f2e);
   box-shadow:
     inset -8px -10px 24px rgb(0 0 0 / 0.35),
     0 0 0 1px rgb(20 184 166 / 0.25);
 }
 
 .dark .orb-core {
-  background: radial-gradient(circle at 35% 30%, #5eead4, #0d9488 45%, #115e59 70%, #042f2e);
+  background: radial-gradient(circle at 35% 30%, #5eead4, #14b8a6 32%, #0d9488 50%, #115e59 70%, #042f2e 88%, #02181a);
   box-shadow:
     inset -8px -10px 24px rgb(0 0 0 / 0.5),
     0 0 24px rgb(20 184 166 / 0.25);
@@ -111,7 +421,7 @@ body {
 
 /* Dock immersif : glisse depuis le bord gauche (immobile si reduced-motion). */
 .dock-panel {
-  transition: transform 220ms ease-out, visibility 220ms;
+  transition: transform 250ms var(--ease-drawer), visibility 250ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -126,10 +436,16 @@ body {
 
 .msg-in { animation: msg-in 220ms ease-out both; }
 
+/* Scène d'accueil : entrées étagées orbe → chiffres → composer → suggestions. */
+.stage-in { animation: msg-in 450ms var(--ease-snap) both; }
+.stage-2 { animation-delay: 120ms; }
+.stage-3 { animation-delay: 240ms; }
+.stage-4 { animation-delay: 360ms; }
+
 .cards-in > * { animation: msg-in 260ms ease-out both; }
-.cards-in > *:nth-child(2) { animation-delay: 90ms; }
-.cards-in > *:nth-child(3) { animation-delay: 180ms; }
-.cards-in > *:nth-child(4) { animation-delay: 270ms; }
+.cards-in > *:nth-child(2) { animation-delay: 70ms; }
+.cards-in > *:nth-child(3) { animation-delay: 140ms; }
+.cards-in > *:nth-child(4) { animation-delay: 210ms; }
 
 @keyframes caret-blink {
   0%, 100% { opacity: 1; }
@@ -174,10 +490,64 @@ body {
 .sense-thinking { animation: sense-pulse 2.4s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .msg-in, .cards-in > * { animation: none; }
+  .msg-in, .cards-in > *, .hint-in { animation: none; }
+  .wave-flow { animation: none; stroke-dasharray: none; }
+  .think-dot { animation: none; opacity: 0.8; }
   .stream-caret { animation: none; }
   .sense { transition: none; }
   .sense-thinking { animation: none; }
+  .stage-in { animation: none; }
+}
+
+/* Bulles éventail : verre teinté eau, reflet bas comme une surface. */
+.bubble-aqua {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    inset 0 -8px 18px rgb(20 184 166 / 0.18),
+    inset 0 0 22px rgb(45 212 191 / 0.16),
+    0 8px 32px rgb(0 0 0 / 0.12);
+}
+
+.dark .bubble-aqua {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    inset 0 -8px 18px rgb(20 184 166 / 0.22),
+    inset 0 0 22px rgb(45 212 191 / 0.2),
+    0 8px 32px rgb(0 0 0 / 0.45);
+}
+
+.bubble-aqua::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 9999px;
+  border: 2px solid rgb(45 212 191 / 0.7);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bubble-aqua:hover::after { animation: bubble-ping 0.6s ease-out; }
+
+@keyframes bubble-ping {
+  from { transform: scale(0.75); opacity: 0.9; }
+  to { transform: scale(1.4); opacity: 0; }
+}
+
+/* Bulle active : remplie d'eau. */
+.bubble-active {
+  background: linear-gradient(135deg, #2dd4bf 0%, #0d9488 55%, #0f766e 100%);
+  border-color: rgb(255 255 255 / 0.35);
+  color: #fff;
+}
+
+.dark .bubble-active {
+  background: linear-gradient(135deg, #2dd4bf 0%, #0d9488 55%, #0f766e 100%);
+  border-color: rgb(255 255 255 / 0.35);
+  color: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble-aqua:hover::after { animation: none; }
 }
 
 /* Carte territoire : tuiles OSM lisibles en sombre + popups accordées. */

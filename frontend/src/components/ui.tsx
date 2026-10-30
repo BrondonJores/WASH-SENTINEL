@@ -9,16 +9,16 @@ type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'ghost';
 type ButtonSize = 'sm' | 'md';
 
 const BTN_BASE =
-  'inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 disabled:cursor-not-allowed disabled:opacity-50';
+  'inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium transition-[background-color,transform] duration-150 ease-snap focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50';
 
 const BTN_VARIANTS: Record<ButtonVariant, string> = {
   primary:
-    'bg-teal-800 font-semibold text-white hover:bg-teal-900 dark:bg-teal-500 dark:text-stone-950 dark:hover:bg-teal-400',
+    'bg-primary font-semibold text-primary-foreground hover:bg-primary-strong',
   secondary:
-    'border border-stone-300 text-stone-700 hover:bg-stone-100 dark:border-stone-700 dark:text-stone-200 dark:hover:bg-stone-800',
+    'border border-line bg-card text-ink-soft hover:bg-raised hover:text-ink',
   danger:
-    'border border-stone-300 text-red-700 hover:bg-red-50 dark:border-stone-700 dark:text-red-400 dark:hover:bg-red-950/50',
-  ghost: 'text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800',
+    'border border-line text-danger hover:bg-danger-soft',
+  ghost: 'text-ink-soft hover:bg-raised hover:text-ink',
 };
 
 const BTN_SIZES: Record<ButtonSize, string> = {
@@ -40,8 +40,8 @@ export function Button({ variant = 'secondary', size = 'md', className = '', ...
 type BadgeTone = 'neutral' | 'accent' | 'success' | 'warn' | 'danger' | 'info';
 
 const BADGE_TONES: Record<BadgeTone, string> = {
-  neutral: 'bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300',
-  accent: 'bg-teal-800 text-white dark:bg-teal-500 dark:text-stone-950',
+  neutral: 'bg-raised text-ink-soft',
+  accent: 'bg-accent text-white dark:text-stone-950',
   success: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
   warn: 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300',
   danger: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
@@ -71,7 +71,7 @@ export function Badge({
 export function Card({ className = '', children }: { className?: string; children: ReactNode }) {
   return (
     <div
-      className={`rounded-lg border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900 ${className}`}
+      className={`glass rounded-xl ${className}`}
     >
       {children}
     </div>
@@ -92,8 +92,8 @@ export function PageHeader({
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
       <div>
-        <h1 className="text-xl font-bold tracking-tight">{title}</h1>
-        {description && <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">{description}</p>}
+        <h1 className="font-display text-xl font-bold tracking-tight">{title}</h1>
+        {description && <p className="mt-1 text-sm text-ink-soft">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
     </div>
@@ -104,7 +104,7 @@ export function PageHeader({
 
 export function Skeleton({ className = '' }: { className?: string }) {
   return (
-    <div aria-hidden="true" className={`animate-pulse rounded-md bg-stone-200 dark:bg-stone-800 ${className}`} />
+    <div aria-hidden="true" className={`animate-pulse rounded-md bg-raised ${className}`} />
   );
 }
 
@@ -123,11 +123,11 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center px-6 py-12 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-stone-100 text-teal-800 dark:bg-stone-800 dark:text-teal-400">
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-raised text-accent">
         <Icon name={icon} className="h-6 w-6" />
       </span>
       <p className="mt-4 font-semibold">{title}</p>
-      {description && <p className="mt-1 max-w-sm text-sm text-stone-600 dark:text-stone-400">{description}</p>}
+      {description && <p className="mt-1 max-w-sm text-sm text-ink-soft">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   );
@@ -140,11 +140,11 @@ export function ConfidenceMeter({ value, label }: { value: number; label?: strin
   const bar = pct >= 70 ? 'bg-teal-600 dark:bg-teal-500' : pct >= 40 ? 'bg-amber-500' : 'bg-red-500';
   return (
     <div className="flex items-center gap-2" title={`Confiance IA : ${pct} %`}>
-      {label && <span className="text-xs text-stone-600 dark:text-stone-400">{label}</span>}
-      <div className="h-2 w-24 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800">
+      {label && <span className="text-xs text-ink-soft">{label}</span>}
+      <div className="h-2 w-24 overflow-hidden rounded-full bg-raised">
         <div className={`h-full rounded-full ${bar}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-xs font-medium tabular-nums text-stone-700 dark:text-stone-300">{pct} %</span>
+      <span className="text-xs font-medium tabular-nums text-ink-soft">{pct} %</span>
     </div>
   );
 }
@@ -162,7 +162,7 @@ export function Avatar({ name, className = '' }: { name: string; className?: str
   return (
     <span
       aria-hidden="true"
-      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-800/10 text-xs font-bold text-teal-900 dark:bg-teal-500/15 dark:text-teal-300 ${className}`}
+      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/10 text-xs font-bold text-accent ${className}`}
     >
       {initials}
     </span>

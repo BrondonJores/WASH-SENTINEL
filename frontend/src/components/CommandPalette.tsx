@@ -100,9 +100,9 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Recherche et actions">
       <button aria-label="Fermer" onClick={onClose} className="absolute inset-0 cursor-default bg-stone-950/40" />
-      <div className="relative mx-auto mt-[12vh] w-[calc(100%-2rem)] max-w-lg overflow-hidden rounded-xl border border-stone-200 bg-white shadow-2xl dark:border-stone-800 dark:bg-stone-900">
-        <div className="flex items-center gap-2 border-b border-stone-200 px-3 dark:border-stone-800">
-          <span className="shrink-0 font-mono text-base font-bold text-teal-700 dark:text-teal-400">›</span>
+      <div className="relative mx-auto mt-[12vh] w-[calc(100%-2rem)] max-w-lg overflow-hidden rounded-xl border border-line bg-card shadow-2xl">
+        <div className="flex items-center gap-2 border-b border-line px-3">
+          <span className="shrink-0 font-mono text-base font-bold text-accent">›</span>
           <input
             ref={inputRef}
             value={query}
@@ -111,13 +111,13 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             placeholder="Rechercher une page ou une action…"
             className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-stone-400 dark:placeholder:text-stone-500"
           />
-          <kbd className="shrink-0 rounded border border-stone-300 bg-stone-50 px-1.5 py-0.5 text-[11px] font-medium text-stone-500 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400">
+          <kbd className="shrink-0 rounded border border-line bg-raised px-1.5 py-0.5 text-[11px] font-medium text-ink-soft">
             Échap
           </kbd>
         </div>
         <div className="max-h-80 overflow-y-auto p-2">
           {filtered.length === 0 && (
-            <p className="px-3 py-6 text-center text-sm text-stone-500 dark:text-stone-400">Aucun résultat.</p>
+            <p className="px-3 py-6 text-center text-sm text-ink-soft">Aucun résultat.</p>
           )}
           {filtered.map((entry, i) => {
             const header = entry.group !== lastGroup ? entry.group : null;
@@ -125,7 +125,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             return (
               <div key={`${entry.group}-${entry.label}`}>
                 {header && (
-                  <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
+                  <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
                     {header}
                   </p>
                 )}
@@ -133,12 +133,12 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                   onClick={() => choose(entry)}
                   onMouseEnter={() => setCursor(i)}
                   className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm ${
-                    i === cursor ? 'bg-stone-100 dark:bg-stone-800' : ''
+                    i === cursor ? 'bg-raised' : ''
                   }`}
                 >
                   <Icon
                     name={entry.icon}
-                    className={`h-4 w-4 shrink-0 ${i === cursor ? 'text-teal-700 dark:text-teal-400' : 'text-stone-500 dark:text-stone-400'}`}
+                    className={`h-4 w-4 shrink-0 ${i === cursor ? 'text-accent' : 'text-ink-faint'}`}
                   />
                   {entry.label}
                 </button>
@@ -146,7 +146,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             );
           })}
         </div>
-        <div className="flex items-center gap-4 border-t border-stone-200 px-3 py-2 font-mono text-[11px] text-stone-500 dark:border-stone-800 dark:text-stone-400">
+        <div className="flex items-center gap-4 border-t border-line px-3 py-2 font-mono text-[11px] text-ink-faint">
           <span>↑↓ naviguer</span>
           <span>Entrée ouvrir</span>
           <span>Échap fermer</span>
