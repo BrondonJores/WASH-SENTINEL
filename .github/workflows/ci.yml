@@ -29,6 +29,7 @@ jobs:
         working-directory: mesh/server
       - run: python -m pytest test_relay.py -q
         working-directory: mesh/server
+      - run: python -m pytest mesh/demo/test_multirelay.py -q
 
   ai-engine:
     runs-on: ubuntu-latest
@@ -70,7 +71,30 @@ jobs:
         working-directory: mesh/android
       - run: ./gradlew :app:assembleDebug --no-daemon
         working-directory: mesh/android
+      - run: ./gradlew :app:testDebugUnitTest --no-daemon
+        working-directory: mesh/android
       - uses: actions/upload-artifact@v4
         with:
           name: wash-relai-apk
           path: mesh/android/app/build/outputs/apk/debug/app-debug.apk
+
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm install
+        working-directory: frontend
+      - run: npm install --no-audit --no-fund
+        working-directory: desktop
+      - run: bash build.sh
+        working-directory: desktop
+      - run: test -f dist/wash-relai-release.zip && unzip -l dist/wash-relai-release.zip | grep -E "resources.neu|wash-relai-linux_x64|wash-relai-win_x64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wash-relai-desktop
+          path: desktop/dist/wash-relai-release.zip
