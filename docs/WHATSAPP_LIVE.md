@@ -214,3 +214,103 @@ Note : avec `WHATSAPP_SIMULATOR=true`, la signature n'est pas vérifiée et aucu
 - `backend/app/Jobs/ProcessWhatsAppMessage.php`
 - `backend/app/Services/IncidentTriageService.php`
 - `backend/tests/Feature/WashWhatsAppTest.php` + `backend/tests/Fixtures/whatsapp/*.json`
+
+---
+
+## 12. Mode démo sans credentials
+
+> Cycle simulé de bout en bout : aucun compte Meta, aucun token, aucun appel
+> réseau sortant. Prérequis unique : `WHATSAPP_SIMULATOR=true` dans
+> `backend/.env` (la signature `X-Hub-Signature-256` n'est alors pas vérifiée
+> et `sendText` ne fait que logger).
+
+### 12.1 Vérifier la configuration embarquée
+
+```bash
+curl -s http://localhost/api/v1/whatsapp/diagnostics | python3 -m json.tool
+```
+
+Réponse attendue (exemple, sans aucun secret — booléens + hints uniquement) :
+
+```json
+{
+  "verify_token_configured": false,
+  "app_token_configured": false,
+  "webhook_url_hint": "http://localhost/api/v1/whatsapp/webhook",
+  "queue_connection": "database",
+  "last_webhook_at": null
+}
+```
+
+### 12.2 Payload Meta d'exemple (message texte entrant, format Cloud API réel)
+
+Le contrôleur attend le corps brut du webhook Meta (`entry[].changes[].value.messages[]`,
+voir `MetaWhatsAppService::parseWebhook`) :
+
+```bash
+cat > /tmp/wa-demo.json <<'JSON'
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "123456789",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550102030",
+              "phone_number_id": "109876543210987"
+            },
+            "contacts": [
+              {"profile": {"name": "Testeur Demo"}, "wa_id": "237600112233"}
+            ],
+            "messages": [
+              {
+                "from": "237600112233",
+                "id": "wamid.SIMDEMO001",
+                "timestamp": "1760000000",
+                "type": "text",
+                "text": {"body": "Bonjour, le robinet du bloc A fuit beaucoup depuis hier."}
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
+JSON
+```
+
+### 12.3 Rejouer le webhook en local
+
+```bash
+curl -i -X POST http://localhost/api/v1/whatsapp/webhook \
+  -H 'Content-Type: application/json' \
+  --data @/tmp/wa-demo.json
+# Attendu : HTTP 200 {"received":true} puis traitement async par le worker queue.
+```
+
+Vérifier le triage (le numéro `237600112233` doit exister dans `school_contacts`,
+sinon : statut `unknown_contact` et aucun incident) :
+
+```bash
+docker compose logs --tail=20 queue
+docker compose exec -T -u www-data laravel php artisan tinker --execute='echo App\Models\Report::latest()->first()?->only(["source","channel","raw_content"]) ? json_encode(App\Models\Report::latest()->first()->only(["source","channel","raw_content"]), JSON_UNESCAPED_UNICODE) : "aucun report"; echo PHP_EOL;'
+```
+
+### 12.4 Limites du mode démo
+
+- Signature non vérifiée (`WHATSAPP_SIMULATOR=true` requis, sinon `403` sans
+  HMAC valide) : ne prouve rien sur le § 2 (app secret).
+- Aucune réponse réellement envoyée : `sendText` loggue et renvoie un faux id
+  (`sim-…`), rien n'arrive sur un téléphone.
+- Médias inutilisables : en simulateur `downloadMedia` renvoie des octets vides,
+  donc audio/image terminent en `empty_media` sans triage (texte uniquement).
+- Le worker `queue` doit tourner, sinon le job reste en file et aucun incident
+  n'apparaît malgré le `200`.
+- Statuts (`statuses`) et types non texte/audio/image toujours ignorés.
+- Le handshake Meta (§ 5) et l'abonnement `messages` (§ 6) restent à valider
+  manuellement pour le live réel.

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\ProcessWhatsAppMessage;
 use App\Services\WashWhatsAppService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class WashWhatsAppController extends Controller
 {
@@ -32,5 +33,16 @@ class WashWhatsAppController extends Controller
         ProcessWhatsAppMessage::dispatch($request->all());
 
         return response()->json(['received' => true]);
+    }
+
+    public function diagnostics()
+    {
+        return response()->json([
+            'verify_token_configured' => (string) config('services.whatsapp.verify_token', '') !== '',
+            'app_token_configured' => (string) config('services.whatsapp.access_token', '') !== '',
+            'webhook_url_hint' => rtrim((string) config('app.url', ''), '/') . '/api/v1/whatsapp/webhook',
+            'queue_connection' => (string) config('queue.default', 'database'),
+            'last_webhook_at' => Cache::get('wash.whatsapp.last_webhook_at'),
+        ]);
     }
 }

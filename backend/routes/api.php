@@ -89,6 +89,7 @@ Route::prefix('v1/mesh')->group(function () {
 Route::prefix('v1/whatsapp')->group(function () {
     Route::get('/webhook', [WashWhatsAppController::class, 'verify']);
     Route::post('/webhook', [WashWhatsAppController::class, 'receive'])->middleware('throttle:60,1');
+    Route::get('/diagnostics', [WashWhatsAppController::class, 'diagnostics']);
 });
 
 Route::prefix('v1/auth')->group(function () {
