@@ -268,6 +268,76 @@ function CopyButton({ value, label = 'Copier' }: { value: string; label?: string
 
 // ---------- Cartes ----------
 
+function IncidentPickerCard({
+  title,
+  data,
+  onAsk,
+}: {
+  title: string;
+  data: Record<string, unknown>;
+  onAsk?: (q: string) => void;
+}) {
+  const [picked, setPicked] = useState<string | null>(null);
+  const candidates = asArray<Record<string, unknown>>(data.candidates);
+  const hint = fmtOpt(data.hint);
+  if (candidates.length === 0) return null;
+  const pick = (ref: string) => {
+    if (picked !== null) return;
+    setPicked(ref);
+    onAsk?.(ref);
+  };
+  return (
+    <CardShell
+      title={title}
+      meta={hint === undefined ? `${candidates.length} incidents` : `« ${hint} » · ${candidates.length}`}
+    >
+      <p className="mb-3 text-sm text-stone-500 dark:text-stone-400">
+        Plusieurs incidents correspondent. Cliquez sur le bon — école, urgence et élèves aident à trancher.
+      </p>
+      <ul className="space-y-2">
+        {candidates.map((c, i) => {
+          const ref = typeof c.reference_code === 'string' && c.reference_code !== ''
+            ? c.reference_code
+            : `incident ${String(c.id ?? i + 1)}`;
+          const urgency = typeof c.urgency === 'string' ? c.urgency : 'medium';
+          const isPicked = picked === ref;
+          const dimmed = picked !== null && !isPicked;
+          return (
+            <li key={`${ref}-${i}`}>
+              <button
+                type="button"
+                disabled={picked !== null}
+                onClick={() => pick(ref)}
+                className={`flex w-full items-start gap-3 rounded-xl border border-line bg-card p-3 text-left transition-[border-color,opacity,transform] duration-150 ease-snap motion-reduce:transition-none ${dimmed ? 'opacity-45' : ''} ${isPicked ? 'border-accent' : 'hover:border-accent active:scale-[0.99] motion-reduce:active:scale-100'} disabled:cursor-default`}
+              >
+                <span className="pt-1.5"><UrgencyDot level={urgency} /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-display text-[15px] font-bold leading-snug tracking-tight">
+                    {fmtText(c.title)}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-stone-500 dark:text-stone-400">
+                    {fmtText(c.school_name)}{typeof c.district === 'string' && c.district !== '' ? ` · ${c.district}` : ''}
+                  </span>
+                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <Badge tone={URGENCY_TONE[urgency] ?? 'neutral'}>{URGENCY_LABEL[urgency] ?? urgency}</Badge>
+                    <Badge>{STATUS_LABEL[String(c.status)] ?? fmtText(c.status)}</Badge>
+                    <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{ref}</span>
+                  </span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="block font-display text-lg font-extrabold tabular-nums">{fmtInt(c.affected_students)}</span>
+                  <span className="block text-[11px] text-stone-500 dark:text-stone-400">élèves</span>
+                  {isPicked && <Icon name="check" className="ml-auto mt-1 h-4 w-4" />}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </CardShell>
+  );
+}
+
 function IncidentCard({
   title,
   data,
@@ -900,6 +970,8 @@ function AgentCardViewInner({ card, onAsk, onAppend }: { card: AgentCard; onAsk?
       return <ActionConfirmationCard title={card.title} data={data} onAppend={onAppend} />;
     case 'action_result':
       return <ActionResultCard title={card.title} data={data} />;
+    case 'incident_picker':
+      return <IncidentPickerCard title={card.title} data={data} onAsk={onAsk} />;
     case 'territory_map':
       return <TerritoryMapCard title={card.title} data={data} onAsk={onAsk} />;
     case 'briefing_deck':

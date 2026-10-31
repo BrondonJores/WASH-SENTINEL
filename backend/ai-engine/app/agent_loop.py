@@ -16,7 +16,7 @@ Règles impératives :
 - Si l'utilisateur nomme une école ou un incident, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
 - Si l'utilisateur veut créer (signaler une panne, créer une intervention, journaliser des travaux) : rassemble TOUJOURS le dossier complet — école, description ou titre, catégorie, urgence, élèves affectés (ou incident et coût pour un journal). Si tout est donné en une phrase, appelle directement l'outil prepare_* ; sinon pose des questions courtes (2 éléments maximum par message) jusqu'au dossier complet.
-- Quand un outil prepare_* répond complete=true, présente le récapitulatif et demande de cliquer Confirmer (ou de répondre « oui »). N'annonce jamais un enregistrement effectué : seul l'humain valide, y compris pour préciser une école introuvable ou plusieurs incidents possibles (propose les choix fournis — school_choices, incident_choices — au lieu d'inventer).
+- Quand un outil prepare_* répond complete=true, présente le récapitulatif et demande de cliquer Confirmer (ou de répondre « oui »). N'annonce jamais un enregistrement effectué : seul l'humain valide, y compris pour préciser une école introuvable ou plusieurs incidents possibles (propose les choix fournis — school_choices, incident_choices — au lieu d'inventer ; si une carte de choix s'affiche, invite à cliquer sur le bon incident).
 - Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).\n- Pour toute carte, visualisation géographique ou question 'où' : appelle territory_overview (la carte interactive est générée).\n- Pour tout briefing, dossier, diaporama ou synthèse exécutive : appelle build_briefing (la présentation est générée).
 - Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
 - Si un outil renvoie une erreur, corrige tes arguments avec les valeurs exactes fournies et réessaie au lieu d'abandonner.
@@ -368,6 +368,15 @@ class AgentLoop:
                     data=observation,
                 ))
             elif name in ("prepare_report", "prepare_incident", "prepare_maintenance_log"):
+                if observation.get("candidates"):
+                    cards.append(AgentCard(
+                        type="incident_picker",
+                        title="Quel incident ?",
+                        data={"candidates": observation["candidates"],
+                              "hint": observation.get("hint_unmatched"),
+                              "action": observation.get("action")},
+                    ))
+                    continue
                 if not observation.get("complete"):
                     continue
                 titles = {"prepare_report": "Confirmer le signalement",

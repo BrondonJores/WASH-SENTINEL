@@ -79,11 +79,14 @@ def _context_multi() -> dict:
     ctx = _context()
     ctx["incidents"] = [
         {"id": 7, "reference_code": "WASH-2026-QJHIPH", "title": "Latrines bouchées",
-         "status": "triaged", "school_id": 3},
+         "status": "triaged", "school_id": 3, "school_name": "École Publique de Bonanjo",
+         "urgency": "critical", "affected_students": 120},
         {"id": 8, "reference_code": "WASH-2026-ZQNU8W",
-         "title": "Fuite sur le robinet du préau", "status": "triaged", "school_id": 7},
+         "title": "Fuite sur le robinet du préau", "status": "triaged", "school_id": 7,
+         "school_name": "École de Nkol", "urgency": "medium", "affected_students": 60},
         {"id": 9, "reference_code": "WASH-2026-AAAAAA", "title": "Fuite au château d'eau",
-         "status": "open", "school_id": 3},
+         "status": "open", "school_id": 3, "school_name": "École Publique de Bonanjo",
+         "urgency": "high", "affected_students": 200},
     ]
     return ctx
 
@@ -138,6 +141,46 @@ class PrepareLogTest(unittest.TestCase):
         }, _context_multi())
         self.assertTrue(obs["complete"])
         self.assertEqual(obs["slots"]["incident_id"], 8)
+
+    def test_ambiguous_title_gives_structured_candidates(self) -> None:
+        obs = tool_prepare_maintenance_log({
+            "incident": "fuite", "cost_amount": 150000,
+        }, _context_multi())
+        self.assertEqual(len(obs["candidates"]), 2)
+        refs = {c["reference_code"] for c in obs["candidates"]}
+        self.assertEqual(refs, {"WASH-2026-ZQNU8W", "WASH-2026-AAAAAA"})
+        first = obs["candidates"][0]
+        for key in ("id", "reference_code", "title", "school_name", "urgency",
+                    "status", "affected_students"):
+            self.assertIn(key, first)
+
+    def test_single_match_has_no_candidates(self) -> None:
+        obs = tool_prepare_maintenance_log({
+            "incident": "robinet du préau", "cost_amount": 150000,
+        }, _context_multi())
+        self.assertNotIn("candidates", obs)
+
+    def test_candidates_capped_at_five(self) -> None:
+        ctx = _context_multi()
+        ctx["incidents"] = [
+            {"id": i, "reference_code": f"WASH-2026-F{i:02d}", "title": f"Fuite #{i}",
+             "status": "open", "school_id": 3}
+            for i in range(20, 27)
+        ]
+        obs = tool_prepare_maintenance_log({
+            "incident": "fuite", "cost_amount": 150000,
+        }, ctx)
+        self.assertEqual(len(obs["candidates"]), 5)
+
+    def test_ambiguous_obs_builds_picker_card(self) -> None:
+        loop = AgentLoop(llm=None)  # type: ignore[arg-type]
+        obs = tool_prepare_maintenance_log({
+            "incident": "fuite", "cost_amount": 150000,
+        }, _context_multi())
+        cards = loop._build_cards([("prepare_maintenance_log", obs)])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "incident_picker")
+        self.assertEqual(len(cards[0].data["candidates"]), 2)
 
 
 class ProposalCardsTest(unittest.TestCase):

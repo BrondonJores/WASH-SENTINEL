@@ -317,6 +317,16 @@ def _incident_choices(incidents: list[dict[str, Any]], limit: int = 5) -> str:
     return ", ".join(choices) if choices else "aucun incident dans le contexte"
 
 
+_CANDIDATE_KEYS = ("id", "reference_code", "title", "school_name", "district",
+                   "category", "urgency", "status", "affected_students",
+                   "priority_score", "reported_at")
+
+
+def _candidate_card(incident: dict[str, Any]) -> dict[str, Any]:
+    """Vue compacte d'un incident pour la carte de choix cliquable."""
+    return {key: incident.get(key) for key in _CANDIDATE_KEYS}
+
+
 def _recap(action: str, slots: dict[str, Any], missing_labels: list[str]) -> str:
     rows = []
     for key, value in slots.items():
@@ -436,6 +446,8 @@ def tool_prepare_maintenance_log(args: dict[str, Any], context: dict[str, Any]) 
         obs["hint_unmatched"] = hint
         pool = candidates if candidates else _open_incidents(context)
         obs["incident_choices"] = _incident_choices(pool)
+        if len(candidates) > 1:
+            obs["candidates"] = [_candidate_card(c) for c in candidates[:5]]
     return obs
 
 
