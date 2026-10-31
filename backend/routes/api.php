@@ -49,6 +49,8 @@ Route::prefix('v1/wash')->group(function () {
         Route::post('/incidents/{incident}/override-priority', [WashIncidentController::class, 'overridePriority'])->middleware('permission:override ai priority');
         Route::post('/incidents/{incident}/maintenance-logs', [WashIncidentController::class, 'storeMaintenanceLog'])->middleware('permission:update incident status');
         Route::get('/assignable-users', [WashIncidentController::class, 'assignableUsers'])->middleware('permission:assign incidents');
+        Route::get('/relances/dormants', [WashIncidentController::class, 'relance'])->middleware('permission:view all incidents');
+        Route::post('/relances/dormants', [WashIncidentController::class, 'relance'])->middleware('permission:update incident status');
         Route::post('/agent/proposals/{proposal}/confirm', [WashAgentProposalController::class, 'confirm'])->middleware('throttle:30,1');
         Route::post('/agent/proposals/{proposal}/cancel', [WashAgentProposalController::class, 'cancel'])->middleware('throttle:30,1');
         Route::get('/library', [WashConversationController::class, 'library']);

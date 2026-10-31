@@ -8,6 +8,7 @@ use App\Models\Incident;
 use App\Models\School;
 use App\Models\User;
 use App\Contracts\AiEngineClient;
+use App\Services\WashRelanceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -146,5 +147,56 @@ class WashIncidentController extends Controller
             ->get(['id', 'name']);
 
         return response()->json($users);
+    }
+
+    public function relance(Request $request, WashRelanceService $relances)
+    {
+        $validated = $request->validate([
+            'days' => ['nullable', 'integer', 'min:1', 'max:90'],
+            'dry_run' => ['nullable', 'boolean'],
+        ]);
+
+        $days = (int) ($validated['days'] ?? 7);
+        $dryRun = $request->boolean('dry_run', true);
+
+        $dormants = $relances->dormants($days);
+
+        if ($dryRun) {
+            return response()->json([
+                'count' => $dormants->count(),
+                'days' => $days,
+                'dry_run' => true,
+                'incidents' => $dormants->map(fn (Incident $incident) => [
+                    'id' => $incident->id,
+                    'reference_code' => $incident->reference_code,
+                    'title' => $incident->title,
+                    'status' => $incident->status,
+                    'urgency' => $incident->urgency,
+                    'priority_score' => $incident->priority_score,
+                    'days_inactive' => (int) ($incident->updated_at?->diffInDays(now()) ?? 0),
+                    'school' => $incident->school ? [
+                        'id' => $incident->school->id,
+                        'name' => $incident->school->name,
+                        'district' => $incident->school->district,
+                    ] : null,
+                    'assignee' => $incident->assignee ? [
+                        'id' => $incident->assignee->id,
+                        'name' => $incident->assignee->name,
+                    ] : null,
+                    'updated_at' => $incident->updated_at?->toIso8601String(),
+                ])->values(),
+            ]);
+        }
+
+        $results = $relances->relancerDormants($days);
+        $sent = array_sum(array_map(fn ($r) => count($r['notified']), $results));
+
+        return response()->json([
+            'count' => $dormants->count(),
+            'sent' => $sent,
+            'days' => $days,
+            'dry_run' => false,
+            'incidents' => $results,
+        ]);
     }
 }
