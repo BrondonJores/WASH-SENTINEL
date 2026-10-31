@@ -26,9 +26,9 @@ curl -s localhost:8001/health
 
 Service `mesh-relay` (port `${FORWARD_MESH_PORT:-8001}` → 8001, healthcheck sur
 `/health`). Persistance : monter un volume et pointer `MESH_DB_PATH` dessus,
-sinon `relay.db` meurt avec le conteneur. Snippet à appliquer dans
-`compose.yaml` (non appliqué — docs only, ne pas modifier `compose.yaml`
-sans validation) :
+sinon `relay.db` meurt avec le conteneur. Appliqué dans `compose.yaml`
+(volume nommé `mesh-relay-data` sur `/data`, `MESH_DB_PATH=/data/relay.db`,
+commit `mesh(compose)`) :
 
 ```yaml
 # service mesh-relay :

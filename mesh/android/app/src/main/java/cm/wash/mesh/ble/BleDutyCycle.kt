@@ -1,10 +1,11 @@
 package cm.wash.mesh.ble
 
 /**
- * Rapport cyclique BLE : 8 s de radio active (advertise + scan + GATT)
- * puis 22 s de radio coupée, soit un cycle de 30 s (~27 % de duty-cycle).
- * La radio BLE est la principale consommatrice ; la couper 73 % du temps
- * divise par ~4 la dépense du relai de secours. Kotlin pur.
+ * Rapport cyclique du scan BLE : 8 s de scan actif puis 22 s de repos,
+ * soit un cycle de 30 s (~27 % de duty-cycle). Seul le scan est cyclé
+ * (l'advertise et le serveur GATT restent continus) : le scan étant le
+ * poste le plus gourmand et contingenté par AOSP (5 scans/30 s),
+ * ce cycle divise par ~4 la dépense du relai de secours. Kotlin pur.
  */
 object BleDutyCycle {
     const val ACTIVE_MS = 8_000L
