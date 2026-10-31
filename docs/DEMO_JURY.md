@@ -5,8 +5,9 @@
 > Comptes démo (mot de passe `password`) : `admin@wash.cm` (Amina Ngo Bell, admin),
 > `tech@wash.cm` (Jean Fotso, maintenance), `directeur@ecole.cm` (Clarisse Eko, reporter).
 > Données : 5 écoles (Bonanjo, Libermann, Bali — Wouri ; Ngok, Nkol — Mvila),
-> 5 incidents constatés le 31/10 (pompe Bonanjo CRITICAL, forage Ngok à sec, fuite Nkol,
-> latrines Bonanjo, latrines Libermann résolues — recompter après un fresh seed).
+> 4 incidents (`WashDemoSeeder`) : pompe Bonanjo CRITICAL (triaged), forage Ngok
+> à sec HIGH (il y a 22 j), fuite Nkol MEDIUM (il y a 12 j), latrines Libermann
+> HIGH résolues (il y a 5 j).
 
 ## 0. URLs du jour J
 
@@ -211,7 +212,8 @@ Idem STT cloud (`whisper-1`).
 ## 3. Checklist jour J
 
 - [ ] `./start.sh` vert : `docker compose ps` — `laravel`, `queue`, `pgsql`,
-      `ai-engine`, `ollama`, `frontend` tous `Up`.
+      `ai-engine`, `ollama`, `mesh-relay`, `frontend` tous `Up` (7 services,
+      voir `compose.yaml`).
 - [ ] Seed vérifié : login `admin@wash.cm` / `password` OK, écoles et
       incidents visibles (Bonanjo CRITICAL présent).
 - [ ] Modèles Ollama : `docker compose exec ollama ollama list`
@@ -230,6 +232,9 @@ Idem STT cloud (`whisper-1`).
 - [ ] Captures de secours (§ 4) sur clé USB + vidéo `docs/demo.mp4` si dispo.
 
 ## 4. Captures d'écran à faire (6)
+
+> Note : `docs/demo.mp4` est absent (ni sur disque ni dans git au 31/10) —
+> ces 6 captures sont le plan B vidéo en attendant le montage.
 
 | # | URL | Action exacte |
 |---|---|---|

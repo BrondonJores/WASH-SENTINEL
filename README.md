@@ -39,7 +39,7 @@ WASH Sentinel turns every chaotic field report into **one triaged, deduplicated,
 
 ## 3. Why it wins 🏆
 
-1. **Dashboardless by design** — a real agent loop with native function-calling and 10 tools (`analyze_school`, `rank_schools_by_need`, `summarize_district`, `explain_incident`, `repair_trends`, `territory_overview`, `build_briefing`, `prepare_report`, `prepare_incident`, `prepare_maintenance_log`), not a chatbot wrapper. It answers with generated cards, charts, maps, mini-decks and clickable pickers — plus verification-first admin CRUD behind it.
+1. **Dashboardless by design** — a real agent loop with native function-calling and 11 tools (`analyze_school`, `rank_schools_by_need`, `summarize_district`, `explain_incident`, `list_maintenance_logs`, `repair_trends`, `territory_overview`, `build_briefing`, `prepare_report`, `prepare_incident`, `prepare_maintenance_log`), not a chatbot wrapper. It answers with generated cards, charts, maps, mini-decks and clickable pickers — plus verification-first admin CRUD behind it.
 2. **Meta-native, end to end** — Llama for reasoning, Omnilingual ASR for 1,600 languages (Douala included), WhatsApp for the last mile.
 3. **Equity is the algorithm** — a transparent fairness score (days without water × health risk × girls' impact × isolation bonus) kills favoritism and produces an auditable public justification.
 4. **Repair-vs-repair economics** — the copilot computes cumulative repair cost vs. new-equipment cost (MTBF, school-days lost) and says *stop patching, replace with solar pumping*.
@@ -80,7 +80,7 @@ A CRUD stores tickets. Sentinel **reasons over them** — with swappable AI, aud
 
 _Golden path with example outputs — run it live after `./start.sh`._
 
-1. **Report** — *« Ici école Saint-Paul, la pompe d'eau potable est brisée depuis ce matin, 400 élèves sans eau… »* (text or voice note) → incident created, **CRITICAL**, priority 95/100, reference `WASH-2026-0042`, voice confirmation generated.
+1. **Report** — *« Ici école Saint-Paul, la pompe d'eau potable est brisée depuis ce matin, 400 élèves sans eau… »* (text or voice note) → incident created, **CRITICAL**, priority 95/100, reference `WASH-2026-XXXXXX`, voice confirmation generated.
 2. **Duplicate** — send *« Problème d'eau à Saint-Paul »* → `is_duplicate: true`, attached to the parent, severity bumped. No ticket spam.
 3. **Photo** — upload a burst pipe photo → vision check (WASH-related ✓) + visual severity score (priority fusion landing next).
 4. **Copilot** — *« Which schools in Douala got the most interventions this year — repair or replace? »* → ranked answer + savings plan + trend chart card.
@@ -108,7 +108,7 @@ _Golden path with example outputs — run it live after `./start.sh`._
                                                               └──────────────────┘
 ```
 
-**Services** (`compose.yaml`): `laravel` (API), `queue` (WhatsApp + notifications worker), `pgsql`, `ai-engine`, `ollama`, `frontend` (React admin).
+**Services** (`compose.yaml`, 7): `laravel` (API), `queue` (WhatsApp + notifications worker), `pgsql`, `ai-engine`, `ollama`, `mesh-relay` (store-and-forward mesh), `frontend` (React admin).
 
 **Repo map:**
 
@@ -174,7 +174,7 @@ Most apps bolt a translator onto French. Sentinel routes **each school to its ow
 - **Per-school language**: `schools.default_language` (e.g. `dua_Latn` for Douala) flows into every transcription via the `X-STT-Language` header — the right ASR path is chosen per request, not per deployment.
 - **Meta Omnilingual ASR** via `sherpa-onnx` (ONNX int8, CPU-friendly): 1,600 languages including **Douala (`dua_Latn`)**, Bassa, Ewondo.
 - **Whisper.cpp** (local, CPU) for French voice notes; **cloud STT** (`whisper-1`…) one click away in AI Settings.
-- **Piper TTS** speaks confirmations back ("Your report WASH-2026-0042 is registered, priority HIGH…").
+- **Piper TTS** speaks confirmations back ("Your report WASH-2026-XXXXXX is registered, priority HIGH…").
 
 To enable Omnilingual, drop the [~700 MB model + tokens](https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12) into `models/omnilingual/` and activate the profile in AI Settings.
 

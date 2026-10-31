@@ -1,5 +1,7 @@
 # 🎤 Runbook démo jury — 3 minutes chrono
 
+> ⚠️ Variante mesh/offline — golden path console : [DEMO_JURY.md](DEMO_JURY.md).
+>
 > Objectif : prouver en 180 secondes qu'aucune école ne reste invisible,
 > même sans internet. Tout tourne en local après `./start.sh`.
 
@@ -16,11 +18,15 @@ Vérifier : `curl -s http://localhost:8001/health` (relai mesh).
 ## Acte 1 — Le signalement multimodal (60 s)
 
 1. Console → envoyer : *« Ici école Saint-Paul, la pompe est brisée depuis
-   ce matin, 400 élèves sans eau… »* → incident **CRITICAL**, référence
-   `WASH-...`, priorité 95/100.
-2. Renvoyer *« Problème d'eau à Saint-Paul »* → `is_duplicate: true`,
+   ce matin, 400 élèves sans eau… »* → carte **« Confirmer le signalement »**.
+2. Répondre `oui` (obligatoire : `WashAgentController::interceptVote` ne crée
+   l'incident qu'après vote explicite) → incident **CRITICAL**, référence
+   `WASH-2026-XXXXXX`, priorité 95/100.
+3. Renvoyer *« Problème d'eau à Saint-Paul »* → `is_duplicate: true`,
    rattaché au parent. Zéro spam de tickets.
-3. (Optionnel) Photo d'un tuyau percé → score visuel fusionné.
+4. (Optionnel) Photo d'un tuyau percé → score visuel affiché
+   (non fusionné dans la priorité : `IncidentTriageService::ingest`
+   stocke `visual` dans `ai_analyses`, la priorité vient de l'extraction).
 
 ## Acte 2 — Le village sans internet (90 s, le différenciateur 🏆)
 
@@ -42,12 +48,15 @@ devant le centre-ville, tournée groupée, note de transparence générée.
 - Frontend `Failed to resolve import ...` ? Vieux `node_modules` : `docker compose restart frontend` (réinstalle au démarrage), ~1 min.
 - Relai mesh down ? Le flux /m → file locale → upload direct suffit.
 - Pas de réseau du tout ? `python3 mesh/demo/simulate_hops.py` (zéro serveur).
-- WhatsApp : mode simulateur intégré, identique au live.
-- SMS : `POST /api/v1/mesh/sms` avec `WASH CE042 P` → ticket + accusé.
+- WhatsApp : mode simulateur (limites : voir WHATSAPP_LIVE §12.4).
+- SMS : `POST /api/v1/mesh/sms` (`WashSmsController::store` exige
+  `secret` + `from` + `message`, code école du seed) → ticket + accusé :
+  ```bash
+  curl -s -X POST http://localhost/api/v1/mesh/sms \
+    -H 'Content-Type: application/json' \
+    -d '{"secret":"'"$MESH_SMS_SECRET"'","from":"237600112233","message":"WASH DOU-BON-001 P pompe cassee"}'
+  ```
 
 ## Phrases jury (à placer)
 
-- *« Dashboardless : l'agent décide, les cartes suivent. »*
-- *« L'équité est l'algorithme, pas une option. »*
-- *« Meta de bout en bout : Llama raisonne, Omnilingual transcrit le douala, WhatsApp livre. »*
-- *« Leave no school behind — même sans réseau. »*
+Voir la liste de référence : [DEMO_JURY.md §5](DEMO_JURY.md#5-phrases-jury-à-placer).
