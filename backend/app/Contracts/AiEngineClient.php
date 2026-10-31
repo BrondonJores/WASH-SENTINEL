@@ -46,4 +46,6 @@ interface AiEngineClient
     public function dispatchPlan(string $district, array $schools): array;
 
     public function synthesize(string $text, string $voice = 'fr_FR-upmc-medium'): array;
+
+    public function transcribe(string $audioPath, string $language = 'fr'): array;
 }

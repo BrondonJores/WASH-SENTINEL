@@ -173,4 +173,12 @@ class WashAiEngineService implements AiEngineClient
             'voice' => $voice,
         ])->throw()->json();
     }
+
+    public function transcribe(string $audioPath, string $language = 'fr'): array
+    {
+        return $this->client()
+            ->attach('audio', file_get_contents($audioPath), basename($audioPath))
+            ->post($this->baseUrl . '/v1/voice/transcribe', ['language' => $language])
+            ->throw()->json();
+    }
 }

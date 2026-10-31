@@ -132,6 +132,19 @@ class WashAgentController extends Controller
 
         return response()->json($ai->synthesize($validated['text']));
     }
+
+    public function transcribe(Request $request, AiEngineClient $ai)
+    {
+        $validated = $request->validate([
+            'audio' => 'required|file|max:10240',
+            'language' => 'nullable|string|max:16',
+        ]);
+
+        return response()->json($ai->transcribe(
+            $validated['audio']->getRealPath(),
+            $validated['language'] ?? 'fr',
+        ));
+    }
     public function converse(Request $request, AiEngineClient $ai, AgentProposalService $proposals)
     {
         $validated = $request->validate([

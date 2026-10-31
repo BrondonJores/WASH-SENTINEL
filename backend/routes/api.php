@@ -39,6 +39,7 @@ Route::prefix('v1/wash')->group(function () {
     Route::post('/agent/dispatch-plan', [WashAgentController::class, 'dispatchPlan']);
     Route::post('/agent/epidemic-scan', [WashAgentController::class, 'epidemicScan']);
     Route::post('/agent/synthesize', [WashAgentController::class, 'synthesize']);
+    Route::post('/agent/transcribe', [WashAgentController::class, 'transcribe'])->middleware('throttle:30,1');
     Route::get('/agent/schools/{school}/replace-vs-repair', [WashAgentController::class, 'replaceVsRepair']);
 
     Route::middleware('auth:sanctum')->group(function () {

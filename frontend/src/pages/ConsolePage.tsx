@@ -10,6 +10,7 @@ import { SentinelAvatar } from '../components/SentinelAvatar';
 import type { OrbState } from '../components/SentinelOrb';
 import { AgentCardList, FollowUps } from '../components/AgentCards';
 import { DetailDrawer } from '../components/DetailDrawer';
+import { VoicePlayer, VoiceRecorder } from '../components/VoiceControls';
 import type { DetailKind, DetailTarget } from '../components/DetailDrawer';
 import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
@@ -246,6 +247,17 @@ export default function ConsolePage() {
     [send],
   );
 
+  const dictate = useCallback(async (blob: Blob) => {
+    try {
+      setError(null);
+      const { transcript } = await api.transcribeVoice(blob);
+      setInput(transcript);
+      inputRef.current?.focus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Transcription impossible.');
+    }
+  }, []);
+
   const [detail, setDetail] = useState<DetailTarget | null>(null);
 
   const openDetail = useCallback((kind: DetailKind, id: number) => {
@@ -315,6 +327,7 @@ export default function ConsolePage() {
           onBlur={() => setComposerFocus(false)}
           className="h-12 w-full bg-transparent text-[16px] caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
         />
+        <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} />
         <Button
           type="submit"
           variant="primary"
@@ -341,6 +354,7 @@ export default function ConsolePage() {
           disabled={busy || streaming}
           className="h-10 w-full bg-transparent text-sm caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
         />
+        <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} />
         <Button
           type="submit"
           variant="primary"
@@ -524,6 +538,19 @@ export default function ConsolePage() {
                         {fmtTime(m.at)}
                       </span>
                       <CopyAnswer text={m.content} />
+                      <VoicePlayer
+                        onRequestAudio={async () => {
+                          try {
+                            const res = await api.synthesizeVoice(m.content);
+                            const bin = atob(res.audio_base64);
+                            const bytes = new Uint8Array(bin.length);
+                            for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+                            return URL.createObjectURL(new Blob([bytes], { type: res.mime_type }));
+                          } catch {
+                            return null;
+                          }
+                        }}
+                      />
                     </div>
                     {m.tools.length > 0 && (
                       <div className="flex flex-wrap items-center gap-1.5">

@@ -228,6 +228,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ message, history }),
     }),
+  transcribeVoice: (blob: Blob) => {
+    const form = new FormData();
+    form.append('audio', blob, 'dictation.webm');
+    return reqMultipart<{ transcript: string }>('/v1/wash/agent/transcribe', form);
+  },
+  synthesizeVoice: (text: string) =>
+    req<{ audio_base64: string; mime_type: string }>('/v1/wash/agent/synthesize', {
+      method: 'POST',
+      body: JSON.stringify({ text: text.slice(0, 1000) }),
+    }),
   overview: () => req<TerritoryPulse>('/v1/wash/overview'),
   library: () => req<LibraryPayload>('/v1/wash/library'),
   createProject: (name: string) =>
