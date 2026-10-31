@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { api } from '../lib/api';
-import type { ChatHistoryMessage, TerritoryPulse } from '../lib/api';
+import type { ChatHistoryMessage, TerritoryPulse , AgentCard } from '../lib/api';
 import type { DialogueMessage as Msg } from '../lib/dialogues';
 import { useAuth } from '../auth/AuthContext';
 import { useDialogues } from '../dialogues/context';
@@ -242,6 +242,13 @@ export default function ConsolePage() {
     },
     [send],
   );
+
+  const appendAssistant = useCallback((content: string, cards?: AgentCard[]) => {
+    setMessages((prev) => [
+      ...prev,
+      { role: 'assistant', content, tools: [], cards: cards ?? [], model: 'sentinel-guard', at: Date.now() },
+    ]);
+  }, []);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -521,7 +528,7 @@ export default function ConsolePage() {
                       </div>
                     )}
                     <div className="cards-in">
-                      <AgentCardList cards={m.cards} onAsk={ask} />
+                      <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} />
                     </div>
                   </>
                 )}

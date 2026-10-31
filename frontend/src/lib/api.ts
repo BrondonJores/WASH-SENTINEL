@@ -327,6 +327,14 @@ export const api = {
     req<{ message: string }>('/v1/notifications/read-all', { method: 'POST' }),
   aiAnalyses: (params?: { analysis_type?: string; incident_id?: number; page?: number }) =>
     req<Paginated<AiAnalysis>>(`/v1/admin/ai-analyses${qs(params ?? {})}`),
+  confirmProposal: (id: number) =>
+    req<{ message: string; result: ProposalResult }>(`/v1/wash/agent/proposals/${id}/confirm`, {
+      method: 'POST',
+    }),
+  cancelProposal: (id: number) =>
+    req<{ message: string; result: ProposalResult }>(`/v1/wash/agent/proposals/${id}/cancel`, {
+      method: 'POST',
+    }),
 };
 
 export interface Paginated<T> {
@@ -483,4 +491,15 @@ function qs(params: Record<string, string | number | undefined>): string {
   }
   const s = q.toString();
   return s ? `?${s}` : '';
+}
+
+export interface ProposalResult {
+  status: string;
+  action: string;
+  summary: string;
+  reference_code?: string;
+  incident_id?: number;
+  report_id?: number;
+  log_id?: number;
+  is_duplicate?: boolean;
 }

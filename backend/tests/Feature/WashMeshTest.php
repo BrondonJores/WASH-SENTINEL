@@ -127,6 +127,16 @@ class WashMeshTest extends TestCase
             ->assertCreated()->assertJsonPath('summary.accepted', 1);
     }
 
+    public function test_api_errors_are_json_even_without_accept_header(): void
+    {
+        // Client fruste (script terrain, passerelle SMS) : pas de header Accept.
+        // Avant le fix : 302 redirect vers la page web ; attendu : 422 JSON.
+        $this->post('/api/v1/mesh/bundles', ['bundles' => [['bundle_id' => 'nope']]])
+            ->assertStatus(422)
+            ->assertHeader('Content-Type', 'application/json')
+            ->assertJsonValidationErrors(['origin_node_id', 'school_id']);
+    }
+
     public function test_daily_cap_per_origin_is_enforced(): void
     {
         config(['services.mesh.daily_cap_per_origin' => 1]);

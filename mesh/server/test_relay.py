@@ -5,7 +5,8 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from main import STORE, app
+import main
+from main import ACKED, COUNTERS, STORE, app
 
 client = TestClient(app)
 
@@ -29,6 +30,10 @@ def make_bundle(**overrides):
 
 def setup_function(_):
     STORE.clear()
+    ACKED.clear()
+    for key in COUNTERS:
+        COUNTERS[key] = 0
+    main.RELAY_KEY = ""
 
 
 def test_store_then_fetch():
@@ -86,3 +91,118 @@ def test_uplink_dry_run():
     r = client.post("/v1/uplink", params={"dry_run": True})
     assert r.json()["pending"] == 1
     assert len(STORE) == 1  # dry-run ne vide pas le stock
+
+
+def test_lru_eviction_when_full(monkeypatch):
+    monkeypatch.setattr(main, "MAX_STORE", 2)
+    first = make_bundle()
+    client.post("/v1/store", json={"node_id": "node-A", "bundles": [first]})
+    client.post("/v1/store", json={"node_id": "node-A", "bundles": [make_bundle()]})
+    r = client.post("/v1/store", json={"node_id": "node-A", "bundles": [make_bundle()]})
+    assert r.json()["stored"] == 1  # jamais de rejet par manque de place
+    assert len(STORE) == 2
+    assert first["bundle_id"] not in STORE  # le plus ancien sort
+    assert COUNTERS["evicted_lru"] == 1
+
+
+def test_api_key_enforced_when_configured(monkeypatch):
+    monkeypatch.setattr(main, "RELAY_KEY", "secret")
+    assert client.get("/health").status_code == 200  # health reste ouvert
+    r = client.post("/v1/store", json={"node_id": "node-A", "bundles": [make_bundle()]})
+    assert r.status_code == 401
+    r = client.post("/v1/store", json={"node_id": "node-A", "bundles": [make_bundle()]},
+                    headers={"X-Mesh-Key": "secret"})
+    assert r.status_code == 200
+
+
+def test_stats_exposes_counters():
+    b = make_bundle()
+    client.post("/v1/store", json={"node_id": "node-A", "bundles": [b]})
+    client.post("/v1/store", json={"node_id": "node-B", "bundles": [b]})
+    body = client.get("/v1/stats").json()
+    assert body["counters"]["stored"] == 1
+    assert body["counters"]["duplicates"] == 1
+
+
+def test_v11_fields_preserved():
+    b = make_bundle(priority="high", copies_remaining=4, destination="dtn://wash-sentinel/ingest",
+                    lifetime_seconds=3600, custody_requested=True)
+    client.post("/v1/store", json={"node_id": "node-A", "bundles": [b]})
+    fetched = client.post("/v1/fetch", json={"node_id": "node-B", "known_ids": []}).json()["bundles"][0]
+    assert fetched["priority"] == "high"
+    assert fetched["copies_remaining"] == 4
+    assert fetched["destination"] == "dtn://wash-sentinel/ingest"
+    assert fetched["custody_requested"] is True
+
+
+def test_bad_priority_rejected():
+    b = make_bundle(priority="urgentissime")
+    r = client.post("/v1/store", json={"node_id": "node-A", "bundles": [b]})
+    assert r.json()["rejected"] == 1
+
+
+def _ts_style_checksum(bundle: dict) -> str:
+    """Reproduit le calcul du SDK TS / client Kotlin (immuables seuls, UTF-8 brut)."""
+    import hashlib
+    import json
+
+    from main import MUTABLE_FIELDS
+
+    payload = {k: v for k, v in bundle.items() if k not in MUTABLE_FIELDS}
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def test_checksum_with_accents_verifies():
+    b = make_bundle(message="Pompe brisée, élèves sans eau potable")
+    b["checksum"] = _ts_style_checksum(b)
+    r = client.post("/v1/store", json={"node_id": "node-A", "bundles": [b]})
+    assert r.json()["stored"] == 1
+
+
+def test_checksum_zulu_variant_verifies():
+    b = make_bundle()
+    b["created_at"] = b["created_at"].replace("+00:00", "Z")
+    b["expires_at"] = b["expires_at"].replace("+00:00", "Z")
+    b["checksum"] = _ts_style_checksum(b)
+    r = client.post("/v1/store", json={"node_id": "node-A", "bundles": [b]})
+    assert r.json()["stored"] == 1
+
+
+def test_tampered_checksum_rejected():
+    b = make_bundle()
+    b["checksum"] = "0" * 64
+    r = client.post("/v1/store", json={"node_id": "node-A", "bundles": [b]})
+    assert r.json()["rejected"] == 1
+
+
+def test_ack_advertised_only_to_nodes_holding_the_bundle():
+    b = make_bundle()
+    client.post("/v1/store", json={"node_id": "node-A", "bundles": [b]})
+    # C a uploadé le bundle vers Laravel et prévient le relai.
+    r = client.post("/v1/ack", json={"node_id": "node-C", "ids": [b["bundle_id"]]})
+    assert r.json()["new"] == 1
+    # B, qui transporte encore le bundle, apprend à le purger.
+    r = client.post("/v1/sync", json={"node_id": "node-B", "bundles": [], "known_ids": [b["bundle_id"]]})
+    assert b["bundle_id"] in r.json()["acked_ids"]
+    # D, qui ne le connaît pas, ne reçoit rien (pas de fuite).
+    r = client.post("/v1/sync", json={"node_id": "node-D", "bundles": [], "known_ids": []})
+    assert r.json()["acked_ids"] == []
+
+
+def test_uplink_flush_records_tombstones(monkeypatch):
+    b = make_bundle()
+    client.post("/v1/store", json={"node_id": "node-A", "bundles": [b]})
+
+    class FakeResp:
+        status_code = 201
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {"incidents": [{"bundle_id": b["bundle_id"]}]}
+
+    monkeypatch.setattr(main.httpx, "post", lambda *a, **k: FakeResp())
+    r = client.post("/v1/uplink")
+    assert r.json()["flushed"] == [b["bundle_id"]]
+    assert len(STORE) == 0
+    assert b["bundle_id"] in ACKED

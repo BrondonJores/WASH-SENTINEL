@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Badge, Button, Card } from './ui';
 import { Icon } from './icons';
 import type { AgentCard } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import { ThresholdGauge } from './ThresholdGauge';
 import { TrendChart } from './TrendChart';
 import type { TrendSeries } from './TrendChart';
@@ -626,6 +627,139 @@ function ConfirmationCard({ title, data }: { title: string; data: Record<string,
   );
 }
 
+function ActionConfirmationCard({
+  title,
+  data,
+  onAppend,
+}: {
+  title: string;
+  data: Record<string, unknown>;
+  onAppend?: (content: string, cards?: AgentCard[]) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const proposalId = typeof data.proposal_id === 'number' ? data.proposal_id : null;
+  const rows = Array.isArray(data.recap_rows) ? data.recap_rows : [];
+  const loginRequired = data.login_required === true;
+  const notPermitted = data.not_permitted === true;
+  const invalid = data.invalid === true;
+  const terminal = outcome !== null || loginRequired || notPermitted || invalid;
+
+  const run = async (kind: 'confirm' | 'cancel') => {
+    if (proposalId === null || busy || outcome !== null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = kind === 'confirm' ? await api.confirmProposal(proposalId) : await api.cancelProposal(proposalId);
+      setOutcome(res.result.status);
+      onAppend?.(res.result.summary, [
+        {
+          type: 'action_result',
+          title: kind === 'confirm' ? 'Résultat de la validation' : 'Proposition annulée',
+          data: { ...res.result },
+        },
+      ]);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Erreur réseau.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const expiry = (() => {
+    if (typeof data.expires_at !== 'string' || data.expires_at === '') return null;
+    const d = new Date(data.expires_at);
+    return Number.isNaN(d.getTime()) ? null : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  })();
+
+  return (
+    <CardShell
+      title={title}
+      meta="À valider"
+      actions={
+        outcome === 'confirmed' ? (
+          <Badge tone="success">Confirmé</Badge>
+        ) : outcome === 'cancelled' ? (
+          <Badge tone="neutral">Annulé</Badge>
+        ) : (
+          <Badge tone="warn">Confirmation requise</Badge>
+        )
+      }
+    >
+      <dl className="space-y-1.5">
+        {rows.map((r, i) => {
+          const row = asRecord(r);
+          return (
+            <div key={i} className="flex items-start justify-between gap-3 text-sm">
+              <dt className="shrink-0 text-stone-500 dark:text-stone-400">{fmtText(row.label)}</dt>
+              <dd className="min-w-0 break-words text-right font-medium">{fmtText(row.value)}</dd>
+            </div>
+          );
+        })}
+      </dl>
+      {rows.length === 0 && typeof data.recap === 'string' && data.recap !== '' && (
+        <p className="whitespace-pre-line text-sm leading-relaxed">{data.recap}</p>
+      )}
+      {expiry && outcome === null && (
+        <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+          Expire à {expiry} — sans validation, rien ne sera créé.
+        </p>
+      )}
+      {loginRequired && (
+        <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+          Connectez-vous pour valider cette proposition.
+        </p>
+      )}
+      {notPermitted && (
+        <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+          {fmtText(data.permission_error) !== '—' ? fmtText(data.permission_error) : "Votre rôle ne permet pas cette action."}
+        </p>
+      )}
+      {invalid && (
+        <p className="mt-2 text-sm text-red-700 dark:text-red-400">
+          Proposition incomplète — précisez les éléments manquants dans le chat.
+        </p>
+      )}
+      {error && <p className="mt-2 text-sm text-red-700 dark:text-red-400">{error}</p>}
+      {!terminal && proposalId !== null && (
+        <div className="mt-3 flex gap-2">
+          <Button variant="primary" size="sm" disabled={busy} onClick={() => void run('confirm')}>
+            {busy ? 'En cours…' : 'Confirmer'}
+          </Button>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run('cancel')}>
+            Annuler
+          </Button>
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
+function ActionResultCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+  const status = typeof data.status === 'string' ? data.status : 'confirmed';
+  return (
+    <CardShell
+      title={title}
+      meta="Résultat"
+      actions={
+        status === 'confirmed' ? (
+          <Badge tone="success">Exécuté</Badge>
+        ) : status === 'cancelled' ? (
+          <Badge tone="neutral">Annulé</Badge>
+        ) : (
+          <Badge tone="danger">Erreur</Badge>
+        )
+      }
+    >
+      <p className="text-sm leading-relaxed">{fmtText(data.summary)}</p>
+      {typeof data.reference_code === 'string' && data.reference_code !== '' && (
+        <p className="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400">{data.reference_code}</p>
+      )}
+    </CardShell>
+  );
+}
+
 function GenericCard({ card }: { card: AgentCard }) {
   const entries = Object.entries(card.data);
   return (
@@ -747,7 +881,7 @@ function BriefingDeckCard({ title, data }: { title: string; data: Record<string,
   );
 }
 
-function AgentCardViewInner({ card, onAsk }: { card: AgentCard; onAsk?: (q: string) => void }) {
+function AgentCardViewInner({ card, onAsk, onAppend }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void }) {
   const data = asRecord(card.data);
   switch (card.type) {
     case 'incident_detail':
@@ -762,6 +896,10 @@ function AgentCardViewInner({ card, onAsk }: { card: AgentCard; onAsk?: (q: stri
       return <TrendCard title={card.title} data={data} onAsk={onAsk} />;
     case 'report_confirmation':
       return <ConfirmationCard title={card.title} data={data} />;
+    case 'action_confirmation':
+      return <ActionConfirmationCard title={card.title} data={data} onAppend={onAppend} />;
+    case 'action_result':
+      return <ActionResultCard title={card.title} data={data} />;
     case 'territory_map':
       return <TerritoryMapCard title={card.title} data={data} onAsk={onAsk} />;
     case 'briefing_deck':
@@ -773,12 +911,12 @@ function AgentCardViewInner({ card, onAsk }: { card: AgentCard; onAsk?: (q: stri
 
 export const AgentCardView = memo(AgentCardViewInner);
 
-export function AgentCardList({ cards, onAsk }: { cards: AgentCard[]; onAsk?: (q: string) => void }) {
+export function AgentCardList({ cards, onAsk, onAppend }: { cards: AgentCard[]; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void }) {
   if (cards.length === 0) return null;
   return (
     <div className="space-y-3 pt-1">
       {cards.map((c, i) => (
-        <AgentCardView key={`${c.type}-${i}`} card={c} onAsk={onAsk} />
+        <AgentCardView key={`${c.type}-${i}`} card={c} onAsk={onAsk} onAppend={onAppend} />
       ))}
     </div>
   );

@@ -18,7 +18,7 @@ class IncidentTriageService implements IncidentTriage
 {
     public function __construct(protected AiEngineClient $ai) {}
 
-    public function ingest(School $school, string $channel, ?string $message, ?UploadedFile $audio, ?UploadedFile $photo, ?User $reporter = null, string $source = 'web'): array
+    public function ingest(School $school, string $channel, ?string $message, ?UploadedFile $audio, ?UploadedFile $photo, ?User $reporter = null, string $source = 'web', ?array $overrides = null): array
     {
         $audioPath = $audio ? $audio->store('reports/audio', 'public') : null;
         $photoPath = $photo ? $photo->store('reports/photos', 'public') : null;
@@ -41,6 +41,10 @@ class IncidentTriageService implements IncidentTriage
             $extraction = $this->fallbackExtraction($rawText);
             $modelUsed = 'fallback-rules';
             $confidence = 0.4;
+        }
+
+        if ($overrides) {
+            $extraction = $this->applyOverrides($extraction, $overrides);
         }
 
         $visual = null;
@@ -89,8 +93,8 @@ class IncidentTriageService implements IncidentTriage
             $incident = Incident::create([
                 'school_id' => $school->id,
                 'title' => Str::limit($extraction['short_summary'] ?? $rawText, 120, '…'),
-                'category' => $extraction['infrastructure_type'] ?? 'other',
-                'issue_type' => $extraction['issue_type'] ?? 'other',
+                'category' => $extraction['infrastructure_type'] ?? 'water_point',
+                'issue_type' => $extraction['issue_type'] ?? 'total_breakdown',
                 'status' => 'triaged',
                 'urgency' => $extraction['urgency_level'] ?? 'medium',
                 'health_hazard' => $this->mapHazard($extraction['health_hazard_risk'] ?? 'low'),
@@ -154,8 +158,8 @@ class IncidentTriageService implements IncidentTriage
 
         return [
             'school_detected' => null,
-            'infrastructure_type' => 'other',
-            'issue_type' => 'other',
+            'infrastructure_type' => 'water_point',
+            'issue_type' => 'total_breakdown',
             'urgency_level' => $urgency,
             'estimated_affected_students' => 0,
             'health_hazard_risk' => 'low',
@@ -167,5 +171,52 @@ class IncidentTriageService implements IncidentTriage
     protected function mapHazard(string $risk): string
     {
         return $risk === 'severe' ? 'severe' : $risk;
+    }
+
+    public function createManualIncident(School $school, array $data, User $author): Incident
+    {
+        return Incident::create([
+            'school_id' => $school->id,
+            'title' => $data['title'],
+            'category' => $data['category'],
+            'issue_type' => 'other', // déclaré humainement, diagnostic à qualifier
+            'status' => 'triaged',
+            'urgency' => $data['urgency'],
+            'health_hazard' => 'low',
+            'priority_score' => $this->priorityScore($data['urgency'], 'low', (int) $data['affected_students']),
+            'affected_students' => (int) $data['affected_students'],
+            'ai_summary' => "Déclaré par {$author->name} via Sentinel : {$data['title']}",
+            'ai_tags' => [$data['category'], $data['urgency'], 'manuel'],
+        ])->fresh('school');
+    }
+
+    protected function applyOverrides(array $extraction, array $overrides): array
+    {
+        if (isset($overrides['category']) && in_array($overrides['category'], ['water_point', 'toilets_latrines', 'handwashing', 'sewage_drainage'], true)) {
+            $extraction['infrastructure_type'] = $overrides['category'];
+        }
+        if (isset($overrides['urgency']) && in_array($overrides['urgency'], ['low', 'medium', 'high', 'critical'], true)) {
+            $extraction['urgency_level'] = $overrides['urgency'];
+        }
+        if (isset($overrides['affected_students']) && is_numeric($overrides['affected_students'])) {
+            $extraction['estimated_affected_students'] = max(0, (int) $overrides['affected_students']);
+        }
+        $extraction['recommended_priority_score'] = $this->priorityScore(
+            $extraction['urgency_level'] ?? 'medium',
+            $extraction['health_hazard_risk'] ?? 'low',
+            (int) ($extraction['estimated_affected_students'] ?? 0)
+        );
+        $extraction['human_overrides'] = $overrides;
+
+        return $extraction;
+    }
+
+    protected function priorityScore(string $urgency, string $hazard, int $students): float
+    {
+        $u = ['low' => 10.0, 'medium' => 45.0, 'high' => 75.0, 'critical' => 100.0][$urgency] ?? 45.0;
+        $h = ['low' => 10.0, 'medium' => 40.0, 'high' => 75.0, 'severe' => 100.0][$hazard] ?? 40.0;
+        $s = (min($students, 1000) / 1000.0) * 100.0;
+
+        return round($u * 0.35 + $h * 0.35 + $s * 0.30, 1);
     }
 }

@@ -15,7 +15,8 @@ Règles impératives :
 - Ne devine jamais : utilise tes outils pour obtenir les faits (écoles, incidents, chiffres).
 - Si l'utilisateur nomme une école, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
-- Si l'utilisateur signale une panne, appelle prepare_report puis demande confirmation avant tout enregistrement.
+- Si l'utilisateur veut créer (signaler une panne, créer une intervention, journaliser des travaux) : rassemble TOUJOURS le dossier complet — école, description ou titre, catégorie, urgence, élèves affectés (ou incident et coût pour un journal). Si tout est donné en une phrase, appelle directement l'outil prepare_* ; sinon pose des questions courtes (2 éléments maximum par message) jusqu'au dossier complet.
+- Quand un outil prepare_* répond complete=true, présente le récapitulatif et demande de cliquer Confirmer (ou de répondre « oui »). N'annonce jamais un enregistrement effectué : seul l'humain valide, y compris pour préciser une école introuvable (propose les choix valides au lieu d'inventer).
 - Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).\n- Pour toute carte, visualisation géographique ou question 'où' : appelle territory_overview (la carte interactive est générée).\n- Pour tout briefing, dossier, diaporama ou synthèse exécutive : appelle build_briefing (la présentation est générée).
 - Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
 - Si un outil renvoie une erreur, corrige tes arguments avec les valeurs exactes fournies et réessaie au lieu d'abandonner.
@@ -44,6 +45,8 @@ DATA_QUESTION_HINTS = (
     "où", "ou ", "état", "etat", "besoin", "aide", "panne",
     "incident", "école", "ecole", "district", "graphique", "graphe",
     "coût", "cout", "budget", "intervention", "répar", "remplac",
+    "signal", "cré", "cree", "ajoute", "enregistre", "journalis",
+    "déclare", "declare",
 )
 
 
@@ -141,16 +144,25 @@ def _summarize_incident(obs: dict[str, Any]) -> str:
 
 
 def _summarize_report(obs: dict[str, Any]) -> str:
-    matched = (obs.get("matched_school", {}) or {}).get("school_name")
-    description = str(obs.get("description", "")).strip()[:120]
-    if matched:
-        return (
-            f"Signalement préparé pour {matched} : « {description} ». "
-            "Confirmez-le dans la carte ci-dessous."
-        )
+    missing = obs.get("missing_labels", []) or []
+    if missing:
+        return f"Signalement incomplet : il manque {', '.join(missing)}. Précisez pour continuer."
+    school = (obs.get("slots", {}) or {}).get("school_name", "?")
     return (
-        f"Signalement préparé : « {description} ». "
-        "Précisez l'école puis confirmez dans la carte ci-dessous."
+        f"Signalement préparé pour {school}. "
+        "Vérifiez le récapitulatif et confirmez dans la carte ci-dessous."
+    )
+
+
+def _summarize_proposal(obs: dict[str, Any]) -> str:
+    title = {"create_incident": "Intervention",
+             "create_maintenance_log": "Journal d'intervention"}.get(
+                 str(obs.get("action", "")), "Proposition")
+    missing = obs.get("missing_labels", []) or []
+    if missing:
+        return f"{title} incomplet : il manque {', '.join(missing)}. Précisez pour continuer."
+    return (
+        f"{title} préparé. Vérifiez le récapitulatif et confirmez dans la carte ci-dessous."
     )
 
 
@@ -175,6 +187,8 @@ FALLBACK_SUMMARIES = {
     "analyze_school": _summarize_analysis,
     "explain_incident": _summarize_incident,
     "prepare_report": _summarize_report,
+    "prepare_incident": _summarize_proposal,
+    "prepare_maintenance_log": _summarize_proposal,
     "territory_overview": _summarize_territory,
     "build_briefing": lambda obs: (
         f"Briefing prêt : {int(obs.get('total', 0) or 0)} slides "
@@ -350,10 +364,15 @@ class AgentLoop:
                     title=f"Incident {observation.get('reference_code') or observation.get('id', '?')}",
                     data=observation,
                 ))
-            elif name == "prepare_report":
+            elif name in ("prepare_report", "prepare_incident", "prepare_maintenance_log"):
+                if not observation.get("complete"):
+                    continue
+                titles = {"prepare_report": "Confirmer le signalement",
+                          "prepare_incident": "Confirmer l'intervention",
+                          "prepare_maintenance_log": "Confirmer le journal"}
                 cards.append(AgentCard(
-                    type="report_confirmation",
-                    title="Confirmer le signalement",
+                    type="action_confirmation",
+                    title=titles[name],
                     data=observation,
                 ))
             elif name == "build_briefing":

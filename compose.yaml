@@ -132,6 +132,8 @@ services:
             - '${FORWARD_MESH_PORT:-8001}:8001'
         environment:
             LARAVEL_URL: 'http://laravel:8080'
+            MESH_INGEST_KEY: '${MESH_INGEST_KEY:-}'
+            MESH_RELAY_API_KEY: '${MESH_RELAY_API_KEY:-}'
         networks:
             - wash-network
         depends_on:

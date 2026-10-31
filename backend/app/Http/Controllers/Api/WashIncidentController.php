@@ -110,6 +110,7 @@ class WashIncidentController extends Controller
             'notes' => ['nullable', 'string', 'max:2000'],
         ]);
 
+        $validated['days_without_service'] ??= 0;
         $log = $incident->maintenanceLogs()->create([
             ...$validated,
             'school_id' => $incident->school_id,

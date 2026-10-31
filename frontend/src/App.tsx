@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { Suspense, lazy } from 'react';
 import type { ReactNode } from 'react';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider } from './theme';
@@ -13,6 +14,8 @@ import JournalPage from './pages/JournalPage';
 import NotificationsPage from './pages/NotificationsPage';
 import SettingsPage from './pages/SettingsPage';
 import MeshPage from './pages/MeshPage';
+
+const MeshFieldPage = lazy(() => import('./pages/MeshFieldPage'));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -55,6 +58,14 @@ function AuthedApp() {
     <DialogueProvider key={user?.email ?? 'anon'}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/m"
+              element={
+                <Suspense fallback={<p className="p-4 text-sm text-ink-soft">Chargement du relai terrain…</p>}>
+                  <MeshFieldPage />
+                </Suspense>
+              }
+            />
             <Route path="/" element={authed(<ConsolePage />)} />
             <Route path="/admin/incidents" element={authed(<IncidentsPage />)} />
             <Route path="/admin/ecoles" element={authed(<SchoolsPage />)} />

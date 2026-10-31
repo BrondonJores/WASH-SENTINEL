@@ -8,6 +8,11 @@ use App\Models\Incident;
 use App\Models\MaintenanceLog;
 use App\Models\School;
 use App\Contracts\AiEngineClient;
+use App\Models\AgentProposal;
+use App\Models\User;
+use App\Services\AgentProposalService;
+use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Illuminate\Http\Request;
 
 class WashAgentController extends Controller
@@ -127,7 +132,7 @@ class WashAgentController extends Controller
 
         return response()->json($ai->synthesize($validated['text']));
     }
-    public function converse(Request $request, AiEngineClient $ai)
+    public function converse(Request $request, AiEngineClient $ai, AgentProposalService $proposals)
     {
         $validated = $request->validate([
             'message' => ['required', 'string', 'max:2000'],
@@ -136,6 +141,11 @@ class WashAgentController extends Controller
             'history.*.content' => ['required_with:history', 'string', 'max:2000'],
             'district' => ['nullable', 'string', 'max:128'],
         ]);
+
+        $user = $this->optionalUser($request);
+        if ($user && ($vote = $this->interceptVote($user, $validated['message'], $proposals)) !== null) {
+            return response()->json($vote);
+        }
 
         $response = $ai->agentChat(
             $validated['message'],
@@ -148,6 +158,8 @@ class WashAgentController extends Controller
             ],
         );
 
+        $response = $this->persistProposals($user, $response, $proposals);
+
         AiAnalysis::create([
             'analysis_type' => 'agent',
             'input_payload' => ['message' => $validated['message']],
@@ -155,6 +167,104 @@ class WashAgentController extends Controller
         ]);
 
         return response()->json($response);
+    }
+
+    protected function optionalUser(Request $request): ?User
+    {
+        try {
+            return auth('sanctum')->user();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    protected function interceptVote(User $user, string $message, AgentProposalService $service): ?array
+    {
+        $text = mb_strtolower(trim($message));
+        if (mb_strlen($text) > 40) {
+            return null;
+        }
+        $confirm = (bool) preg_match("/^(oui|ouais|ok|okay|confirmer?|je confirme|vas-?y|allons-?y|valider?|je valide|d'accord|d’accord)[.! ]*$/u", $text);
+        $cancel = !$confirm && (bool) preg_match("/^(non|annuler?|annule|stop|laisse tomber|oublie)[.! ]*$/u", $text);
+        if (!$confirm && !$cancel) {
+            return null;
+        }
+        $pending = AgentProposal::where('user_id', $user->id)
+            ->where('status', AgentProposal::STATUS_PENDING)
+            ->where('expires_at', '>', now())
+            ->latest()->get();
+        if ($pending->count() !== 1) {
+            return null;
+        }
+        try {
+            if ($confirm) {
+                $result = $service->confirm($user, $pending->first());
+                return $this->voteResponse(true, null, $result);
+            }
+            $result = $service->cancel($user, $pending->first());
+            return $this->voteResponse(false, null, $result);
+        } catch (\Throwable $e) {
+            return $this->voteResponse($confirm, $e->getMessage(), []);
+        }
+    }
+
+    protected function voteResponse(bool $confirm, ?string $error, array $result): array
+    {
+        if ($error) {
+            $answer = "Je n'ai pas pu exécuter : {$error}";
+            $status = 'error';
+        } elseif ($confirm) {
+            $answer = "C'est validé : " . ($result['summary'] ?? 'action exécutée.');
+            $status = 'confirmed';
+        } else {
+            $answer = "Proposition annulée, rien n'a été créé.";
+            $status = 'cancelled';
+        }
+
+        return [
+            'answer' => $answer,
+            'tools_executed' => [$confirm ? 'confirm_proposal' : 'cancel_proposal'],
+            'cards' => [[
+                'type' => 'action_result',
+                'title' => $confirm ? 'Résultat de la validation' : 'Proposition annulée',
+                'data' => array_merge($result, ['status' => $status]),
+            ]],
+            'model_used' => 'sentinel-guard',
+        ];
+    }
+
+    protected function persistProposals(?User $user, array $response, AgentProposalService $service): array
+    {
+        if (empty($response['cards']) || !is_array($response['cards'])) {
+            return $response;
+        }
+        foreach ($response['cards'] as $i => $card) {
+            if (($card['type'] ?? '') !== 'action_confirmation') {
+                continue;
+            }
+            $data = $card['data'] ?? [];
+            if (!($data['complete'] ?? false)) {
+                continue;
+            }
+            if (!$user) {
+                $response['cards'][$i]['data']['login_required'] = true;
+                continue;
+            }
+            try {
+                $draft = $service->draft($user, (string) ($data['action'] ?? ''), (array) ($data['slots'] ?? []));
+                $response['cards'][$i]['data']['proposal_id'] = $draft['proposal']->id;
+                $response['cards'][$i]['data']['expires_at'] = $draft['proposal']->expires_at->toIso8601String();
+                $response['cards'][$i]['data']['recap_rows'] = $draft['recap_rows'];
+            } catch (AccessDeniedHttpException $e) {
+                $response['cards'][$i]['data']['not_permitted'] = true;
+                $response['cards'][$i]['data']['permission_error'] = $e->getMessage();
+            } catch (ValidationException $e) {
+                $response['cards'][$i]['data']['invalid'] = true;
+                $response['cards'][$i]['data']['errors'] = $e->errors();
+            }
+        }
+
+        return $response;
     }
 
     protected function maintenanceProfiles(?string $district): array

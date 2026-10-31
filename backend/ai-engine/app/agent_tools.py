@@ -198,22 +198,206 @@ def tool_explain_incident(args: dict[str, Any], context: dict[str, Any]) -> dict
     }
 
 
-def tool_prepare_report(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    """Prépare un signalement structuré (sans rien écrire) à partir d'une description libre."""
-    description = (args.get("description") or "").strip()
-    hint = (args.get("school_hint") or "").strip().lower()
-    matched = None
-    if hint:
-        for school in context.get("schools", []):
-            if hint in str(school.get("school_name", "")).lower():
-                matched = {"school_id": school.get("school_id"), "school_name": school.get("school_name")}
-                break
+URGENCY_ALIASES = {
+    "critical": "critical", "critique": "critical",
+    "high": "high", "haute": "high", "haut": "high",
+    "medium": "medium", "moyenne": "medium", "moyen": "medium",
+    "low": "low", "basse": "low", "bas": "low",
+}
+
+CATEGORY_ALIASES = {
+    "water_point": "water_point", "point d'eau": "water_point", "point d eau": "water_point",
+    "eau": "water_point", "pompe": "water_point", "forage": "water_point", "robinet": "water_point",
+    "toilets_latrines": "toilets_latrines", "latrines": "toilets_latrines",
+    "toilettes": "toilets_latrines", "wc": "toilets_latrines", "sanitaires": "toilets_latrines",
+    "handwashing": "handwashing", "lavage des mains": "handwashing",
+    "lave-mains": "handwashing", "lave mains": "handwashing", "mains": "handwashing",
+    "sewage_drainage": "sewage_drainage", "égout": "sewage_drainage", "egout": "sewage_drainage",
+    "évacuation": "sewage_drainage", "evacuation": "sewage_drainage",
+    "drainage": "sewage_drainage", "caniveau": "sewage_drainage",
+}
+
+SLOT_LABELS = {
+    "school": "l'école concernée",
+    "description": "la description de la panne",
+    "title": "le titre de l'intervention",
+    "category": "la catégorie (point d'eau, latrines, lavage des mains, évacuation)",
+    "urgency": "le niveau d'urgence (basse, moyenne, haute, critique)",
+    "affected_students": "le nombre d'élèves affectés",
+    "incident": "l'incident concerné (numéro ou référence)",
+    "cost_amount": "le coût de l'intervention en XAF",
+}
+
+ACTION_TITLES = {
+    "create_report": "Nouveau signalement",
+    "create_incident": "Nouvelle intervention",
+    "create_maintenance_log": "Journaliser une intervention",
+}
+
+_SLOT_ROW_LABELS = {
+    "school_name": "École", "description": "Description", "title": "Titre",
+    "category": "Catégorie", "urgency": "Urgence",
+    "affected_students": "Élèves affectés", "cost_amount": "Coût (XAF)",
+    "notes": "Notes", "days_without_service": "Jours sans service",
+    "incident_label": "Incident",
+}
+
+
+def _norm_enum(value: Any, aliases: dict[str, str]) -> str | None:
+    return aliases.get(str(value or "").strip().lower())
+
+
+def _norm_int(value: Any) -> int | None:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
+def _norm_cost(value: Any) -> float | None:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
+def _resolve_incident(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
+    incidents = context.get("incidents", [])
+    if ref is None or str(ref).strip() == "":
+        return None
+    try:
+        wanted = int(ref)
+        for incident in incidents:
+            if incident.get("id") == wanted:
+                return incident
+    except (TypeError, ValueError):
+        pass
+    hint = str(ref).strip().lower()
+    for incident in incidents:
+        if str(incident.get("reference_code", "")).lower() == hint:
+            return incident
+    for incident in incidents:
+        if hint in str(incident.get("reference_code", "")).lower():
+            return incident
+    return None
+
+
+def _recap(action: str, slots: dict[str, Any], missing_labels: list[str]) -> str:
+    rows = []
+    for key, value in slots.items():
+        if value is None or value == "" or key in ("school_id", "incident_id"):
+            continue
+        rows.append(f"{_SLOT_ROW_LABELS.get(key, key)} : {value}")
+    text = ACTION_TITLES.get(action, action) + "\n" + "\n".join(rows)
+    if missing_labels:
+        text += "\nManquant : " + ", ".join(missing_labels) + "."
+    return text
+
+
+def _proposal(action: str, slots: dict[str, Any], missing: list[str]) -> dict[str, Any]:
+    labels = [SLOT_LABELS[m] for m in missing]
     return {
-        "action": "create_report",
-        "description": description,
-        "matched_school": matched,
-        "needs_confirmation": True,
+        "action": action,
+        "complete": not missing,
+        "slots": slots,
+        "missing": missing,
+        "missing_labels": labels,
+        "recap": _recap(action, slots, labels),
     }
+
+
+def tool_prepare_report(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Prépare un signalement COMPLET (sans rien écrire) : école, description, catégorie, urgence, élèves."""
+    school = _resolve_school(context, args.get("school", args.get("school_hint")))
+    hint = str(args.get("school", args.get("school_hint")) or "").strip()
+    description = str(args.get("description") or "").strip()
+    category = _norm_enum(args.get("category"), CATEGORY_ALIASES)
+    urgency = _norm_enum(args.get("urgency"), URGENCY_ALIASES)
+    affected = _norm_int(args.get("affected_students"))
+    missing = []
+    if not school:
+        missing.append("school")
+    if not description:
+        missing.append("description")
+    if not category:
+        missing.append("category")
+    if not urgency:
+        missing.append("urgency")
+    if affected is None:
+        missing.append("affected_students")
+    obs = _proposal("create_report", {
+        "school_id": school["school_id"] if school else None,
+        "school_name": school.get("school_name") if school else None,
+        "description": description or None,
+        "category": category,
+        "urgency": urgency,
+        "affected_students": affected,
+    }, missing)
+    if hint and not school:
+        obs["hint_unmatched"] = hint
+        obs["school_choices"] = _school_choices(context)
+    return obs
+
+
+def tool_prepare_incident(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Prépare une intervention directe COMPLETE (sans rien écrire) : école, titre, catégorie, urgence, élèves."""
+    school = _resolve_school(context, args.get("school"))
+    hint = str(args.get("school") or "").strip()
+    title = str(args.get("title") or "").strip()
+    category = _norm_enum(args.get("category"), CATEGORY_ALIASES)
+    urgency = _norm_enum(args.get("urgency"), URGENCY_ALIASES)
+    affected = _norm_int(args.get("affected_students"))
+    missing = []
+    if not school:
+        missing.append("school")
+    if not title:
+        missing.append("title")
+    if not category:
+        missing.append("category")
+    if not urgency:
+        missing.append("urgency")
+    if affected is None:
+        missing.append("affected_students")
+    obs = _proposal("create_incident", {
+        "school_id": school["school_id"] if school else None,
+        "school_name": school.get("school_name") if school else None,
+        "title": title or None,
+        "category": category,
+        "urgency": urgency,
+        "affected_students": affected,
+    }, missing)
+    if hint and not school:
+        obs["hint_unmatched"] = hint
+        obs["school_choices"] = _school_choices(context)
+    return obs
+
+
+def tool_prepare_maintenance_log(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Prépare un journal d'intervention COMPLET (sans rien écrire) : incident, coût, notes."""
+    incident = _resolve_incident(context, args.get("incident"))
+    cost = _norm_cost(args.get("cost_amount"))
+    notes = str(args.get("notes") or "").strip() or None
+    days = _norm_int(args.get("days_without_service"))
+    missing = []
+    if args.get("incident") in (None, ""):
+        missing.append("incident")
+    if cost is None:
+        missing.append("cost_amount")
+    label = None
+    if incident:
+        label = f"{incident.get('reference_code') or incident.get('id')} — {incident.get('title', '?')}"
+    elif args.get("incident") not in (None, ""):
+        label = str(args.get("incident"))
+    return _proposal("create_maintenance_log", {
+        "incident_id": incident.get("id") if incident else None,
+        "incident_ref": args.get("incident") if not incident else None,
+        "incident_label": label,
+        "cost_amount": cost,
+        "notes": notes,
+        "days_without_service": days,
+    }, missing)
 
 
 URGENCY_FR = {"critical": "critique", "high": "haute", "medium": "moyenne", "low": "basse"}
@@ -435,6 +619,8 @@ TOOL_EXECUTORS = {
     "summarize_district": tool_summarize_district,
     "explain_incident": tool_explain_incident,
     "prepare_report": tool_prepare_report,
+    "prepare_incident": tool_prepare_incident,
+    "prepare_maintenance_log": tool_prepare_maintenance_log,
     "repair_trends": tool_repair_trends,
     "territory_overview": tool_territory_overview,
     "build_briefing": tool_build_briefing,
@@ -526,14 +712,49 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_report",
-            "description": "Prépare un signalement structuré depuis une description libre. N'écrit rien : propose une carte de confirmation.",
+            "description": "Prépare un signalement COMPLET sans rien écrire : école, description, catégorie, urgence, élèves. À rappeler quand l'utilisateur fournit les éléments manquants.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"},
                     "description": {"type": "string", "description": "Description libre de la panne"},
-                    "school_hint": {"type": "string", "description": "Nom ou fragment du nom de l'école si mentionné"},
+                    "category": {"type": "string", "description": "water_point, toilets_latrines, handwashing ou sewage_drainage"},
+                    "urgency": {"type": "string", "description": "low, medium, high ou critical"},
+                    "affected_students": {"type": "integer", "description": "Nombre d'élèves affectés"},
                 },
-                "required": ["description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "prepare_incident",
+            "description": "Prépare une intervention directe COMPLETE sans rien écrire : école, titre, catégorie, urgence, élèves. Réservé aux responsables habilités.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"},
+                    "title": {"type": "string", "description": "Titre court de l'intervention"},
+                    "category": {"type": "string", "description": "water_point, toilets_latrines, handwashing ou sewage_drainage"},
+                    "urgency": {"type": "string", "description": "low, medium, high ou critical"},
+                    "affected_students": {"type": "integer", "description": "Nombre d'élèves affectés"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "prepare_maintenance_log",
+            "description": "Prépare un journal d'intervention COMPLET sans rien écrire : incident (id ou référence), coût XAF, notes. Réservé aux responsables habilités.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "incident": {"type": "string", "description": "Identifiant ou référence (WASH-...) de l'incident"},
+                    "cost_amount": {"type": "number", "description": "Coût de l'intervention en XAF"},
+                    "notes": {"type": "string", "description": "Notes sur les travaux effectués"},
+                    "days_without_service": {"type": "integer", "description": "Jours sans service comptabilisés"},
+                },
             },
         },
     },

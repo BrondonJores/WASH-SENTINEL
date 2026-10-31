@@ -4,3 +4,7 @@
 mesh/server/.venv/
 mesh/server/__pycache__/
 mesh/demo/__pycache__/
+mesh/android/.gradle/
+mesh/android/build/
+mesh/android/app/build/
+mesh/android/local.properties

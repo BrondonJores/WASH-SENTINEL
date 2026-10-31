@@ -317,7 +317,7 @@ class AgentChatRequest(BaseModel):
 
 
 class AgentCard(BaseModel):
-    type: str = Field(..., description="school_analysis, school_ranking, district_summary, incident_detail, report_confirmation")
+    type: str = Field(..., description="school_analysis, school_ranking, district_summary, incident_detail, report_confirmation, action_confirmation")
     title: str
     data: dict[str, Any] = Field(default_factory=dict)
 

@@ -19,5 +19,8 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        // L'API ne parle que JSON : même sans header Accept (scripts terrain,
+        // passerelles SMS, relais), les erreurs rendent du JSON — jamais de
+        // redirect 302 vers la page web.
+        $exceptions->shouldRenderJsonWhen(fn ($request) => $request->is('api/*'));
     })->create();

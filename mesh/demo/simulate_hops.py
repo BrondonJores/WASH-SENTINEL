@@ -17,14 +17,18 @@ import json
 import sys
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import os
 from uuid import uuid4
 
-RELAY_URL = "http://localhost:8001"
-LARAVEL_URL = "http://localhost/api"
+RELAY_URL = os.environ.get("MESH_RELAY_URL", "http://localhost:8001")
+LARAVEL_URL = os.environ.get("LARAVEL_API_URL", "http://localhost/api")
+
+
+MUTABLE = {"checksum", "hops", "previous_node", "copies_remaining"}
 
 
 def checksum_of(bundle: dict) -> str:
-    payload = {k: v for k, v in bundle.items() if k != "checksum"}
+    payload = {k: v for k, v in bundle.items() if k not in MUTABLE}
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -43,12 +47,17 @@ def create_bundle(school_id: int, message: str, origin: str = "node-A-yokadouma"
         "expires_at": (now + timedelta(days=7)).isoformat(),
         "max_hops": 10,
         "hops": [origin],
+        "destination": "dtn://wash-sentinel/ingest",
+        "lifetime_seconds": 7 * 86400,
+        "copies_remaining": 8,
+        "priority": "normal",
     }
     bundle["checksum"] = checksum_of(bundle)
     return bundle
 
 
 def forward(bundle: dict, node_id: str) -> dict | None:
+    """Spray-and-Wait binaire : donne floor(n/2), garde ceil(n/2)."""
     if node_id in bundle["hops"]:
         print(f"  ⛔ {node_id} déjà dans {bundle['hops']} → boucle évitée")
         return None
@@ -58,8 +67,15 @@ def forward(bundle: dict, node_id: str) -> dict | None:
     if len(bundle["hops"]) >= bundle.get("max_hops", 10) + 1:
         print(f"  ⛔ max_hops atteint → jeté par {node_id}")
         return None
+    copies = bundle.get("copies_remaining", 8)
+    if copies <= 1:
+        print(f"  ⛔ dernière copie → livraison directe au serveur uniquement")
+        return None
     nxt = deepcopy(bundle)
     nxt["hops"].append(node_id)
+    nxt["previous_node"] = bundle["hops"][-1]
+    nxt["copies_remaining"] = copies // 2
+    print(f"  📦 spray binaire : {copies} copies → donne {copies // 2}, garde {(copies + 1) // 2}")
     return nxt
 
 
@@ -101,6 +117,10 @@ def main(live: bool = False) -> int:
         "expires_at": at_c["expires_at"],
         "received_via_node_id": "node-C-bertoua",
         "checksum": at_c["checksum"],
+        "destination_eid": at_c.get("destination"),
+        "lifetime_seconds": at_c.get("lifetime_seconds"),
+        "copies_remaining": at_c.get("copies_remaining"),
+        "priority": at_c.get("priority"),
     }
     if not live:
         print("   (dry-run) payload Laravel :")
@@ -109,25 +129,66 @@ def main(live: bool = False) -> int:
         return 0
 
     import urllib.request
+    import urllib.error
 
     def post(url: str, data: dict) -> tuple[int, str]:
         req = urllib.request.Request(url, data=json.dumps(data).encode(),
-                                     headers={"Content-Type": "application/json"}, method="POST")
+                                     headers={"Content-Type": "application/json",
+                                              "Accept": "application/json"}, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status, resp.read().decode()[:800]
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.status, resp.read().decode()[:1200]
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, exc.read().decode()[:1200]
+            except Exception:
+                return exc.code, f"HTTP Error {exc.code}"
         except Exception as exc:  # noqa: BLE001
             return 0, f"{type(exc).__name__}: {exc}"
 
+    def get(url: str) -> tuple[int, str]:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.status, resp.read().decode()[:1200]
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, exc.read().decode()[:1200]
+            except Exception:
+                return exc.code, f"HTTP Error {exc.code}"
+        except Exception as exc:  # noqa: BLE001
+            return 0, f"{type(exc).__name__}: {exc}"
+
+    ok = True
     # D'abord le relai (sync), puis Laravel (upload final).
     status, body = post(f"{RELAY_URL}/v1/store", {"node_id": "node-C-bertoua", "bundles": [at_c]})
     print(f"   relai {RELAY_URL}/v1/store → {status}\n   {body}")
+    ok = ok and status == 200
     status, body = post(f"{LARAVEL_URL}/v1/mesh/bundles", {"bundles": [payload]})
     print(f"   laravel {LARAVEL_URL}/v1/mesh/bundles → {status}\n   {body}")
+    ok = ok and status in (200, 201)
+    try:
+        incident_id = json.loads(body)["incidents"][0]["incident_id"]
+    except Exception:
+        incident_id = None
     # Doublon : second upload du même bundle → duplicates=1.
     status, body = post(f"{LARAVEL_URL}/v1/mesh/bundles", {"bundles": [payload]})
     print(f"   re-upload (déduplication attendue) → {status}\n   {body}")
-    return 0 if status in (200, 201) else 1
+    try:
+        ok = ok and json.loads(body)["summary"]["duplicates"] == 1
+    except Exception:
+        ok = False
+    # Preuve : l'incident existe avec triage IA + les stats mesh bougent.
+    if incident_id:
+        status, body = get(f"{LARAVEL_URL}/v1/wash/incidents/{incident_id}")
+        print(f"   incident #{incident_id} → {status}\n   {body}")
+        ok = ok and status == 200
+    status, body = get(f"{LARAVEL_URL}/v1/mesh/stats")
+    print(f"   stats mesh → {status}\n   {body}")
+    ok = ok and status == 200
+    print("\n✅ Flux live OK : A → B → C → relai → Laravel → incident."
+          if ok else "\n❌ Échec — voir les réponses ci-dessus.")
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

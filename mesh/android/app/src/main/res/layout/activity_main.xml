@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Nœud ?"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/etSchoolId"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="ID école (ex. 12)"
+            android:inputType="number" />
+
+        <EditText
+            android:id="@+id/etSchoolCode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Code école (ex. DOU-BON-001)" />
+
+        <EditText
+            android:id="@+id/etMessage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Signalement (ex. Pompe brisée, 400 élèves sans eau)"
+            android:minLines="2" />
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="1. Enregistrer offline" />
+
+        <Button
+            android:id="@+id/btnQr"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="2. Afficher le QR" />
+
+        <ImageView
+            android:id="@+id/ivQr"
+            android:layout_width="256dp"
+            android:layout_height="256dp"
+            android:layout_gravity="center"
+            android:contentDescription="QR du bundle" />
+
+        <Button
+            android:id="@+id/btnScan"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="3. Scanner un QR" />
+
+        <Button
+            android:id="@+id/btnSync"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="4. Sync relai WiFi" />
+
+        <Button
+            android:id="@+id/btnUpload"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="5. Uploader vers Sentinel" />
+
+        <Button
+            android:id="@+id/btnRelay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Démarrer le relai" />
+    </LinearLayout>
+</ScrollView>

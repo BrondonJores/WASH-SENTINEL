@@ -27,10 +27,25 @@ export interface MeshBundle {
   max_hops?: number;
   hops: string[];
   checksum?: string;
+  // v1.1 additive (alignement BPv7).
+  destination?: string;
+  report_to?: string;
+  lifetime_seconds?: number;
+  previous_node?: string;
+  /** Budget Spray-and-Wait restant (défaut L=8). À 1 : livraison directe uniquement. */
+  copies_remaining?: number;
+  fragment_offset?: number;
+  fragment_total?: number;
+  custody_requested?: boolean;
+  priority?: 'normal' | 'high' | 'alert';
+  /** Réservé Phase 3 : signature Ed25519 du manifest. */
+  signature?: string;
 }
 
 const TTL_DAYS = 7;
 const DEFAULT_MAX_HOPS = 10;
+const DEFAULT_COPIES = 8;
+export const DEFAULT_DESTINATION = 'dtn://wash-sentinel/ingest';
 
 export function nodeId(): string {
   let id = localStorage.getItem('wash_mesh_node_id');
@@ -50,7 +65,8 @@ function uuid(): string {
 
 /** sha256 hex — WebCrypto, fallback FNV si indisponible (http non-secure). */
 export async function checksumOf(bundle: Omit<MeshBundle, 'checksum'>): Promise<string> {
-  const { checksum: _omit, ...rest } = bundle as MeshBundle;
+  // Immuables seuls : hops/previous_node/copies_remaining vivent à chaque saut.
+  const { checksum: _omit, hops: _h, previous_node: _p, copies_remaining: _c, ...rest } = bundle as MeshBundle;
   const raw = JSON.stringify(rest, Object.keys(rest).sort());
   try {
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
@@ -72,9 +88,12 @@ export async function createBundle(opts: {
   channel?: MeshBundle['channel'];
   ttlDays?: number;
   maxHops?: number;
+  copies?: number;
+  priority?: MeshBundle['priority'];
 }): Promise<MeshBundle> {
   const now = new Date();
-  const expires = new Date(now.getTime() + (opts.ttlDays ?? TTL_DAYS) * 86400_000);
+  const ttlDays = opts.ttlDays ?? TTL_DAYS;
+  const expires = new Date(now.getTime() + ttlDays * 86400_000);
   const me = nodeId();
   const bundle: MeshBundle = {
     v: 1,
@@ -88,18 +107,44 @@ export async function createBundle(opts: {
     expires_at: expires.toISOString(),
     max_hops: opts.maxHops ?? DEFAULT_MAX_HOPS,
     hops: [me],
+    destination: DEFAULT_DESTINATION,
+    lifetime_seconds: Math.round(ttlDays * 86400),
+    copies_remaining: opts.copies ?? DEFAULT_COPIES,
+    priority: opts.priority ?? 'normal',
   };
   bundle.checksum = await checksumOf(bundle);
   return bundle;
 }
 
-/** Ajoute mon hop si je ne suis pas déjà dans la chaîne. Retourne null si boucle/TTL/hops dépassés. */
-export function forwardBundle(bundle: MeshBundle, myNodeId: string = nodeId()): MeshBundle | null {
+export interface ForwardResult {
+  /** Copie à donner au contact (budget divisé). */
+  give: MeshBundle;
+  /** Nouveau budget à conserver sur ma copie. */
+  keepCopies: number;
+}
+
+/**
+ * Spray-and-Wait binaire : je donne floor(n/2) copies au contact et j'en
+ * garde ceil(n/2). Retourne null si boucle/TTL/hops dépassés ou s'il ne
+ * reste qu'une copie (livraison directe au serveur uniquement).
+ * Après un forward réussi, appeler `outbox.update(id, { copies_remaining })`.
+ */
+export function forwardBundle(bundle: MeshBundle, myNodeId: string = nodeId()): ForwardResult | null {
   if (bundle.hops.includes(myNodeId)) return null; // anti-boucle
   if (new Date(bundle.expires_at).getTime() <= Date.now()) return null; // TTL
   const hopCount = bundle.hops.length; // hops inclut l'origine
   if (hopCount >= (bundle.max_hops ?? DEFAULT_MAX_HOPS) + 1) return null;
-  return { ...bundle, hops: [...bundle.hops, myNodeId] };
+  const copies = bundle.copies_remaining ?? DEFAULT_COPIES;
+  if (copies <= 1) return null; // dernière copie : upload direct, plus de relai P2P
+  return {
+    give: {
+      ...bundle,
+      hops: [...bundle.hops, myNodeId],
+      previous_node: bundle.hops[bundle.hops.length - 1],
+      copies_remaining: Math.floor(copies / 2),
+    },
+    keepCopies: Math.ceil(copies / 2),
+  };
 }
 
 /** Payload compact pour QR code (base64url du JSON). ~1 Ko en texte. */
@@ -160,6 +205,15 @@ export class MeshOutbox {
     return true;
   }
 
+  /** Patch partiel (ex. décrémenter copies_remaining après un forward). */
+  update(bundleId: string, patch: Partial<MeshBundle>): boolean {
+    const current = this.items.get(bundleId);
+    if (!current) return false;
+    this.items.set(bundleId, { ...current, ...patch });
+    this.save();
+    return true;
+  }
+
   has(bundleId: string): boolean {
     return this.items.has(bundleId);
   }
@@ -183,7 +237,7 @@ export class MeshOutbox {
 }
 
 /** Échange opportuniste avec le relai : je donne mon outbox, je prends ce qui me manque. */
-export async function syncWithRelay(outbox: MeshOutbox, relayUrl: string): Promise<{ sent: number; received: number }> {
+export async function syncWithRelay(outbox: MeshOutbox, relayUrl: string): Promise<{ sent: number; received: number; acked: number }> {
   const res = await fetch(`${relayUrl}/v1/sync`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -194,9 +248,24 @@ export async function syncWithRelay(outbox: MeshOutbox, relayUrl: string): Promi
   let received = 0;
   for (const raw of data.bundles ?? []) {
     const forwarded = forwardBundle(raw);
-    if (forwarded && outbox.add(forwarded)) received++;
+    if (forwarded && outbox.add(forwarded.give)) received++;
   }
-  return { sent: data.stored ?? 0, received };
+  // Les bundles arrivés au serveur (via un autre nœud) sortent de ma file.
+  const ackedIds = (data.acked_ids ?? []) as string[];
+  outbox.remove(ackedIds.filter((id) => outbox.has(id)));
+  return { sent: data.stored ?? 0, received, acked: ackedIds.length };
+}
+
+/** Après un upload direct vers Laravel, je préviens le relai pour purger les files distantes. */
+export async function ackDelivered(bundleIds: string[], relayUrl: string): Promise<number> {
+  if (!bundleIds.length) return 0;
+  const res = await fetch(`${relayUrl}/v1/ack`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ node_id: nodeId(), ids: bundleIds }),
+  });
+  if (!res.ok) return 0;
+  return ((await res.json()) as { new?: number }).new ?? 0;
 }
 
 /** Upload final vers Laravel. Les bundles acceptés/doublons sont vidés de l'outbox. */
@@ -222,6 +291,16 @@ export async function uploadToLaravel(
         expires_at: b.expires_at,
         received_via_node_id: nodeId(),
         checksum: b.checksum,
+        destination_eid: b.destination,
+        report_to_eid: b.report_to,
+        lifetime_seconds: b.lifetime_seconds,
+        previous_node_id: b.previous_node,
+        copies_remaining: b.copies_remaining ?? DEFAULT_COPIES,
+        fragment_offset: b.fragment_offset,
+        fragment_total: b.fragment_total,
+        custody_requested: b.custody_requested ?? false,
+        priority: b.priority ?? 'normal',
+        signature: b.signature,
       })),
     }),
   });

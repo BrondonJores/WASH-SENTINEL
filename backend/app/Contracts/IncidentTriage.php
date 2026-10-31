@@ -8,5 +8,7 @@ use Illuminate\Http\UploadedFile;
 
 interface IncidentTriage
 {
-    public function ingest(School $school, string $channel, ?string $message, ?UploadedFile $audio, ?UploadedFile $photo, ?User $reporter = null, string $source = 'web'): array;
+    public function ingest(School $school, string $channel, ?string $message, ?UploadedFile $audio, ?UploadedFile $photo, ?User $reporter = null, string $source = 'web', ?array $overrides = null): array;
+
+    public function createManualIncident(School $school, array $data, User $author): \App\Models\Incident;
 }

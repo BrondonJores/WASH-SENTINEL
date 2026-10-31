@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Admin\WashModelProfileController;
 use App\Http\Controllers\Api\Admin\WashSttProfileController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\WashAgentController;
+use App\Http\Controllers\Api\WashAgentProposalController;
 use App\Http\Controllers\Api\WashIncidentController;
 use App\Http\Controllers\Api\WashMeshController;
 use App\Http\Controllers\Api\WashSmsController;
@@ -47,6 +48,8 @@ Route::prefix('v1/wash')->group(function () {
         Route::post('/incidents/{incident}/override-priority', [WashIncidentController::class, 'overridePriority'])->middleware('permission:override ai priority');
         Route::post('/incidents/{incident}/maintenance-logs', [WashIncidentController::class, 'storeMaintenanceLog'])->middleware('permission:update incident status');
         Route::get('/assignable-users', [WashIncidentController::class, 'assignableUsers'])->middleware('permission:assign incidents');
+        Route::post('/agent/proposals/{proposal}/confirm', [WashAgentProposalController::class, 'confirm'])->middleware('throttle:30,1');
+        Route::post('/agent/proposals/{proposal}/cancel', [WashAgentProposalController::class, 'cancel'])->middleware('throttle:30,1');
         Route::get('/library', [WashConversationController::class, 'library']);
         Route::apiResource('/projects', WashProjectController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::post('/conversations', [WashConversationController::class, 'store']);

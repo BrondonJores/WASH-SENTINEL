@@ -6,8 +6,9 @@
 [![AI](https://img.shields.io/badge/AI-Meta%20Llama%20%7C%20Omnilingual%20ASR%20%7C%20WhatsApp-0668E1)]()
 [![Fresh code](https://img.shields.io/badge/code-100%25%20fresh%20commits-green)]()
 [![Status](https://img.shields.io/badge/status-working%20MVP-success)]()
+[![CI](https://github.com/BrondonJores/WASH-SENTINEL/actions/workflows/ci.yml/badge.svg)](https://github.com/BrondonJores/WASH-SENTINEL/actions/workflows/ci.yml)
 
-> 🎬 **Demo video:** _coming soon_ (`docs/demo.mp4`) · **Live jury URL:** _on request_
+> 🎬 **Demo video:** _coming soon_ (`docs/demo.mp4`) · **Live jury URL:** _on request_ · **Runbook démo :** [`docs/DEMO.md`](docs/DEMO.md)
 
 > **One omnipresent AI agent instead of dashboards.** School directors report a broken pump by text, voice note, photo or WhatsApp — in French or a local language like Douala. Sentinel triages, deduplicates, prioritizes, dispatches fairly across the territory, and advises: *repair or replace?*
 
@@ -43,6 +44,7 @@ WASH Sentinel turns every chaotic field report into **one triaged, deduplicated,
 4. **Repair-vs-repair economics** — the copilot computes cumulative repair cost vs. new-equipment cost (MTBF, school-days lost) and says *stop patching, replace with solar pumping*.
 5. **Model independence** — switch local ↔ cloud LLM/STT **at runtime from the admin Settings page**. No redeploy, no code change. API keys encrypted at rest.
 6. **Runs where it's needed** — full local stack on a CPU-only i5 (Llama 3.2 3B, ONNX int8 ASR). Cloud profiles available for zero-GPU demo day.
+7. **Reports without internet** — an offline mesh (store-and-forward bundles over QR/Bluetooth/WiFi, SMS fallback, Android relay app) carries remote schools' reports hop by hop to the first connected phone. See [`mesh/`](mesh/) and the field page `/m`.
 
 ## 4. Not a CRUD: the engineering under the hood 🛠️
 

@@ -157,8 +157,20 @@ class FallbackSummaryTest(unittest.IsolatedAsyncioTestCase):
 
     def test_report(self) -> None:
         text = self.loop._fallback_answer([("prepare_report", {
-            "description": "Fuite", "matched_school": {"school_name": "Ecole X"}})])
+            "complete": True, "missing_labels": [],
+            "slots": {"school_name": "Ecole X", "description": "Fuite"}})])
         self.assertIn("Ecole X", text)
+        self.assertIn("carte", text)
+
+    def test_report_incomplete_names_missing(self) -> None:
+        text = self.loop._fallback_answer([("prepare_report", {
+            "complete": False, "missing_labels": ["l'école concernée"], "slots": {}})])
+        self.assertIn("l'école concernée", text)
+
+    def test_proposal(self) -> None:
+        text = self.loop._fallback_answer([("prepare_incident", {
+            "complete": True, "missing_labels": [], "action": "create_incident", "slots": {}})])
+        self.assertIn("Intervention", text)
         self.assertIn("carte", text)
 
     def test_territory(self) -> None:

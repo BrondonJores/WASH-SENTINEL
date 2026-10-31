@@ -172,6 +172,10 @@ export default function MeshPage() {
       </div>
 
       <Card className="p-4 text-xs text-ink-soft">
+        <p>
+          Page terrain publique (sans login, iOS/Android) : <a className="font-medium text-accent underline" href="/m">/m</a> —
+          saisie offline, QR réel, upload, secours SMS.
+        </p>
         <p>Démo du protocole store-and-forward : déduplication par <span className="font-mono">bundle_id</span>, anti-boucle via <span className="font-mono">hops</span>, TTL 7 jours, <span className="font-mono">max_hops</span> 10. Le relai mesh (<span className="font-mono">:8001</span>) et le SDK <span className="font-mono">mesh/sdk/mesh-sdk.ts</span> implémentent le même protocole pour les vrais téléphones.</p>
       </Card>
     </div>
