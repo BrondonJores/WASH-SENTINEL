@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 from .agent_tools import AGENT_TOOLS, TOOL_EXECUTORS
 from .providers import BaseLLMProvider
@@ -12,7 +12,7 @@ SYSTEM_PROMPT = """Tu es Sentinel, l'agent omniprésent de WASH Sentinel, platef
 de l'eau et de l'assainissement dans les écoles du Cameroun.
 
 Règles impératives :
-- Réponds UNIQUEMENT en français, de façon concise (2 à 4 phrases).
+- Réponds de façon concise (2 à 4 phrases).
 - Ne devine jamais : utilise tes outils pour obtenir les faits (écoles, incidents, chiffres).
 - Si l'utilisateur nomme une école ou un incident, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
@@ -23,6 +23,7 @@ Règles impératives :
 - Si un outil renvoie une erreur, corrige tes arguments avec les valeurs exactes fournies et réessaie au lieu d'abandonner.
 - N'appelle jamais deux fois le même outil avec les mêmes arguments : quand tu as le résultat, réponds.
 - Les données détaillées sont affichées dans des cartes séparées : ne recopie pas tout dans ta réponse.
+- Réponds toujours dans la langue du dernier message (français par défaut) ; termes techniques WASH traduisibles, références/codes inchangés ; si l'utilisateur écrit en langue locale, réponds en français simple et propose de reformuler.
 """
 
 MAX_ITERATIONS = 5
@@ -58,6 +59,82 @@ REFUSAL_PATTERNS = (
     "désolé, mais je ne peux",
     "impossible de vous aider",
 )
+
+
+# Détection de langue FR/EN : heuristique déterministe à base de mots-outils.
+# Les mots identiques ou ambigus dans les deux langues (« on », « un », « a »,
+# « or », « plus », « resume », « me ») sont exclus des deux listes.
+_EN_TOOL_WORDS = frozenset(
+    "the and is are was were be been being of to in at for with from "
+    "that this these those what which who where when how why there their "
+    "your you we our my will would can could should have has had do does did "
+    "show list need needs help please hello hi thanks thank give "
+    "school schools water".split()
+)
+
+_FR_TOOL_WORDS = frozenset(
+    "le la les des du de une est sont était etait été ete être etre ont "
+    "et ou mais si alors que qui quoi quel quelle quels quelles "
+    "comment pourquoi où quand combien avec pour dans sur par moins "
+    "cette ces cela ça votre vos notre nos nous vous ils elles "
+    "bonjour salut merci affiche montre liste listes panne pannes "
+    "école ecole écoles ecoles eau résume état etat besoin aide".split()
+)
+
+_TOKEN_RE = re.compile(r"[a-zàâäéèêëîïôöùûüç]+")
+
+
+def _detect_lang(message: str) -> Literal["fr", "en"]:
+    """Détecte la langue du message : 'fr' ou 'en'.
+
+    Heuristique déterministe : on compte les mots-outils anglais puis français
+    (scores indépendants, un mot ne vote que pour sa langue). Le score le plus
+    élevé gagne ; égalité ou message vide (ou sans mot-outil) → 'fr' par défaut.
+    Les langues locales (douala, etc.) ne sont PAS détectées par mots : elles
+    arrivent via le contexte école (transcription STT) et restent acceptées en
+    entrée — le prompt demande alors une réponse en français simple.
+    """
+    tokens = _TOKEN_RE.findall((message or "").lower())
+    en_score = sum(1 for token in tokens if token in _EN_TOOL_WORDS)
+    fr_score = sum(1 for token in tokens if token in _FR_TOOL_WORDS)
+    if en_score > fr_score:
+        return "en"
+    return "fr"
+
+
+def _normalize_lang(value: Any) -> Literal["fr", "en"] | None:
+    """Normalise un code langue explicite ('en', 'en-US', 'fr_FR'...)."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower().replace("_", "-")
+    if normalized.startswith("en"):
+        return "en"
+    if normalized.startswith("fr"):
+        return "fr"
+    return None
+
+
+def _resolve_lang(req: AgentChatRequest) -> Literal["fr", "en"]:
+    """Langue de réponse : langue explicite (requête/contexte) puis détection."""
+    for candidate in (getattr(req, "language", None), getattr(req, "lang", None)):
+        lang = _normalize_lang(candidate)
+        if lang is not None:
+            return lang
+    try:
+        context = req.context.model_dump()
+    except (AttributeError, ValueError):
+        context = {}
+    if isinstance(context, dict):
+        for key in ("language", "lang", "locale"):
+            lang = _normalize_lang(context.get(key))
+            if lang is not None:
+                return lang
+    return _detect_lang(req.message)
+
+
+def _build_system_prompt(lang: str) -> str:
+    """Prompt système + langue de réponse explicite transmise au provider."""
+    return f"{SYSTEM_PROMPT}\nLangue de réponse : {lang}."
 
 
 def _fmt_int(value: Any) -> str:
@@ -242,7 +319,8 @@ class AgentLoop:
 
     async def chat(self, req: AgentChatRequest) -> AgentChatResponse:
         context = req.context.model_dump()
-        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        lang = _resolve_lang(req)
+        messages: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(lang)}]
         for turn in req.history[-6:]:
             messages.append({"role": turn.role, "content": turn.content})
         messages.append({"role": "user", "content": req.message})

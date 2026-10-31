@@ -327,3 +327,78 @@ class FollowUpsTest(unittest.TestCase):
 
     def test_data_tool_no_chips(self) -> None:
         self.assertEqual(_follow_ups("x", [("rank_schools_by_need", {"ranking": []})], self.CTX), [])
+
+
+# ---------------------------------------------------------------------------
+# Multilingue (ajouts) : détection FR/EN + langue transmise au provider.
+# ---------------------------------------------------------------------------
+from app.agent_loop import SYSTEM_PROMPT, _build_system_prompt, _detect_lang
+
+
+class DetectLangTest(unittest.TestCase):
+    def test_french_sentence(self) -> None:
+        self.assertEqual(_detect_lang("Quelles écoles ont le plus besoin d'aide ?"), "fr")
+
+    def test_french_short_defaults_fr(self) -> None:
+        self.assertEqual(_detect_lang("résume"), "fr")
+        self.assertEqual(_detect_lang("Bonjour"), "fr")
+
+    def test_english_sentence(self) -> None:
+        self.assertEqual(_detect_lang("Which schools need the most help?"), "en")
+        self.assertEqual(_detect_lang("Show me the water points"), "en")
+
+    def test_empty_is_french(self) -> None:
+        self.assertEqual(_detect_lang(""), "fr")
+        self.assertEqual(_detect_lang("   "), "fr")
+        self.assertEqual(_detect_lang("123 !?"), "fr")
+
+    def test_tie_is_french(self) -> None:
+        self.assertEqual(_detect_lang("show montre"), "fr")
+        self.assertEqual(_detect_lang("the le"), "fr")
+
+
+class LangClauseTest(unittest.TestCase):
+    CLAUSE = "Réponds toujours dans la langue du dernier message"
+
+    def test_system_prompt_contains_clause(self) -> None:
+        self.assertIn(self.CLAUSE, SYSTEM_PROMPT)
+        self.assertIn("français par défaut", SYSTEM_PROMPT)
+        self.assertIn("références/codes inchangés", SYSTEM_PROMPT)
+        self.assertIn("langue locale", SYSTEM_PROMPT)
+
+    def test_french_only_rule_removed_for_multilingual(self) -> None:
+        self.assertNotIn("Réponds UNIQUEMENT en français", SYSTEM_PROMPT)
+        self.assertIn("2 à 4 phrases", SYSTEM_PROMPT)
+
+    def test_built_prompt_carries_clause_and_lang(self) -> None:
+        self.assertIn(self.CLAUSE, _build_system_prompt("en"))
+        self.assertIn("Langue de réponse : en.", _build_system_prompt("en"))
+
+
+class RecordingLLM(StubLLM):
+    """Stub enregistreur : rejoue le script et capture les messages envoyés."""
+
+    def __init__(self, script: list[dict]):
+        super().__init__(script)
+        self.seen_messages: list[dict] = []
+
+    async def chat(self, messages, tools=None):  # noqa: ANN001, ANN202
+        self.seen_messages = list(messages)
+        return await super().chat(messages, tools)
+
+
+class LangWiringTest(unittest.IsolatedAsyncioTestCase):
+    async def test_english_message_sends_en(self) -> None:
+        stub = RecordingLLM([_say("Hello! Here is the summary.")])
+        res = await AgentLoop(stub).chat(AgentChatRequest(
+            message="Which schools need the most help?", context=CONTEXT))
+        self.assertEqual(res.answer, "Hello! Here is the summary.")
+        self.assertEqual(stub.seen_messages[0]["role"], "system")
+        self.assertIn("Langue de réponse : en.", stub.seen_messages[0]["content"])
+
+    async def test_french_message_sends_fr(self) -> None:
+        stub = RecordingLLM([_say("Bonjour !")])
+        res = await AgentLoop(stub).chat(AgentChatRequest(
+            message="Bonjour", context=CONTEXT))
+        self.assertEqual(res.answer, "Bonjour !")
+        self.assertIn("Langue de réponse : fr.", stub.seen_messages[0]["content"])
