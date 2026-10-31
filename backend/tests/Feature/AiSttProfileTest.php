@@ -100,4 +100,21 @@ class AiSttProfileTest extends TestCase
             ->deleteJson("/api/v1/admin/stt-profiles/{$profile->id}")
             ->assertStatus(422);
     }
+
+    public function test_reseed_preserves_active_choice(): void
+    {
+        // start.sh re-seed à chaque boot : le choix actif de l'admin doit survivre.
+        $this->seed(\Database\Seeders\AiSttProfileSeeder::class);
+        AiSttProfile::query()->update(['is_active' => false]);
+        $omni = AiSttProfile::where('name', 'Omnilingual local (langues locales)')->firstOrFail();
+        $omni->update(['is_active' => true]);
+
+        $this->seed(\Database\Seeders\AiSttProfileSeeder::class);
+
+        $this->assertTrue($omni->fresh()->is_active);
+        $this->assertFalse(
+            AiSttProfile::where('name', 'Whisper local (français)')->firstOrFail()->is_active
+        );
+        $this->assertEquals($omni->id, AiSttProfile::active()->id);
+    }
 }

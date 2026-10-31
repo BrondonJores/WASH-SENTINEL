@@ -9,52 +9,56 @@ class AiSttProfileSeeder extends Seeder
 {
     public function run(): void
     {
-        AiSttProfile::updateOrCreate(
-            ['name' => 'Whisper local (français)'],
-            [
-                'driver' => 'whisper_cpp',
-                'base_url' => null,
-                'model' => env('VOICE_STT_MODEL', '/models/whisper/ggml-base.bin'),
-                'tokens_path' => null,
-                'api_key' => null,
-                'default_language' => 'fr',
-                'threads' => 2,
-                'timeout' => 120,
-                'is_active' => true,
-                'is_default' => true,
-            ]
-        );
+        $this->seedProfile('Whisper local (français)', [
+            'driver' => 'whisper_cpp',
+            'base_url' => null,
+            'model' => env('VOICE_STT_MODEL', '/models/whisper/ggml-base.bin'),
+            'tokens_path' => null,
+            'api_key' => null,
+            'default_language' => 'fr',
+            'threads' => 2,
+            'timeout' => 120,
+        ], true, true);
 
-        AiSttProfile::updateOrCreate(
-            ['name' => 'Omnilingual local (langues locales)'],
-            [
-                'driver' => 'omnilingual_onnx',
-                'base_url' => null,
-                'model' => env('OMNI_STT_MODEL', '/models/omnilingual/model.int8.onnx'),
-                'tokens_path' => env('OMNI_STT_TOKENS', '/models/omnilingual/tokens.txt'),
-                'api_key' => null,
-                'default_language' => 'dua_Latn',
-                'threads' => 2,
-                'timeout' => 180,
-                'is_active' => false,
-                'is_default' => false,
-            ]
-        );
+        $this->seedProfile('Omnilingual local (langues locales)', [
+            'driver' => 'omnilingual_onnx',
+            'base_url' => null,
+            'model' => env('OMNI_STT_MODEL', '/models/omnilingual/model.int8.onnx'),
+            'tokens_path' => env('OMNI_STT_TOKENS', '/models/omnilingual/tokens.txt'),
+            'api_key' => null,
+            'default_language' => 'dua_Latn',
+            'threads' => 2,
+            'timeout' => 180,
+        ], false, false);
 
-        AiSttProfile::updateOrCreate(
-            ['name' => 'Cloud Whisper API'],
-            [
-                'driver' => 'cloud_whisper',
-                'base_url' => 'https://api.openai.com/v1',
-                'model' => 'whisper-1',
-                'tokens_path' => null,
-                'api_key' => null,
-                'default_language' => 'fr',
-                'threads' => 2,
-                'timeout' => 120,
-                'is_active' => false,
-                'is_default' => false,
-            ]
+        $this->seedProfile('Cloud Whisper API', [
+            'driver' => 'cloud_whisper',
+            'base_url' => 'https://api.openai.com/v1',
+            'model' => 'whisper-1',
+            'tokens_path' => null,
+            'api_key' => null,
+            'default_language' => 'fr',
+            'threads' => 2,
+            'timeout' => 120,
+        ], false, false);
+    }
+
+    /**
+     * Crée le profil avec les flags initiaux, puis rafraîchit la config seule.
+     * start.sh re-seed à chaque boot : les flags is_active/is_default choisis
+     * par l'admin dans Réglages ne sont JAMAIS réécrits ici.
+     */
+    private function seedProfile(string $name, array $config, bool $active, bool $default): void
+    {
+        $profile = AiSttProfile::firstOrCreate(
+            ['name' => $name],
+            $config + ['is_active' => $active, 'is_default' => $default]
         );
+        // Ne jamais écraser une clé API posée via Réglages (le seeder n'en fournit aucune).
+        $update = $config;
+        if (($update['api_key'] ?? null) === null && $profile->getRawOriginal('api_key')) {
+            unset($update['api_key']);
+        }
+        $profile->update($update);
     }
 }

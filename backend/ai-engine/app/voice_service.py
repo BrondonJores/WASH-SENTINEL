@@ -21,28 +21,35 @@ class VoiceService:
         language: str = "fr",
         stt: BaseSTTProvider | None = None,
     ) -> VoiceTranscriptionResponse:
-        """Transcrit un audio via le provider STT actif (Whisper, Omnilingual ou cloud)."""
+        """Transcrit un audio via le provider STT actif (Whisper, Omnilingual ou cloud).
+
+        Lève l'erreur du provider telle quelle : main.py la convertit en HTTP 500
+        explicite. Ne JAMAIS fabriquer de transcription de repli (elle alimenterait
+        le triage et la création d'incidents avec un faux signalement).
+        """
         provider = stt or self._default_stt or default_stt()
-        try:
-            result = provider.transcribe(audio_bytes, filename, language)
-            return VoiceTranscriptionResponse(
-                transcript=result.get("transcript", ""),
-                language=result.get("language", language),
-            )
-        except Exception:
-            return VoiceTranscriptionResponse(
-                transcript="[Transcription locale : Fuite importante constatée sur la canalisation principale de l'école.]",
-                language=language,
-            )
+        result = provider.transcribe(audio_bytes, filename, language)
+        return VoiceTranscriptionResponse(
+            transcript=result.get("transcript", ""),
+            language=result.get("language", language),
+        )
 
     def synthesize(self, text: str, voice: str = "fr_FR-upmc-medium") -> VoiceSynthesisResponse:
-        """Synthétise un texte en audio via Piper TTS pour confirmation vocale."""
-        if not os.path.isfile(self.piper_bin) or not os.path.isfile(self.piper_model):
-            dummy_wav = b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00D\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
-            return VoiceSynthesisResponse(
-                audio_base64=base64.b64encode(dummy_wav).decode("utf-8"),
-                mime_type="audio/wav",
-                text=text,
+        """Synthétise un texte en audio via Piper TTS pour confirmation vocale.
+
+        Lève une erreur actionnable si Piper ou la voix est absent (main.py répond
+        HTTP 500 explicite, le lecteur vocal l'affiche). Ne JAMAIS renvoyer un
+        faux WAV silencieux.
+        """
+        if not os.path.isfile(self.piper_bin):
+            raise RuntimeError(
+                f"Piper TTS introuvable ({self.piper_bin}) : ajoutez piper-tts aux dépendances "
+                "ou réglez VOICE_TTS_BINARY."
+            )
+        if not os.path.isfile(self.piper_model):
+            raise RuntimeError(
+                f"Voix Piper introuvable ({self.piper_model}) : téléchargez "
+                "fr_FR-upmc-medium.onnx (+ .onnx.json) dans models/piper/."
             )
 
         with tempfile.TemporaryDirectory(prefix="wash-tts-") as tmpdir:

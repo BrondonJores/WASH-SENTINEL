@@ -9,8 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  *              (le header x-stt-language a priorité sur le champ language)
  *   Réponse  : JSON { transcript: string, language: string,
  *                      duration_seconds: number | null }
- *   ⚠ Aucune route Laravel /v1/wash/* ne relaie la transcription (seul
- *     POST /v1/wash/agent/synthesize existe) : voir le guide de câblage.
+ *   Relais Laravel : POST /v1/wash/agent/transcribe { audio, language? }.
  *
  * CONTRAT TTS CONSTATÉ (main.py → POST /v1/voice/synthesize, relais Laravel
  * POST /v1/wash/agent/synthesize { text } → passthrough JSON identique)

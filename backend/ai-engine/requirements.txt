@@ -6,3 +6,4 @@ numpy>=1.26.0
 python-multipart>=0.0.9
 pillow>=10.4.0
 sherpa-onnx>=1.12
+piper-tts>=1.2.0

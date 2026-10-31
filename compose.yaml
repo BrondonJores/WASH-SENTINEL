@@ -85,6 +85,8 @@ services:
             OMNI_STT_TOKENS: '/models/omnilingual/tokens.txt'
             VOICE_STT_BINARY: '/opt/voice/bin/whisper-cli'
             VOICE_STT_MODEL: '/models/whisper/ggml-base.bin'
+            VOICE_TTS_BINARY: '/usr/local/bin/piper'
+            VOICE_TTS_MODEL: '/models/piper/fr_FR-upmc-medium.onnx'
         volumes:
             - './models:/models'
         networks:
