@@ -671,3 +671,46 @@ class ContradictionGuardLoopTest(unittest.IsolatedAsyncioTestCase):
             context=self._log_context()))
         self.assertIn("WASH-2026-0005", res.answer)
         self.assertEqual(stub.calls, 2)
+
+
+class CreateRoutingVoiceTest(unittest.TestCase):
+    """TACHE 1 : formulations vocales naturelles -> create (imperatifs nus)."""
+
+    def test_create_enregistre_intervention(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(route_intent("enregistre une intervention"), "create")
+
+    def test_create_enregistre_reparation_capitalized(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(
+            route_intent("Enregistre une réparation de pompe à Ngok"), "create")
+
+    def test_create_note_travaux(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(route_intent("note les travaux"), "create")
+
+    def test_create_note_reparation_cout(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(route_intent("note une réparation à 20000 XAF"), "create")
+
+    def test_create_ajoute_reparation(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(route_intent("ajoute une réparation"), "create")
+
+    def test_create_mets_journal(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(route_intent("mets a jour le journal"), "create")
+
+
+class ListNonRegressionVoiceTest(unittest.TestCase):
+    """TACHE 1 : non-regression consultation du passe -> list."""
+
+    def test_list_interventions_realisees_aujourdhui(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(
+            route_intent("interventions realisees aujourd hui"), "list")
+
+    def test_list_travaux_realises_semaine(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(
+            route_intent("quels travaux réalisés cette semaine ?"), "list")

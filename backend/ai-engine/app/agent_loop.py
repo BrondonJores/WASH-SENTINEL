@@ -17,7 +17,7 @@ Règles impératives :
 - Ne devine jamais : utilise tes outils pour obtenir les faits (écoles, incidents, chiffres).
 - Si l'utilisateur nomme une école ou un incident, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
-- Si l'utilisateur veut créer (signaler une panne, créer une intervention, journaliser des travaux) : rassemble TOUJOURS le dossier complet — école, description ou titre, catégorie, urgence, élèves affectés (ou incident et coût pour un journal). Si tout est donné en une phrase, appelle directement l'outil prepare_* ; sinon pose des questions courtes (2 éléments maximum par message) jusqu'au dossier complet. Si l'utilisateur répond par un mot seul ou un nom (chip cliquable), reprends le dossier en cours avec cette valeur au lieu de reposer la même question.
+- Si l'utilisateur veut créer (signaler une panne, créer une intervention, journaliser des travaux) : appelle IMMÉDIATEMENT l'outil prepare_* adapté même si le dossier est partiel (zéro ou un seul argument suffit — l'outil retourne missing + questions pré-formulées) ; ne pose JAMAIS de questions avant ce premier appel. Rassemble ensuite TOUJOURS le dossier complet — école, description ou titre, catégorie, urgence, élèves affectés (ou incident et coût pour un journal) — en posant les questions courtes retournées (2 éléments maximum par message) jusqu'au dossier complet. Si l'utilisateur répond par un mot seul ou un nom (chip cliquable), reprends le dossier en cours avec cette valeur au lieu de reposer la même question. Exemple : « enregistre une intervention » → appelle prepare_maintenance_log({}) sans attendre, puis demande « Quel incident concerné ? » et « Quel coût en XAF ? ». Seul l'humain confirme via la carte Confirmer : n'annonce jamais un enregistrement effectué.
 - Quand un outil prepare_* répond complete=true, présente le récapitulatif et demande de cliquer Confirmer (ou de répondre « oui »). N'annonce jamais un enregistrement effectué : seul l'humain valide, y compris pour préciser une école introuvable ou plusieurs incidents possibles (propose les choix fournis — school_choices, incident_choices — au lieu d'inventer ; si une carte de choix s'affiche, invite à cliquer sur le bon incident).
 - Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).\n- Pour toute carte, visualisation géographique ou question 'où' : appelle territory_overview (la carte interactive est générée).\n- Pour tout briefing, dossier, diaporama ou synthèse exécutive : appelle build_briefing (la présentation est générée).
 - Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
@@ -63,9 +63,27 @@ LIST_INTENT_HINTS = (
 )
 
 CREATE_INTENT_HINTS = (
-    "crée", "créer", "cree", "creer", "ajoute", "nouveau", "nouvelle",
-    "journalise", "enregistre", "signale", "déclare", "declare",
+    "crée", "créer", "cree", "creer", "création", "creation",
+    "ajoute", "ajout", "ajouté", "ajouter",
+    "nouveau", "nouvelle",
+    "journalise", "journaliser", "journalisé",
+    "enregistre", "enregistrer", "enregistré", "enregistrement",
+    "signale", "signaler", "signalé",
+    "déclare", "declare",
     "prépare", "prepare", "planifie",
+    "note", "noté",
+    # Formes impératives nues avec objet direct.
+    "enregistre une", "enregistre des", "enregistre l'", "enregistre la", "enregistre le",
+    "note une", "note les", "note des", "note la", "note le",
+    "ajoute une", "ajoute des", "ajoute la", "ajoute le",
+    "crée une", "cree une", "signale une", "déclare une", "declare une",
+    "journalise une", "journalise des",
+    # Mise à jour du journal (formulation complète, sans ambiguïté).
+    "mets à jour le journal", "mets a jour le journal",
+    "met à jour le journal", "met a jour le journal",
+    "mettre à jour le journal", "mettre a jour le journal",
+    "mise à jour du journal", "mise a jour du journal",
+    "actualise le journal", "actualiser le journal", "maj le journal",
 )
 
 

@@ -430,3 +430,103 @@ class TolerantSchoolFilterTest(unittest.TestCase):
         self.assertEqual(res["applied_filters"],
                          {"date": "2026-10-29", "school_raw": None,
                           "school_matched": True})
+
+
+class PartialSlotFillingTest(unittest.TestCase):
+    """TACHE 2 : prepare_maintenance_log accepte tout sous-ensemble d'args."""
+
+    SLOT_CONTEXT = {
+        "schools": [
+            {"school_id": 1, "school_name": "École Publique de Bonanjo",
+             "district": "Wouri"},
+        ],
+        "incidents": [
+            {"id": 5, "school_id": 1, "reference_code": "WASH-2026-0005",
+             "title": "Pompe cassée", "status": "reported", "urgency": "high",
+             "affected_students": 100},
+        ],
+    }
+
+    def test_partial_incident_only(self) -> None:
+        res = TOOL_EXECUTORS["prepare_maintenance_log"](
+            {"incident": 5}, self.SLOT_CONTEXT)
+        self.assertFalse(res["complete"])
+        self.assertEqual(res["missing"], ["cost_amount"])
+        self.assertEqual(len(res["questions"]), 1)
+        self.assertIn("coût", res["questions"][0].lower())
+        self.assertEqual(res["slots"]["incident_id"], 5)
+
+    def test_partial_cost_only(self) -> None:
+        res = TOOL_EXECUTORS["prepare_maintenance_log"](
+            {"cost_amount": 50000}, self.SLOT_CONTEXT)
+        self.assertFalse(res["complete"])
+        self.assertEqual(res["missing"], ["incident"])
+        self.assertEqual(len(res["questions"]), 1)
+        self.assertIn("incident", res["questions"][0].lower())
+
+    def test_partial_empty_returns_missing_and_two_questions(self) -> None:
+        res = TOOL_EXECUTORS["prepare_maintenance_log"]({}, self.SLOT_CONTEXT)
+        self.assertFalse(res["complete"])
+        self.assertEqual(res["missing"], ["incident", "cost_amount"])
+        self.assertEqual(len(res["questions"]), 2)
+        for question in res["questions"]:
+            self.assertTrue(question.strip().endswith("?"))
+
+
+class RepairTrendsEnrichedTest(unittest.TestCase):
+    """TACHE 4 : payload tendances enrichi, forme legacy inchangee."""
+
+    @staticmethod
+    def _ctx() -> dict:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        stamp = now.replace(day=1).isoformat()
+        return {
+            "schools": [
+                {"school_id": 1, "school_name": "E1", "district": "Wouri"},
+                {"school_id": 2, "school_name": "E2", "district": "Wouri"},
+            ],
+            "maintenance_logs": [
+                {"school_id": 1, "repaired_at": stamp, "cost_amount": 90000,
+                 "currency": "XAF", "days_without_service": 2},
+                {"school_id": 2, "repaired_at": stamp, "cost_amount": 10000,
+                 "currency": "XAF", "days_without_service": 1},
+            ],
+            "recent_incidents": [
+                {"school_id": 1, "reported_at": stamp, "urgency": "critical"},
+                {"school_id": 2, "reported_at": stamp, "urgency": "low"},
+            ],
+        }
+
+    def test_enriched_keys_present(self) -> None:
+        res = TOOL_EXECUTORS["repair_trends"](
+            {"school": 1, "months": 2}, self._ctx())
+        self.assertNotIn("error", res)
+        self.assertIn("per_school", res)
+        self.assertIn("by_urgency", res)
+        self.assertIn("totals", res)
+        self.assertLessEqual(len(res["per_school"]), 5)
+        top = res["per_school"][0]
+        self.assertIn("school_name", top)
+        self.assertIn("cost", top)
+        self.assertIn("incidents", top)
+        self.assertEqual(
+            set(res["by_urgency"]), {"critique", "haute", "moyenne", "basse"})
+        self.assertEqual(res["by_urgency"]["critique"], 1)
+        self.assertEqual(res["by_urgency"]["basse"], 1)
+        for key in ("cost", "incidents", "days"):
+            self.assertIn(key, res["totals"])
+
+    def test_legacy_shape_unchanged(self) -> None:
+        res = TOOL_EXECUTORS["repair_trends"](
+            {"school": 1, "months": 2}, self._ctx())
+        for key in ("school_id", "school_name", "months", "insight",
+                    "labels", "datasets", "figures"):
+            self.assertIn(key, res)
+        self.assertEqual(res["school_id"], 1)
+        self.assertEqual(res["months"], 2)
+        self.assertEqual(len(res["labels"]), 2)
+        self.assertEqual(len(res["datasets"]), 3)
+        for key in ("total_cost", "currency", "total_incidents",
+                    "total_days_lost", "avg_cost_per_month", "trend_direction"):
+            self.assertIn(key, res["figures"])

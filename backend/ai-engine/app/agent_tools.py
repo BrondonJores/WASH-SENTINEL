@@ -230,6 +230,17 @@ SLOT_LABELS = {
     "cost_amount": "le coût de l'intervention en XAF",
 }
 
+SLOT_QUESTIONS = {
+    "school": "Quelle école est concernée ?",
+    "description": "Décrivez la panne en quelques mots ?",
+    "title": "Quel titre pour l'intervention ?",
+    "category": "Quelle catégorie (point d'eau, latrines, lavage des mains, évacuation) ?",
+    "urgency": "Quel niveau d'urgence (basse, moyenne, haute, critique) ?",
+    "affected_students": "Combien d'élèves sont affectés ?",
+    "incident": "Quel incident est concerné (titre ou référence) ?",
+    "cost_amount": "Quel est le coût de l'intervention en XAF ?",
+}
+
 ACTION_TITLES = {
     "create_report": "Nouveau signalement",
     "create_incident": "Nouvelle intervention",
@@ -342,12 +353,14 @@ def _recap(action: str, slots: dict[str, Any], missing_labels: list[str]) -> str
 
 def _proposal(action: str, slots: dict[str, Any], missing: list[str]) -> dict[str, Any]:
     labels = [SLOT_LABELS[m] for m in missing]
+    questions = [SLOT_QUESTIONS[m] for m in missing[:2] if m in SLOT_QUESTIONS]
     return {
         "action": action,
         "complete": not missing,
         "slots": slots,
         "missing": missing,
         "missing_labels": labels,
+        "questions": questions,
         "recap": _recap(action, slots, labels),
     }
 
@@ -601,6 +614,8 @@ def tool_territory_overview(args: dict[str, Any], context: dict[str, Any]) -> di
 
 def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Tendances mensuelles d'une école : pannes, coûts de réparation, jours sans service."""
+    district = str(args.get("district") or "").strip()
+    dlow = district.lower()
     school = _resolve_school(context, args.get("school"))
     if not school:
         return {"error": f"École '{args.get('school')}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."}
@@ -643,6 +658,69 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         insight = f"{share} % des coûts concentrés en {labels[peak].lower()}."
     else:
         insight = "Aucun coût de réparation sur la période."
+
+    # --- Enrichissement graphes (défensif, optionnel à la lecture) : portée
+    # district si un district est passé, sinon échelle du contexte entier. ---
+    scope_schools = [s for s in context.get("schools", [])
+                     if not dlow or str(s.get("district", "")).lower() == dlow]
+    scope_sids = {s.get("school_id") for s in scope_schools}
+    bucket_set = set(buckets)
+
+    def _in_window(value: Any) -> bool:
+        key = month_key(value)
+        return key in bucket_set if key else False
+
+    def _safe_cost(value: Any) -> float:
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _safe_days(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    scope_logs = [l for l in context.get("maintenance_logs", [])
+                  if l.get("school_id") in scope_sids and _in_window(l.get("repaired_at"))]
+    scope_recent = [i for i in context.get("recent_incidents", [])
+                    if i.get("school_id") in scope_sids]
+    per_rows: dict[Any, dict[str, Any]] = {}
+    for scope_school in scope_schools:
+        sid = scope_school.get("school_id")
+        per_rows[sid] = {
+            "school_id": sid,
+            "school_name": scope_school.get("school_name"),
+            "nom": scope_school.get("school_name"),
+            "cost": 0.0, "cout": 0.0, "incidents": 0, "pannes": 0,
+        }
+    for log in scope_logs:
+        row = per_rows.get(log.get("school_id"))
+        if row is not None:
+            row["cost"] = round(row["cost"] + _safe_cost(log.get("cost_amount")), 2)
+            row["cout"] = row["cost"]
+    windowed_recent = [i for i in scope_recent if _in_window(i.get("reported_at"))]
+    for incident in windowed_recent:
+        row = per_rows.get(incident.get("school_id"))
+        if row is not None:
+            row["incidents"] += 1
+            row["pannes"] += 1
+    per_school = sorted(per_rows.values(), key=lambda r: r["cost"], reverse=True)[:5]
+    urgency_fr = {"critical": "critique", "high": "haute",
+                  "medium": "moyenne", "low": "basse"}
+    by_urgency = {"critique": 0, "haute": 0, "moyenne": 0, "basse": 0}
+    for incident in scope_recent:
+        fr = urgency_fr.get(str(incident.get("urgency", "")).lower())
+        if fr:
+            by_urgency[fr] += 1
+    scope_cost = round(sum(_safe_cost(l.get("cost_amount")) for l in scope_logs), 2)
+    scope_days = sum(_safe_days(l.get("days_without_service")) for l in scope_logs)
+    totals = {
+        "cost": scope_cost, "cout": scope_cost,
+        "incidents": len(windowed_recent), "pannes": len(windowed_recent),
+        "days": scope_days, "jours": scope_days,
+    }
     return {
         "school_id": school_id,
         "school_name": school.get("school_name"),
@@ -662,6 +740,10 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
             "avg_cost_per_month": avg_cost,
             "trend_direction": trend,
         },
+        "district": district or None,
+        "per_school": per_school,
+        "by_urgency": by_urgency,
+        "totals": totals,
     }
 
 
@@ -862,12 +944,13 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "repair_trends",
-            "description": "Tendances mensuelles d'une école sur N mois : pannes, coûts de réparation, jours sans service. À utiliser pour tout historique, tendance ou graphique.",
+            "description": "Tendances mensuelles d'une école sur N mois : pannes, coûts de réparation, jours sans service. À utiliser pour tout historique, tendance ou graphique. Option district pour comparer les écoles (top 5, urgences, totaux).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"},
                     "months": {"type": "integer", "description": "Nombre de mois d'historique (1 à 12, défaut 3)"},
+                    "district": {"type": "string", "description": "Filtrer la comparaison inter-écoles sur un district (optionnel)"},
                 },
                 "required": ["school"],
             },
@@ -903,7 +986,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_report",
-            "description": "Prépare la CREATION d'un SIGNALEMENT (nouvelle panne signalée), dossier complet sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Exemple : « je signale une fuite aux latrines » → prepare_report ; « liste les signalements » → outils de lecture, pas cet outil.",
+            "description": "Prépare la CREATION d'un SIGNALEMENT (nouvelle panne signalée), dossier (complet ou partiel) sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Accepte tout sous-ensemble d'arguments, même vide, et retourne missing + questions courtes (2 max). Exemple : « je signale une fuite aux latrines » → prepare_report ; « liste les signalements » → outils de lecture, pas cet outil.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -920,7 +1003,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_incident",
-            "description": "Prépare la CREATION d'un INCIDENT (nouvelle panne), dossier complet sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Exemple : « signale une panne de pompe à Ngok » → prepare_incident ; « montre les interventions réalisées » → list_maintenance_logs, pas cet outil.",
+            "description": "Prépare la CREATION d'un INCIDENT (nouvelle panne), dossier (complet ou partiel) sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Accepte tout sous-ensemble d'arguments, même vide, et retourne missing + questions courtes (2 max). Exemple : « signale une panne de pompe à Ngok » → prepare_incident ; « montre les interventions réalisées » → list_maintenance_logs, pas cet outil.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -937,7 +1020,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_maintenance_log",
-            "description": "Prépare la CREATION d'un JOURNAL d'intervention (travaux à consigner), dossier complet sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER ou journaliser. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Exemple : « journalise des travaux à 50000 XAF » → prepare_maintenance_log ; « quelles interventions réalisées ? » → list_maintenance_logs, pas cet outil.",
+            "description": "Prépare la CREATION d'un JOURNAL d'intervention (travaux à consigner), dossier (complet ou partiel) sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER ou journaliser. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Accepte tout sous-ensemble d'arguments, même vide (incident seul, coût seul, notes seules), et retourne missing + questions courtes (2 max). Exemple : « journalise des travaux à 50000 XAF » → prepare_maintenance_log ; « quelles interventions réalisées ? » → list_maintenance_logs, pas cet outil.",
             "parameters": {
                 "type": "object",
                 "properties": {
