@@ -5,14 +5,17 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .agent_loop import AgentLoop
+from .ai_metrics import summary as ai_metrics_summary
 from .decision_agent import DecisionAgent
 from .duplicate_detector import DuplicateDetector
 from .epidemic_detector import EpidemicDetector
 from .equity_dispatcher import EquityDispatcher
 from .extractor import WashExtractor
-from .image_analyzer import ImageAnalyzer
+from .image_analyzer import ImageAnalyzer, is_vision_unavailable, visual_boost, visual_severity
 from .providers import PROVIDER_TYPES, OllamaProvider, llm_from_headers, provider_from_profile
 from .stt_providers import STT_PROVIDER_TYPES, stt_from_headers, stt_from_profile
+from .rag_store import RAGStore
+from .recurrence_watch import watch_recurrence
 from .repair_advisor import RepairAdvisor
 from .schemas import (
     DecisionCopilotRequest,
@@ -28,6 +31,10 @@ from .schemas import (
     ImageAnalysisResponse,
     ProviderTestRequest,
     ProviderTestResponse,
+    RagAskRequest,
+    RagAskResponse,
+    RecurrenceWatchRequest,
+    RecurrenceWatchResponse,
     SttTestRequest,
     SttTestResponse,
     RepairPlanRequest,
@@ -45,7 +52,7 @@ from .voice_service import VoiceService
 app = FastAPI(
     title="WASH Sentinel AI Engine",
     description="Moteur IA complet pour la priorisation équitable, la détection multimodale, l'aide à la décision stratégique (Réparer vs Remplacer) et l'optimisation logistique anti-favoritisme.",
-    version="1.3.0",
+    version="1.4.0",
 )
 
 # CORS pour autoriser Laravel et le frontend React
@@ -134,10 +141,13 @@ async def check_duplicates(request: Request, payload: DuplicateCheckRequest) -> 
 # ==========================================
 @app.post("/v1/wash/analyze-image", response_model=ImageAnalysisResponse)
 async def analyze_photo(request: Request, photo: UploadFile = File(...)) -> ImageAnalysisResponse:
-    """Analyse visuellement une photo de panne d'infrastructure via Llama 3.2 Vision."""
+    """Analyse visuellement une photo de panne d'infrastructure via le modèle vision configuré."""
     try:
         image_bytes = await photo.read()
-        return await ImageAnalyzer(_llm(request)).analyze(image_bytes)
+        result = await ImageAnalyzer(_llm(request)).analyze(image_bytes)
+        if is_vision_unavailable(result):
+            result.vision_unavailable = True
+        return result
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -272,12 +282,13 @@ async def triage_report(
     request: Request,
     text: str | None = Form(None),
     audio: UploadFile | None = File(None),
+    photo: UploadFile | None = File(None),
     school_name: str | None = Form(None),
 ) -> dict[str, Any]:
     """
     Endpoint Commando Unifié :
-    Accepte du texte ou un enregistrement audio, transcrit si besoin,
-    puis extrait, priorise et renvoie les données complètes pour Laravel.
+    Accepte du texte, un enregistrement audio ou une photo, transcrit/analyse si besoin,
+    puis extrait, priorise (bonus visuel éventuel) et renvoie les données complètes pour Laravel.
     """
     raw_content = text or ""
     transcription_meta = None
@@ -293,11 +304,26 @@ async def triage_report(
 
     extracted = await WashExtractor(_llm(request)).extract(raw_content, school_name)
 
+    visual_meta: dict[str, Any] | None = None
+    boost = 0.0
+    if photo is not None:
+        try:
+            vision = await ImageAnalyzer(_llm(request)).analyze(await photo.read())
+            severity = visual_severity(vision)
+            boost = visual_boost(severity)
+            visual_meta = {**vision.dict(), "visual_severity": severity, "visual_boost": boost,
+                           "vision_unavailable": is_vision_unavailable(vision)}
+        except Exception as exc:  # ceinture + bretelles (analyze() ne lève déjà jamais)
+            visual_meta = {"vision_error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+    base_score = extracted.data.recommended_priority_score
     return {
         "raw_text": raw_content,
         "is_voice": audio is not None,
         "voice_details": transcription_meta,
         "extraction": extracted.dict(),
+        "visual": visual_meta,
+        "priority_score_with_vision": round(min(100.0, base_score + boost), 1),
     }
 # ==========================================
 # 10. Administration des Providers (page Settings)
@@ -357,7 +383,45 @@ async def test_stt(payload: SttTestRequest) -> SttTestResponse:
     except Exception as exc:
         return SttTestResponse(ok=False, error=f"{type(exc).__name__}: {str(exc)[:300]}", language=payload.language)
 # ==========================================
-# 12. Agent Conversationnel Unifié (Dashboardless)
+# 12. Q&R Documentaire Sourcée (RAG)
+# ==========================================
+@app.post("/v1/wash/rag/ask", response_model=RagAskResponse)
+async def rag_ask(request: Request, payload: RagAskRequest) -> RagAskResponse:
+    """Q&R documentaire sourcée : répond UNIQUEMENT depuis les manuels app/data, sinon abstention."""
+    try:
+        llm = _llm(request)
+        store = RAGStore(embed_fn=llm.get_embedding)
+        result = await store.answer_with_sources(payload.question, llm, k=payload.k)
+        return RagAskResponse(answer=result["answer"], sources=result["sources"])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur RAG documentaire : {str(exc)}"
+        ) from exc
+
+
+# ==========================================
+# 13. Veille Prédictive des Pannes Récurrentes
+# ==========================================
+@app.post("/v1/wash/recurrence-watch", response_model=RecurrenceWatchResponse)
+def recurrence_watch(payload: RecurrenceWatchRequest) -> RecurrenceWatchResponse:
+    """Veille prédictive : risque de récidive + plan préventif (déterministe, sans LLM)."""
+    history = [i.model_dump() for i in payload.history] or payload.school
+    result = watch_recurrence(history)
+    return RecurrenceWatchResponse(risk=result["risk"], plan=result["plan"])
+
+
+# ==========================================
+# 14. Observabilité IA (latences/tokens)
+# ==========================================
+@app.get("/v1/admin/ai-metrics")
+def get_ai_metrics() -> dict[str, Any]:
+    """Observabilité IA : latences (avg/p95) et tokens par opération LLM."""
+    return ai_metrics_summary()
+
+
+# ==========================================
+# 15. Agent Conversationnel Unifié (Dashboardless)
 # ==========================================
 @app.post("/v1/agent/chat", response_model=AgentChatResponse)
 async def agent_chat(request: Request, payload: AgentChatRequest) -> AgentChatResponse:

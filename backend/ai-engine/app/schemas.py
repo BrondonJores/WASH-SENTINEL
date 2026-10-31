@@ -84,6 +84,7 @@ class ImageAnalysisResponse(BaseModel):
     visual_severity_score: float = Field(..., ge=0.0, le=100.0, description="Score de sévérité basé sur l'état visuel (0-100)")
     health_hazard_detected: bool = Field(..., description="Présence d'eau stagnante, déversement fécal ou danger biologique visible")
     technician_notes: str = Field(..., description="Note d'orientation pour le réparateur")
+    vision_unavailable: bool = Field(False, description="True si la vision a échoué : ne pas croire le score")
 
 
 # ==========================================
@@ -328,3 +329,36 @@ class AgentChatResponse(BaseModel):
     cards: list[AgentCard] = Field(default_factory=list)
     model_used: str = ""
     follow_ups: list[str] = Field(default_factory=list)
+
+
+# ==========================================
+# 12. Q&R Documentaire Sourcée (RAG)
+# ==========================================
+class RagAskRequest(BaseModel):
+    question: str = Field(..., description="Question en langage naturel")
+    k: int = Field(3, ge=1, le=10, description="Nombre d'extraits à remonter")
+
+
+class RagAskResponse(BaseModel):
+    answer: str = Field(..., description="Réponse citant les manuels, ou abstention")
+    sources: list[str] = Field(default_factory=list, description="Noms des .md cités")
+
+
+# ==========================================
+# 13. Veille Prédictive des Pannes Récurrentes
+# ==========================================
+class RecurrenceIncidentInput(BaseModel):
+    issue_type: str = Field("other", description="Nature de la panne (leak, blockage, ...)")
+    occurred_at: str | None = Field(None, description="Date ISO de la panne (ex: 2026-10-15)")
+
+
+class RecurrenceWatchRequest(BaseModel):
+    history: list[RecurrenceIncidentInput] = Field(default_factory=list)
+    school: SchoolMaintenanceHistory | None = Field(
+        None, description="Historique agrégé Laravel (repli si pas de détail)"
+    )
+
+
+class RecurrenceWatchResponse(BaseModel):
+    risk: dict[str, Any]
+    plan: dict[str, Any]
