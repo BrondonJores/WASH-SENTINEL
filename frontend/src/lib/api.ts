@@ -289,6 +289,9 @@ export const api = {
     status?: string;
     urgency?: string;
     district?: string;
+    category?: string;
+    search?: string;
+    sort?: string;
     page?: number;
   }) => req<Paginated<Incident>>(`/v1/wash/incidents${qs(params ?? {})}`),
   incident: (id: number) => req<{ incident: Incident }>(`/v1/wash/incidents/${id}`),
@@ -313,7 +316,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   assignableUsers: () => req<AssignableUser[]>('/v1/wash/assignable-users'),
-  reports: (params?: { school_id?: number; incident_id?: number; page?: number }) =>
+  reports: (params?: { school_id?: number; incident_id?: number; channel?: string; is_duplicate?: number; page?: number }) =>
     req<Paginated<Report>>(`/v1/wash/reports${qs(params ?? {})}`),
   report: (id: number) => req<Report>(`/v1/wash/reports/${id}`),
   createReport: (payload: { school_id: number; message: string }) =>
@@ -321,7 +324,8 @@ export const api = {
       '/v1/wash/reports',
       { method: 'POST', body: JSON.stringify({ ...payload, channel: 'text' }) },
     ),
-  notifications: () => req<Paginated<AppNotification>>('/v1/notifications'),
+  notifications: (params?: { unread?: number; page?: number }) =>
+    req<Paginated<AppNotification>>(`/v1/notifications${qs(params ?? {})}`),
   readNotification: (id: string) =>
     req<{ message: string }>(`/v1/notifications/${id}/read`, { method: 'POST' }),
   readAllNotifications: () =>

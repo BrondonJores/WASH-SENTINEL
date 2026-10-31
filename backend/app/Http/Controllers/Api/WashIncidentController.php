@@ -15,14 +15,33 @@ class WashIncidentController extends Controller
 {
     public function index(Request $request)
     {
+        $sorts = [
+            'created_at' => ['created_at', 'asc'],
+            '-created_at' => ['created_at', 'desc'],
+            'priority_score' => ['priority_score', 'asc'],
+            '-priority_score' => ['priority_score', 'desc'],
+            'affected_students' => ['affected_students', 'asc'],
+            '-affected_students' => ['affected_students', 'desc'],
+        ];
+        $sort = $sorts[$request->query('sort', '')] ?? null;
+
         $query = Incident::with(['school:id,name,district', 'assignee:id,name'])
             ->withCount('reports')
             ->when($request->school_id, fn ($q, $v) => $q->where('school_id', $v))
             ->when($request->status, fn ($q, $v) => $q->where('status', $v))
             ->when($request->urgency, fn ($q, $v) => $q->where('urgency', $v))
+            ->when($request->category, fn ($q, $v) => $q->where('category', $v))
             ->when($request->district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
-            ->orderByDesc('priority_score')
-            ->latest();
+            ->when($request->search, function ($q, $v) {
+                $like = '%' . mb_strtolower((string) $v, 'UTF-8') . '%';
+                $q->where(function ($w) use ($like) {
+                    $w->whereRaw('LOWER(title) LIKE ?', [$like])
+                        ->orWhereRaw('LOWER(reference_code) LIKE ?', [$like])
+                        ->orWhereHas('school', fn ($s) => $s->whereRaw('LOWER(name) LIKE ?', [$like]));
+                });
+            })
+            ->when($sort, fn ($q) => $q->orderBy($sort[0], $sort[1]))
+            ->when(! $sort, fn ($q) => $q->orderByDesc('priority_score')->latest());
 
         return response()->json($query->paginate(20));
     }

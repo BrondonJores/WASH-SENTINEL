@@ -15,6 +15,9 @@ class WashReportController extends Controller
         $query = Report::with(['school:id,name,district', 'incident:id,reference_code,title,urgency,status'])
             ->when($request->school_id, fn ($q, $v) => $q->where('school_id', $v))
             ->when($request->incident_id, fn ($q, $v) => $q->where('incident_id', $v))
+            ->when($request->channel, fn ($q, $v) => in_array($v, ['voice', 'text', 'photo', 'webrtc_call'], true) ? $q->where('channel', $v) : $q)
+            ->when($request->query('is_duplicate') === '1', fn ($q) => $q->where('is_duplicate', true))
+            ->when($request->query('is_duplicate') === '0', fn ($q) => $q->where('is_duplicate', false))
             ->latest();
 
         return response()->json($query->paginate(20));

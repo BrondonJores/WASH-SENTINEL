@@ -10,7 +10,9 @@ class WashNotificationController extends Controller
     public function index(Request $request)
     {
         return response()->json(
-            $request->user()->notifications()->paginate(20)
+            $request->user()->notifications()
+                ->when($request->query('unread') === '1', fn ($q) => $q->whereNull('read_at'))
+                ->paginate(20)
         );
     }
 
