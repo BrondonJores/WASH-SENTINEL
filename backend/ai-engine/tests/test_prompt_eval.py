@@ -184,3 +184,208 @@ class PromptEdgeBonusTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Eval de routage liste/création (ajout uniquement).
+#
+# Conventions reprises du fichier : cas GOLDEN figés en liste module,
+# une classe unittest, messages d'assertion préfixés par l'id du cas.
+# Ici le routeur est déterministe (app.agent_loop.route_intent) :
+# REGLE D'OR miroir — si un cas échoue, on corrige le CAS (formulation
+# documentée), jamais le routeur.
+#
+# Couverture (18 cas) : interventions passées (plusieurs formulations),
+# création (journalise/enregistre/crée), ambiguïtés liste+création,
+# questions écoles/incidents existantes (non-régression -> "other").
+# ---------------------------------------------------------------------------
+
+from app.agent_loop import route_intent, tools_for_intent  # noqa: E402
+from app.agent_tools import AGENT_TOOLS  # noqa: E402
+
+
+def _exposed_names(intent: str) -> list[str]:
+    """Noms des tools exposés pour un intent (via tools_for_intent)."""
+    return [t.get("function", {}).get("name", "") for t in tools_for_intent(intent)]
+
+
+def _tool_description(name: str) -> str:
+    for tool in AGENT_TOOLS:
+        if tool.get("function", {}).get("name") == name:
+            return tool["function"].get("description", "")
+    return ""
+
+
+ROUTING_CASES = [
+    # -- Interventions passées -> list (list_maintenance_logs présent) --
+    {
+        "id": "exact_aujourdhui",
+        "question": "donne-moi les interventions réalisées aujourd'hui",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident", "prepare_report", "prepare_maintenance_log"],
+    },
+    {
+        "id": "passees_hier",
+        "question": "Quelles interventions ont été réalisées hier ?",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident"],
+    },
+    {
+        "id": "passees_semaine",
+        "question": "Liste les interventions de la semaine",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident"],
+    },
+    {
+        "id": "passees_historique_mois",
+        "question": "Montre-moi l'historique des interventions du mois",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident"],
+    },
+    {
+        "id": "passees_combien",
+        "question": "Combien d'interventions réalisées ce mois-ci ?",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident"],
+    },
+    {
+        "id": "passees_travaux_ecole",
+        "question": "Affiche les travaux passés à l'école de Ngok",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident"],
+    },
+    {
+        "id": "passees_quels_travaux",
+        "question": "Quels travaux ont été réalisés hier à Douala ?",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident"],
+    },
+    # -- Création -> create (prepare_* exposés) --
+    {
+        "id": "cree_intervention",
+        "question": "Crée une intervention pour fuite à l'école de Mendong",
+        "intent": "create",
+        "present": ["prepare_incident"],
+        "absent": [],
+    },
+    {
+        "id": "journalise_cout",
+        "question": "Journalise une intervention à 50000 XAF pour WASH-001",
+        "intent": "create",
+        "present": ["prepare_maintenance_log"],
+        "absent": [],
+    },
+    {
+        "id": "enregistre_reparation",
+        "question": "Enregistre une intervention de réparation de pompe",
+        "intent": "create",
+        "present": ["prepare_maintenance_log"],
+        "absent": [],
+    },
+    {
+        "id": "signale_panne",
+        "question": "Signale une panne de forage à Ngok",
+        "intent": "create",
+        "present": ["prepare_report"],
+        "absent": [],
+    },
+    {
+        "id": "ajoute_nouvelle",
+        "question": "Ajoute une nouvelle intervention pour latrines bouchées",
+        "intent": "create",
+        "present": ["prepare_incident"],
+        "absent": [],
+    },
+    # -- Ambiguïtés liste + création -> list (priorité consultation) --
+    {
+        "id": "ambigu_journalise_realisees",
+        "question": "Journalise les interventions réalisées hier",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident"],
+    },
+    {
+        "id": "ambigu_liste_prepare",
+        "question": "Liste les interventions et prépare une nouvelle fiche",
+        "intent": "list",
+        "present": ["list_maintenance_logs"],
+        "absent": ["prepare_incident"],
+    },
+    # -- Questions écoles/incidents existantes -> other (non-régression) --
+    {
+        "id": "noregress_resume_district",
+        "question": "Résumer mon district",
+        "intent": "other",
+        "present": ["list_maintenance_logs", "prepare_incident"],
+        "absent": [],
+    },
+    {
+        "id": "noregress_besoin_ecoles",
+        "question": "Quelles écoles ont le plus besoin d'aide ?",
+        "intent": "other",
+        "present": ["list_maintenance_logs", "prepare_incident"],
+        "absent": [],
+    },
+    {
+        "id": "noregress_carte",
+        "question": "Voir la carte du territoire",
+        "intent": "other",
+        "present": ["list_maintenance_logs", "prepare_incident"],
+        "absent": [],
+    },
+    {
+        "id": "noregress_explique_incident",
+        "question": "Explique l'incident WASH-001 en langage simple",
+        "intent": "other",
+        "present": ["list_maintenance_logs", "prepare_incident"],
+        "absent": [],
+    },
+]
+
+
+class RoutingEvalTest(unittest.TestCase):
+    """Eval routage : intent + tool attendu / tool interdit par question."""
+
+    def test_00_case_count_15_20(self) -> None:
+        self.assertGreaterEqual(len(ROUTING_CASES), 15, "au moins 15 cas")
+        self.assertLessEqual(len(ROUTING_CASES), 20, "au plus 20 cas")
+
+    def test_01_intents(self) -> None:
+        for case in ROUTING_CASES:
+            with self.subTest(case["id"]):
+                self.assertEqual(
+                    route_intent(case["question"]), case["intent"],
+                    f"[{case['id']}] intent",
+                )
+
+    def test_02_tools_present_absent(self) -> None:
+        for case in ROUTING_CASES:
+            with self.subTest(case["id"]):
+                names = _exposed_names(route_intent(case["question"]))
+                for tool in case["present"]:
+                    self.assertIn(tool, names, f"[{case['id']}] {tool} exposé")
+                for tool in case["absent"]:
+                    self.assertNotIn(tool, names, f"[{case['id']}] {tool} masqué")
+
+    def test_03_exact_question_masque_prepare_incident(self) -> None:
+        question = "donne-moi les interventions réalisées aujourd'hui"
+        self.assertEqual(route_intent(question), "list", "[exact] intent list")
+        names = _exposed_names("list")
+        self.assertIn("list_maintenance_logs", names, "[exact] list exposé")
+        self.assertNotIn("prepare_incident", names, "[exact] prepare_incident masqué")
+
+    def test_04_list_tool_declare(self) -> None:
+        names = [t.get("function", {}).get("name", "") for t in AGENT_TOOLS]
+        self.assertIn("list_maintenance_logs", names)
+
+    def test_05_prepare_incident_desambigue(self) -> None:
+        desc = _tool_description("prepare_incident")
+        self.assertIn("JAMAIS", desc, "clause Ne JAMAIS utiliser présente")
+        self.assertNotIn("Prépare une intervention directe", desc, "ancien libellé supprimé")
