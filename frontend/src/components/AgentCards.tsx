@@ -8,6 +8,8 @@ import { api, ApiError } from '../lib/api';
 import { ThresholdGauge } from './ThresholdGauge';
 import { TrendChart, TrendDonut, TrendHBars } from './TrendChart';
 import type { DonutEntry, HBarEntry, TrendSeries } from './TrendChart';
+import { BudgetCompare, CalendarHeatmap, IncidentTimeline } from './VizExtra';
+import type { BudgetCategory, BudgetSchool, HeatmapDay, TimelineStep } from './VizExtra';
 import { TerritoryLegend, TerritoryMap } from './TerritoryMap';
 import { SlideDeck } from './SlideDeck';
 import type { DeckSlide } from './SlideDeck';
@@ -1382,7 +1384,7 @@ function MaintenanceLogsCard({
           phrase,
           dayLabel === '—' ? undefined : `Jour demandé : ${dayLabel}.`,
           schoolWarning,
-          'Choisis une autre date.',
+          'Essaie hier ou cette semaine.',
         )}
       >
         <div className="flex flex-col items-center py-4 text-center">
@@ -1400,14 +1402,22 @@ function MaintenanceLogsCard({
             <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{schoolWarning}</p>
           )}
           {onAsk !== undefined && (
-            <Button
-              variant="primary"
-              size="sm"
-              className="mt-3"
-              onClick={() => onAsk('Voir les interventions à une autre date')}
-            >
-              Voir une autre date ?
-            </Button>
+            <div className="mt-3 flex flex-wrap justify-center gap-2">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => onAsk('Interventions réalisées hier ?')}
+              >
+                Voir hier ?
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => onAsk('Interventions réalisées cette semaine ?')}
+              >
+                Voir la semaine ?
+              </Button>
+            </div>
           )}
         </div>
       </CardShell>
@@ -1477,7 +1487,175 @@ function MaintenanceLogsCard({
           {rest === 1 ? '+ 1 autre intervention' : `+ ${rest} autres interventions`}
         </p>
       )}
-      <FollowUps onAsk={onAsk} items={['Voir une autre date ?']} />
+      <FollowUps onAsk={onAsk} items={['Interventions réalisées hier ?', 'Interventions réalisées cette semaine ?']} />
+    </CardShell>
+  );
+}
+
+// ---------- Nouveaux rendus : calendrier, suivi, budgets ----------
+
+/** Nombre sûr (0 si absent) pour les cumuls de rendus. */
+const vizNum = (v: unknown): number =>
+  typeof v === 'number' && Number.isFinite(v) ? v : 0;
+
+function HeatmapCard({
+  title,
+  data,
+  onAsk,
+}: {
+  title: string;
+  data: Record<string, unknown>;
+  onAsk?: (q: string) => void;
+}) {
+  const days: HeatmapDay[] = [];
+  for (const d of asArray<unknown>(data.days)) {
+    const rec = asRecord(d);
+    if (typeof rec.date !== 'string' || rec.date === '') continue;
+    const schools = asArray<unknown>(rec.ecoles_touchees ?? rec.schools).filter(
+      (s): s is string => typeof s === 'string' && s !== '',
+    );
+    days.push({ date: rec.date, count: Math.max(0, Math.round(vizNum(rec.pannes ?? rec.incidents))), schools });
+  }
+  if (days.length === 0) return null;
+  const total =
+    typeof data.total_pannes === 'number' || typeof data.total_incidents === 'number'
+      ? vizNum(data.total_pannes ?? data.total_incidents)
+      : days.reduce((s, d) => s + d.count, 0);
+  const start = fmtOpt(data.start);
+  const end = fmtOpt(data.end);
+  const peak = days.reduce((a, b) => (b.count > a.count ? b : a), days[0]);
+  return (
+    <CardShell
+      title={title}
+      meta={start !== undefined && end !== undefined ? `Du ${fmtDate(start)} au ${fmtDate(end)}` : undefined}
+      listenText={speak(
+        'Calendrier des pannes.',
+        total === 0
+          ? 'Aucune panne sur la période.'
+          : total === 1
+            ? '1 panne sur la période.'
+            : `${fmtInt(total)} pannes sur la période.`,
+        total > 0 && peak.count > 0 ? `Jour le plus chargé : le ${fmtDate(peak.date)}, ${fmtInt(peak.count)} panne${peak.count > 1 ? 's' : ''}.` : undefined,
+      )}
+    >
+      <CalendarHeatmap
+        days={days}
+        total={total}
+        onSelect={onAsk === undefined ? undefined : (date) => onAsk(`Que s'est-il passé le ${fmtDate(date)} ?`)}
+      />
+      {onAsk !== undefined && (
+        <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">
+          Touchez un jour pour poser une question dessus.
+        </p>
+      )}
+      <FollowUps onAsk={onAsk} items={['Voir les tendances sur 6 mois', 'Voir la carte du territoire']} />
+    </CardShell>
+  );
+}
+
+function TimelineCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+  const steps: TimelineStep[] = [];
+  for (const s of asArray<unknown>(data.timeline)) {
+    const rec = asRecord(s);
+    if (typeof rec.label !== 'string' || rec.label === '') continue;
+    steps.push({
+      label: rec.label,
+      date: typeof rec.date === 'string' ? rec.date : null,
+      done: rec.fait === true || rec.done === true,
+    });
+  }
+  if (steps.length === 0) return null;
+  const doneCount = steps.filter((s) => s.done).length;
+  const current = steps.find((s) => !s.done)?.label;
+  return (
+    <CardShell
+      title={title}
+      meta={fmtOpt(data.reference_code)}
+      listenText={speak(
+        "Suivi de l'incident.",
+        current !== undefined ? `Étape actuelle : ${current}.` : 'Toutes les étapes sont faites.',
+        `${doneCount} étape${doneCount > 1 ? 's' : ''} sur ${steps.length} faite${doneCount > 1 ? 's' : ''}.`,
+      )}
+    >
+      <IncidentTimeline steps={steps} />
+    </CardShell>
+  );
+}
+
+const BUDGET_CATEGORY_LABEL: Record<string, string> = {
+  ...CATEGORY_LABEL,
+  unknown: 'Autre',
+};
+
+function BudgetCard({
+  title,
+  data,
+  onAsk,
+}: {
+  title: string;
+  data: Record<string, unknown>;
+  onAsk?: (q: string) => void;
+}) {
+  const schools: BudgetSchool[] = [];
+  for (const e of asArray<unknown>(data.ecoles)) {
+    const rec = asRecord(e);
+    const name = fmtOpt(rec.nom) ?? fmtOpt(rec.school_name);
+    if (name === undefined) continue;
+    schools.push({
+      name,
+      cost: Math.max(0, vizNum(rec.cumul_reparations_XAF ?? rec.total_cost_XAF)),
+      incidents: Math.max(0, Math.round(vizNum(rec.nb_pannes ?? rec.incidents))),
+    });
+  }
+  const catCosts = asRecord(data.par_categorie_XAF ?? data.by_category_XAF);
+  const shares = asRecord(data.parts_pct ?? data.shares_pct);
+  const categories: BudgetCategory[] = [];
+  for (const [code, v] of Object.entries(catCosts)) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    categories.push({
+      code,
+      label: BUDGET_CATEGORY_LABEL[code] ?? code,
+      cost: Math.max(0, v),
+      share: Math.max(0, vizNum(shares[code])),
+    });
+  }
+  categories.sort((a, b) => b.cost - a.cost);
+  const total =
+    typeof data.total_XAF === 'number' || typeof data.total_cost_XAF === 'number'
+      ? Math.max(0, vizNum(data.total_XAF ?? data.total_cost_XAF))
+      : categories.reduce((s, c) => s + c.cost, 0);
+  const currency = fmtOpt(data.currency) ?? 'XAF';
+  if (schools.length === 0 && categories.length === 0) return null;
+  const top = [...schools].sort((a, b) => b.cost - a.cost)[0];
+  const spokenMoney = currency === 'XAF' ? 'francs' : currency;
+  return (
+    <CardShell
+      title={title}
+      meta={fmtOpt(data.district)}
+      listenText={speak(
+        'Comparaison des budgets réparations.',
+        `Total : ${fmtInt(total)} ${spokenMoney}.`,
+        top !== undefined ? `L'école la plus chère : ${top.name}, ${fmtInt(top.cost)} ${spokenMoney}.` : undefined,
+      )}
+    >
+      <BudgetCompare
+        schools={schools}
+        categories={categories}
+        total={total}
+        currency={currency}
+        onSelectSchool={
+          onAsk === undefined
+            ? undefined
+            : (i) => {
+                const s = schools[i];
+                if (s !== undefined) onAsk(`Analyser ${s.name} ?`);
+              }
+        }
+      />
+      <FollowUps
+        onAsk={onAsk}
+        items={top !== undefined ? [`Analyser ${top.name} ?`, 'Voir les tendances sur 6 mois'] : ['Voir les tendances sur 6 mois']}
+      />
     </CardShell>
   );
 }
@@ -1509,6 +1687,12 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <BriefingDeckCard title={card.title} data={data} />;
     case 'maintenance_logs':
       return <MaintenanceLogsCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'calendar_heatmap':
+      return <HeatmapCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'incident_timeline':
+      return <TimelineCard title={card.title} data={data} />;
+    case 'budget_compare':
+      return <BudgetCard title={card.title} data={data} onAsk={onAsk} />;
     default:
       return <GenericCard card={card} />;
   }
