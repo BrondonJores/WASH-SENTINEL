@@ -133,8 +133,9 @@ def _resolve_lang(req: AgentChatRequest) -> Literal["fr", "en"]:
 
 
 def _build_system_prompt(lang: str) -> str:
-    """Prompt système + langue de réponse explicite transmise au provider."""
-    return f"{SYSTEM_PROMPT}\nLangue de réponse : {lang}."
+    """Prompt système + langue de réponse explicite transmise au provider (en tête : primauté)."""
+    head = "REPLY ONLY IN ENGLISH. Never use French." if lang == "en" else "Réponds en français."
+    return f"{head}\n{SYSTEM_PROMPT}\nLangue de réponse : {lang}."
 
 
 def _fmt_int(value: Any) -> str:
