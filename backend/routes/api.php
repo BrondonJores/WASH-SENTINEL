@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\Admin\WashSttProfileController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\WashAgentController;
 use App\Http\Controllers\Api\WashIncidentController;
+use App\Http\Controllers\Api\WashMeshController;
 use App\Http\Controllers\Api\WashProjectController;
 use App\Http\Controllers\Api\WashConversationController;
 use App\Http\Controllers\Api\WashNotificationController;
@@ -70,6 +71,13 @@ Route::prefix('v1/notifications')->middleware('auth:sanctum')->group(function ()
     Route::get('/', [WashNotificationController::class, 'index']);
     Route::post('/read-all', [WashNotificationController::class, 'readAll']);
     Route::post('/{notification}/read', [WashNotificationController::class, 'read']);
+});
+
+Route::prefix('v1/mesh')->group(function () {
+    Route::post('/bundles', [WashMeshController::class, 'store'])->middleware('throttle:60,1');
+    Route::get('/bundles/pending', [WashMeshController::class, 'pending']);
+    Route::get('/bundles/{bundleId}', [WashMeshController::class, 'show']);
+    Route::get('/stats', [WashMeshController::class, 'stats']);
 });
 
 Route::prefix('v1/whatsapp')->group(function () {

@@ -123,6 +123,26 @@ services:
         #                   count: 1
         #                   capabilities: [gpu]
 
+    mesh-relay:
+        build:
+            context: ./mesh/server
+            dockerfile: Dockerfile
+        restart: unless-stopped
+        ports:
+            - '${FORWARD_MESH_PORT:-8001}:8001'
+        environment:
+            LARAVEL_URL: 'http://laravel:8080'
+        networks:
+            - wash-network
+        depends_on:
+            - laravel
+        healthcheck:
+            test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+            interval: 15s
+            timeout: 5s
+            retries: 5
+            start_period: 20s
+
     frontend:
         image: 'node:22-alpine'
         restart: unless-stopped

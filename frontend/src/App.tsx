@@ -12,6 +12,7 @@ import ReportsPage from './pages/ReportsPage';
 import JournalPage from './pages/JournalPage';
 import NotificationsPage from './pages/NotificationsPage';
 import SettingsPage from './pages/SettingsPage';
+import MeshPage from './pages/MeshPage';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -60,6 +61,7 @@ function AuthedApp() {
             <Route path="/admin/signalements" element={authed(<ReportsPage />)} />
             <Route path="/admin/journal" element={adminOnly(<JournalPage />)} />
             <Route path="/admin/notifications" element={authed(<NotificationsPage />)} />
+            <Route path="/admin/mesh" element={authed(<MeshPage />)} />
             <Route path="/admin/reglages" element={adminOnly(<SettingsPage />)} />
             <Route path="/admin" element={<Navigate to="/" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />

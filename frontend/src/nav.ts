@@ -14,5 +14,6 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/admin/signalements', label: 'Signalements', icon: 'inbox' },
   { path: '/admin/journal', label: 'Journal IA', icon: 'file', adminOnly: true },
   { path: '/admin/notifications', label: 'Notifications', icon: 'bell' },
+  { path: '/admin/mesh', label: 'Maillage', icon: 'send' },
   { path: '/admin/reglages', label: 'Réglages IA', icon: 'sliders', adminOnly: true },
 ];
