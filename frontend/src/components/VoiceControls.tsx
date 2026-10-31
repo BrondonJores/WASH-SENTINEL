@@ -49,6 +49,56 @@ function formatChrono(ms: number): string {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
+/** Nombre de barres de la waveform temps réel. */
+const WAVE_BARS = 24;
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  );
+}
+
+/** Couleur du canvas (suit text-teal-600 / dark:text-teal-400 via currentColor). */
+function canvasColor(canvas: HTMLCanvasElement): string {
+  try {
+    return window.getComputedStyle(canvas).color || '#0d9488';
+  } catch {
+    return '#0d9488';
+  }
+}
+
+/**
+ * Dessine la waveform (barres teal). Sans analyseur (reduced-motion ou
+ * AudioContext indisponible), dessine un motif statique déterministe.
+ */
+function drawWaveform(canvas: HTMLCanvasElement, analyser: AnalyserNode | null, color: string): void {
+  const ctx = canvas.getContext('2d');
+  if (ctx === null) return;
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  let freq: Uint8Array<ArrayBuffer> | null = null;
+  if (analyser !== null) {
+    freq = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(freq);
+  }
+  const gap = 2;
+  const bw = Math.max(2, (W - gap * (WAVE_BARS - 1)) / WAVE_BARS);
+  ctx.fillStyle = color;
+  for (let i = 0; i < WAVE_BARS; i++) {
+    let v: number;
+    if (freq !== null) {
+      const idx = Math.min(freq.length - 1, Math.floor((i / WAVE_BARS) * freq.length * 0.7));
+      v = freq[idx] / 255;
+    } else {
+      v = 0.18 + 0.12 * (((i * 7) % 5) / 4); // motif statique
+    }
+    const h = Math.max(3, v * H);
+    ctx.fillRect(i * (bw + gap), (H - h) / 2, bw, h);
+  }
+}
+
 function micErrorMessage(err: unknown): string {
   if (err instanceof DOMException || err instanceof Error) {
     switch (err.name) {
@@ -129,10 +179,13 @@ export interface VoiceRecorderProps {
 export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
-  const [level, setLevel] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const colorRef = useRef<string | null>(null);
+  const cancelledRef = useRef(false);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -159,16 +212,36 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     recorderRef.current = null;
-    setLevel(0);
+    analyserRef.current = null;
+    colorRef.current = null;
   }, []);
 
   useEffect(() => cleanup, [cleanup]);
+
+  // Waveform statique si prefers-reduced-motion (un seul rendu, pas de boucle).
+  useEffect(() => {
+    if (!recording || !prefersReducedMotion()) return;
+    const canvas = canvasRef.current;
+    if (canvas !== null) drawWaveform(canvas, null, canvasColor(canvas));
+  }, [recording]);
 
   const stop = useCallback(() => {
     const rec = recorderRef.current;
     if (rec !== null && rec.state !== 'inactive') rec.stop();
     /* la livraison du blob se fait dans onstop (voir start) */
   }, []);
+
+  const cancel = useCallback(() => {
+    const rec = recorderRef.current;
+    if (rec !== null && rec.state !== 'inactive') {
+      cancelledRef.current = true; // onstop jettera le blob
+      rec.stop();
+    } else {
+      cleanup();
+      setRecording(false);
+      setElapsedMs(0);
+    }
+  }, [cleanup]);
 
   const start = useCallback(async () => {
     setError(null);
@@ -207,12 +280,15 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
     recorder.onstop = () => {
+      const wasCancelled = cancelledRef.current;
+      cancelledRef.current = false;
       const type = recorder.mimeType !== '' ? recorder.mimeType : 'audio/webm';
       const blob = new Blob(chunksRef.current, { type });
       chunksRef.current = [];
       cleanup();
       setRecording(false);
       setElapsedMs(0);
+      if (wasCancelled) return;
       if (blob.size === 0) {
         setError('Enregistrement vide : aucun son capturé.');
         return;
@@ -238,7 +314,7 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
       setElapsedMs(ms);
       if (ms >= MAX_RECORD_MS) stop(); // arrêt automatique à 2 min
     }, 200);
-    // Niveau sonore (optionnel : l’enregistrement continue sans lui).
+    // Waveform temps réel (optionnelle : l’enregistrement continue sans elle).
     try {
       const AC = window.AudioContext
         ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -248,22 +324,23 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.75;
         src.connect(analyser);
-        const buf = new Uint8Array(analyser.fftSize);
-        const tick = () => {
-          analyser.getByteTimeDomainData(buf);
-          let sum = 0;
-          for (let i = 0; i < buf.length; i++) {
-            const v = (buf[i] - 128) / 128;
-            sum += v * v;
-          }
-          setLevel(Math.min(1, Math.sqrt(sum / buf.length) * 3));
-          rafRef.current = window.requestAnimationFrame(tick);
-        };
-        rafRef.current = window.requestAnimationFrame(tick);
+        analyserRef.current = analyser;
       }
     } catch {
-      /* pas de niveau, l’enregistrement continue */
+      /* pas de waveform, l’enregistrement continue */
+    }
+    if (!prefersReducedMotion()) {
+      const tick = () => {
+        const canvas = canvasRef.current;
+        if (canvas !== null) {
+          if (colorRef.current === null) colorRef.current = canvasColor(canvas);
+          drawWaveform(canvas, analyserRef.current, colorRef.current);
+        }
+        rafRef.current = window.requestAnimationFrame(tick);
+      };
+      rafRef.current = window.requestAnimationFrame(tick);
     }
   }, [cleanup, stop]);
 
@@ -282,10 +359,10 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
         aria-label={recording ? 'Arrêter l’enregistrement' : 'Dicter un message'}
         aria-pressed={recording}
         title={recording ? 'Arrêter l’enregistrement' : 'Dicter un message'}
-        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${
+        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${
           recording
             ? 'border-danger/50 bg-danger-soft text-danger'
-            : 'border-line bg-card text-ink-soft hover:bg-raised hover:text-ink'
+            : 'border-line bg-card text-ink-soft ring-2 ring-teal-600/25 hover:bg-raised hover:text-ink dark:ring-teal-400/25'
         }`}
       >
         {recording ? <StopIcon /> : <MicIcon />}
@@ -297,12 +374,22 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
             <span className="relative h-2 w-2 rounded-full bg-red-500" />
           </span>
           <span className="font-mono text-xs tabular-nums text-ink-soft">{formatChrono(elapsedMs)}</span>
-          <span aria-hidden="true" className="h-1.5 w-16 overflow-hidden rounded-full bg-raised">
-            <span
-              className="block h-full rounded-full bg-teal-600 transition-[width] duration-100 dark:bg-teal-400 motion-reduce:transition-none"
-              style={{ width: `${Math.round(level * 100)}%` }}
-            />
-          </span>
+          <canvas
+            ref={canvasRef}
+            width={120}
+            height={28}
+            aria-hidden="true"
+            className="h-7 w-[120px] text-teal-600 dark:text-teal-400"
+          />
+          <button
+            type="button"
+            onClick={cancel}
+            aria-label="Annuler l’enregistrement"
+            title="Annuler"
+            className="rounded px-1 py-1 text-xs text-ink-faint underline-offset-2 hover:text-danger hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            Annuler
+          </button>
         </span>
       )}
       {error !== null && !recording && (
