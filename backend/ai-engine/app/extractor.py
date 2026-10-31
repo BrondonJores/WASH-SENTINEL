@@ -11,8 +11,8 @@ Ta mission est d'analyser le signalement brut fourni par un enseignant, directeu
 
 {
   "school_detected": "string ou null",
-  "infrastructure_type": "water_point | toilets_latrines | handwashing | sewage_drainage | other",
-  "issue_type": "leak | total_breakdown | contamination | blockage | dry_well | vandalism | other",
+  "infrastructure_type": "water_point | toilets_latrines | handwashing | sewage_drainage",
+  "issue_type": "leak | total_breakdown | contamination | blockage | dry_well | vandalism",
   "urgency_level": "low | medium | high | critical",
   "estimated_affected_students": integer (ex: 350, défaut 50 si non précisé),
   "health_hazard_risk": "low | medium | high | severe",
@@ -22,7 +22,8 @@ Ta mission est d'analyser le signalement brut fourni par un enseignant, directeu
 Règles impératives :
 1. "critical" pour urgence si les latrines débordent ou absence totale d'eau pour toute l'école.
 2. "severe" pour risque sanitaire si risque direct de choléra, contamination fécale ou eau polluée bue par les élèves.
-3. Ne réponds RIEN d'autre que l'objet JSON. Pas d'introduction, pas de markdown.
+3. Choisis TOUJOURS la valeur la plus proche dans chaque liste. Il est INTERDIT de répondre "other" ou toute valeur hors liste.
+4. Ne réponds RIEN d'autre que l'objet JSON. Pas d'introduction, pas de markdown.
 """
 
 
@@ -45,13 +46,13 @@ class WashExtractor:
             school_detected=raw_json.get("school_detected") or school_name,
             infrastructure_type=self._normalize_choice(
                 raw_json.get("infrastructure_type"),
-                ["water_point", "toilets_latrines", "handwashing", "sewage_drainage", "other"],
-                "other"
+                ["water_point", "toilets_latrines", "handwashing", "sewage_drainage"],
+                self._guess_infrastructure(raw_text)
             ),
             issue_type=self._normalize_choice(
                 raw_json.get("issue_type"),
-                ["leak", "total_breakdown", "contamination", "blockage", "dry_well", "vandalism", "other"],
-                "total_breakdown"
+                ["leak", "total_breakdown", "contamination", "blockage", "dry_well", "vandalism"],
+                self._guess_issue(raw_text)
             ),
             urgency_level=self._normalize_choice(
                 raw_json.get("urgency_level"),
@@ -94,6 +95,34 @@ class WashExtractor:
 
         score = (u_score * 0.35) + (h_score * 0.35) + (s_score * 0.30)
         return round(score, 1)
+
+    _INFRA_KEYWORDS = (
+        (("latrine", "wc", "toilette"), "toilets_latrines"),
+        (("lave-main", "lavage des mains", "lave mains"), "handwashing"),
+        (("égout", "egout", "drain", "caniveau", "évacuation", "evacuation", "fosse"), "sewage_drainage"),
+    )
+    _ISSUE_KEYWORDS = (
+        (("bouch", "déborde", "deborde", "engorg"), "blockage"),
+        (("plus d'eau", "pas d'eau", "coupure", "coupé", "coupe", "à sec", "a sec", "tari", "asséch"), "dry_well"),
+        (("cass", "panne", "hors service", "ne marche", "ne fonctionne", "ne coule"), "total_breakdown"),
+        (("fuit", "coule", "goutte", "perce", "percé"), "leak"),
+        (("volé", "volée", "vandalis", "saccag", "détruit", "disparu"), "vandalism"),
+        (("eau jaune", "eau sale", "saleté", "contamin", "choléra", "cholera", "pollu", "trouble", "couleur"), "contamination"),
+    )
+
+    def _guess_infrastructure(self, raw_text: str) -> str:
+        t = raw_text.lower()
+        for keywords, value in self._INFRA_KEYWORDS:
+            if any(k in t for k in keywords):
+                return value
+        return "water_point"
+
+    def _guess_issue(self, raw_text: str) -> str:
+        t = raw_text.lower()
+        for keywords, value in self._ISSUE_KEYWORDS:
+            if any(k in t for k in keywords):
+                return value
+        return "total_breakdown"
 
     def _normalize_choice(self, val: Any, allowed: list[str], fallback: str) -> str:
         s = str(val or "").strip().lower()

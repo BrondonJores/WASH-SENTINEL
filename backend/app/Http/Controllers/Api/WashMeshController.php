@@ -6,8 +6,10 @@ use App\Contracts\IncidentTriage;
 use App\Http\Controllers\Controller;
 use App\Models\MeshBundle;
 use App\Models\School;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Point d'entrée internet du réseau maillé (store-and-forward).
@@ -23,6 +25,11 @@ class WashMeshController extends Controller
      */
     public function store(Request $request, IncidentTriage $triage)
     {
+        $ingestKey = (string) config('services.mesh.ingest_key');
+        if ($ingestKey !== '' && ! hash_equals($ingestKey, (string) $request->header('X-Mesh-Key'))) {
+            return response()->json(['message' => 'Clé mesh manquante ou invalide.'], 401);
+        }
+
         $incoming = $request->has('bundles')
             ? $request->validate(['bundles' => ['required', 'array', 'max:100']])['bundles']
             : [$request->validate($this->rules())];
@@ -35,7 +42,7 @@ class WashMeshController extends Controller
             }
         }
 
-        $summary = ['accepted' => 0, 'duplicates' => 0, 'expired' => 0, 'rejected' => 0];
+        $summary = ['accepted' => 0, 'duplicates' => 0, 'expired' => 0, 'rejected' => 0, 'quota_exceeded' => 0];
         $incidents = [];
 
         foreach ($incoming as $item) {
@@ -45,16 +52,30 @@ class WashMeshController extends Controller
                 continue;
             }
 
+            // Quota journalier par nœud d'origine (anti-spam).
+            $cap = (int) config('services.mesh.daily_cap_per_origin', 500);
+            if (MeshBundle::where('origin_node_id', $item['origin_node_id'])->whereDate('created_at', today())->count() >= $cap) {
+                Log::warning('mesh.bundle.rejected', ['bundle_id' => $item['bundle_id'], 'cause' => 'quota', 'origin' => $item['origin_node_id']]);
+                $summary['quota_exceeded']++;
+                continue;
+            }
+
             $hops = $item['hops'] ?? [$item['origin_node_id']];
             $hopCount = max(0, count($hops) - 1);
             $maxHops = (int) ($item['max_hops'] ?? 10);
 
             if ($hopCount > $maxHops) {
+                Log::warning('mesh.bundle.rejected', ['bundle_id' => $item['bundle_id'], 'cause' => 'max_hops', 'hop_count' => $hopCount]);
                 $summary['rejected']++;
                 continue;
             }
 
-            $expiresAt = isset($item['expires_at']) ? now()->parse($item['expires_at']) : now()->addDays(7);
+            // lifetime (durée) préféré à expires_at absolu : les horloges
+            // villageoises ne sont pas fiables, le serveur dérive l'expiration.
+            $lifetime = isset($item['lifetime_seconds']) ? (int) $item['lifetime_seconds'] : null;
+            $expiresAt = $lifetime !== null
+                ? now()->addSeconds($lifetime)
+                : (isset($item['expires_at']) ? now()->parse($item['expires_at']) : now()->addDays(7));
             if ($expiresAt->isPast()) {
                 MeshBundle::create($this->attributes($item, $hops, $hopCount, $maxHops, $expiresAt, 'expired'));
                 $summary['expired']++;
@@ -63,29 +84,41 @@ class WashMeshController extends Controller
 
             $school = School::find($item['school_id']);
 
-            $bundle = DB::transaction(function () use ($item, $hops, $hopCount, $maxHops, $expiresAt, $school, $triage, $request) {
-                $record = MeshBundle::create(
-                    $this->attributes($item, $hops, $hopCount, $maxHops, $expiresAt, 'delivered')
-                );
+            try {
+                $bundle = DB::transaction(function () use ($item, $hops, $hopCount, $maxHops, $expiresAt, $school, $triage, $request) {
+                    $record = MeshBundle::create(
+                        $this->attributes($item, $hops, $hopCount, $maxHops, $expiresAt, 'delivered')
+                    );
 
-                // Triage IA standard : le mesh ne court-circuite jamais le pipeline.
-                $result = $triage->ingest(
-                    $school,
-                    'text',
-                    $item['message'] ?? null,
-                    null,
-                    null,
-                    $request->user(),
-                    'mesh',
-                );
+                    // Triage IA standard : le mesh ne court-circuite jamais le pipeline.
+                    $result = $triage->ingest(
+                        $school,
+                        'text',
+                        $item['message'] ?? null,
+                        null,
+                        null,
+                        $request->user(),
+                        'mesh',
+                    );
 
-                $record->update([
-                    'report_id' => $result['report']->id,
-                    'delivered_at' => now(),
-                ]);
+                    $record->update([
+                        'report_id' => $result['report']->id,
+                        'delivered_at' => now(),
+                    ]);
 
-                return ['bundle' => $record, 'incident' => $result['incident']];
-            });
+                    return ['bundle' => $record, 'incident' => $result['incident']];
+                });
+            } catch (UniqueConstraintViolationException) {
+                // Course entre le test d'existence et l'insert : c'est un doublon.
+                $summary['duplicates']++;
+                continue;
+            }
+
+            Log::info('mesh.bundle.accepted', [
+                'bundle_id' => $bundle['bundle']->bundle_id,
+                'origin' => $item['origin_node_id'],
+                'hop_count' => $hopCount,
+            ]);
 
             $summary['accepted']++;
             $incidents[] = [
@@ -148,7 +181,18 @@ class WashMeshController extends Controller
             'created_at' => ['nullable', 'date'],
             'expires_at' => ['nullable', 'date'],
             'received_via_node_id' => ['nullable', 'string', 'max:64'],
-            'checksum' => ['nullable', 'string', 'max:64'],
+            'checksum' => ['nullable', 'string', 'max:128'],
+            // v1.1 additive (tous optionnels, défauts serveur).
+            'destination_eid' => ['nullable', 'string', 'max:128'],
+            'report_to_eid' => ['nullable', 'string', 'max:128'],
+            'lifetime_seconds' => ['nullable', 'integer', 'min:60', 'max:2592000'],
+            'previous_node_id' => ['nullable', 'string', 'max:64'],
+            'copies_remaining' => ['nullable', 'integer', 'min:1', 'max:64'],
+            'fragment_offset' => ['nullable', 'integer', 'min:0'],
+            'fragment_total' => ['nullable', 'integer', 'min:1'],
+            'custody_requested' => ['nullable', 'boolean'],
+            'priority' => ['nullable', 'in:normal,high,alert'],
+            'signature' => ['nullable', 'string', 'max:128'],
         ];
     }
 
@@ -169,6 +213,16 @@ class WashMeshController extends Controller
             'received_via_node_id' => $item['received_via_node_id'] ?? end($hops) ?: null,
             'status' => $status,
             'expires_at' => $expiresAt,
+            'destination_eid' => $item['destination_eid'] ?? 'dtn://wash-sentinel/ingest',
+            'report_to_eid' => $item['report_to_eid'] ?? null,
+            'lifetime_seconds' => isset($item['lifetime_seconds']) ? (int) $item['lifetime_seconds'] : null,
+            'previous_node_id' => $item['previous_node_id'] ?? (count($hops) >= 2 ? $hops[count($hops) - 2] : null),
+            'copies_remaining' => (int) ($item['copies_remaining'] ?? 8),
+            'fragment_offset' => $item['fragment_offset'] ?? null,
+            'fragment_total' => $item['fragment_total'] ?? null,
+            'custody_requested' => (bool) ($item['custody_requested'] ?? false),
+            'priority' => $item['priority'] ?? 'normal',
+            'signature' => $item['signature'] ?? null,
         ];
     }
 }

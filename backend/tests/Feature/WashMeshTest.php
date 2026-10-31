@@ -90,4 +90,52 @@ class WashMeshTest extends TestCase
             ->assertJsonPath('avg_hops', 2)
             ->assertJsonPath('origins', 1);
     }
+
+    public function test_v11_fields_are_stored_with_defaults(): void
+    {
+        $school = School::create(['name' => 'EP Yokadouma', 'code' => 'CM-EST-42', 'district' => 'Boumba-et-Ngoko']);
+
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$this->bundlePayload($school, [
+            'lifetime_seconds' => 3600,
+            'copies_remaining' => 4,
+            'priority' => 'high',
+            'custody_requested' => true,
+            'signature' => str_repeat('a', 128),
+        ])]])->assertCreated();
+
+        $bundle = MeshBundle::first();
+        $this->assertEquals('dtn://wash-sentinel/ingest', $bundle->destination_eid);
+        $this->assertEquals(3600, $bundle->lifetime_seconds);
+        $this->assertEquals(4, $bundle->copies_remaining);
+        $this->assertEquals('high', $bundle->priority);
+        $this->assertTrue($bundle->custody_requested);
+        $this->assertEquals('node-B-taximoto', $bundle->previous_node_id);
+        // lifetime dérivé côté serveur : ~1 h, pas l'expires_at du client.
+        $this->assertTrue($bundle->expires_at->diffInMinutes(now()->addHour()) < 2);
+    }
+
+    public function test_ingest_key_is_enforced_when_configured(): void
+    {
+        config(['services.mesh.ingest_key' => 'relay-secret']);
+        $school = School::create(['name' => 'EP Yokadouma', 'code' => 'CM-EST-42', 'district' => 'Boumba-et-Ngoko']);
+
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$this->bundlePayload($school)]])
+            ->assertUnauthorized();
+
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$this->bundlePayload($school)]],
+            ['X-Mesh-Key' => 'relay-secret'])
+            ->assertCreated()->assertJsonPath('summary.accepted', 1);
+    }
+
+    public function test_daily_cap_per_origin_is_enforced(): void
+    {
+        config(['services.mesh.daily_cap_per_origin' => 1]);
+        $school = School::create(['name' => 'EP Yokadouma', 'code' => 'CM-EST-42', 'district' => 'Boumba-et-Ngoko']);
+
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$this->bundlePayload($school)]])->assertCreated();
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$this->bundlePayload($school)]])
+            ->assertCreated()->assertJsonPath('summary.quota_exceeded', 1);
+
+        $this->assertEquals(1, MeshBundle::count());
+    }
 }

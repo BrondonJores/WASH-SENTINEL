@@ -11,6 +11,9 @@ class MeshBundle extends Model
         'bundle_id', 'origin_node_id', 'school_id', 'school_code',
         'channel', 'message', 'payload', 'hops', 'hop_count', 'max_hops',
         'received_via_node_id', 'status', 'report_id', 'expires_at', 'delivered_at',
+        'destination_eid', 'report_to_eid', 'lifetime_seconds', 'previous_node_id',
+        'copies_remaining', 'fragment_offset', 'fragment_total',
+        'custody_requested', 'priority', 'signature',
     ];
 
     protected $casts = [
@@ -20,6 +23,11 @@ class MeshBundle extends Model
         'max_hops' => 'integer',
         'expires_at' => 'datetime',
         'delivered_at' => 'datetime',
+        'lifetime_seconds' => 'integer',
+        'copies_remaining' => 'integer',
+        'fragment_offset' => 'integer',
+        'fragment_total' => 'integer',
+        'custody_requested' => 'boolean',
     ];
 
     public function school(): BelongsTo

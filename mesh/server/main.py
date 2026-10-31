@@ -18,12 +18,14 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 LARAVEL_URL = os.environ.get("LARAVEL_URL", "http://laravel:8080")
+LARAVEL_KEY = os.environ.get("MESH_INGEST_KEY", "")
 MAX_STORE = int(os.environ.get("MESH_MAX_STORE", "5000"))
+RELAY_KEY = os.environ.get("MESH_RELAY_API_KEY", "")
 
 app = FastAPI(title="WASH Mesh Relay", version="1.0.0")
 app.add_middleware(
@@ -37,6 +39,14 @@ app.add_middleware(
 STORE: dict[str, dict[str, Any]] = {}
 # node_id -> websocket live
 PEERS: dict[str, WebSocket] = {}
+# compteurs cumulés par cause (observabilité Phase 0)
+COUNTERS: dict[str, int] = {"stored": 0, "duplicates": 0, "expired": 0, "rejected": 0, "evicted_lru": 0}
+
+
+def require_key(request: Request) -> None:
+    """Clé relai optionnelle : si MESH_RELAY_API_KEY est défini, X-Mesh-Key exigé."""
+    if RELAY_KEY and request.headers.get("x-mesh-key") != RELAY_KEY:
+        raise HTTPException(status_code=401, detail="Clé relai manquante ou invalide.")
 
 
 # ---------- Modèles ----------
@@ -53,7 +63,18 @@ class Bundle(BaseModel):
     expires_at: datetime
     max_hops: int = Field(default=10, ge=1, le=20)
     hops: list[str] = Field(default_factory=list, max_length=21)
-    checksum: str | None = Field(default=None, max_length=64)
+    checksum: str | None = Field(default=None, max_length=128)
+    # v1.1 additive (alignement BPv7, tous optionnels).
+    destination: str | None = Field(default=None, max_length=128)
+    report_to: str | None = Field(default=None, max_length=128)
+    lifetime_seconds: int | None = Field(default=None, ge=60, le=2592000)
+    previous_node: str | None = Field(default=None, max_length=64)
+    copies_remaining: int = Field(default=8, ge=1, le=64)
+    fragment_offset: int | None = Field(default=None, ge=0)
+    fragment_total: int | None = Field(default=None, ge=1)
+    custody_requested: bool = False
+    priority: str = "normal"
+    signature: str | None = Field(default=None, max_length=128)
 
 
 class StoreRequest(BaseModel):
@@ -97,7 +118,7 @@ def purge_expired() -> int:
 
 
 def store_one(node_id: str, bundle: Bundle) -> str:
-    """Retourne stored | duplicate | expired | rejected."""
+    """Retourne stored | duplicate | expired | rejected (et incrémente COUNTERS)."""
     bid = str(bundle.bundle_id)
     if bid in STORE:
         # On enrichit les hops connus sans écraser le bundle d'origine.
@@ -106,6 +127,7 @@ def store_one(node_id: str, bundle: Bundle) -> str:
             if hop not in known:
                 STORE[bid]["hops"].append(hop)
                 known.add(hop)
+        COUNTERS["duplicates"] += 1
         return "duplicate"
     data = bundle.model_dump(mode="json")
     data["expires_at"] = bundle.expires_at
@@ -117,19 +139,30 @@ def store_one(node_id: str, bundle: Bundle) -> str:
         # sérialisation en vérifiant aussi la forme brute reçue.
         raw = bundle.model_dump(mode="json")
         if bundle.checksum != canonical_checksum(raw):
+            COUNTERS["rejected"] += 1
             return "rejected"
     if _expired(bundle.expires_at):
+        COUNTERS["expired"] += 1
         return "expired"
     hop_count = max(0, len(bundle.hops) - 1)
     if hop_count > bundle.max_hops:
+        COUNTERS["rejected"] += 1
+        return "rejected"
+    if bundle.priority not in ("normal", "high", "alert"):
+        COUNTERS["rejected"] += 1
         return "rejected"
     if len(STORE) >= MAX_STORE:
         purge_expired()
-        if len(STORE) >= MAX_STORE:
-            return "rejected"
+    while len(STORE) >= MAX_STORE:
+        # Éviction LRU : le plus ancien stocké sort (jamais de rejet par manque
+        # de place quand tout est frais — le rejet ne concerne que le contenu).
+        oldest = min(STORE.items(), key=lambda kv: kv[1]["stored_at"])[0]
+        STORE.pop(oldest, None)
+        COUNTERS["evicted_lru"] += 1
     data["received_via"] = node_id
     data["stored_at"] = _utcnow()
     STORE[bid] = data
+    COUNTERS["stored"] += 1
     return "stored"
 
 
