@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Badge, Button, Card } from './ui';
 import { Icon } from './icons';
+import { VoicePlayer } from './VoiceControls';
 import type { AgentCard } from '../lib/api';
 import { api, ApiError } from '../lib/api';
 import { ThresholdGauge } from './ThresholdGauge';
@@ -32,11 +33,25 @@ const fmtOpt = (v: unknown): string | undefined => (typeof v === 'string' && v !
 
 const fmtDate = (v: unknown): string => {
   if (typeof v !== 'string' || v === '') return '—';
-  const d = new Date(v);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  const d =
+    m !== null ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(v);
   return Number.isNaN(d.getTime())
     ? '—'
     : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
 };
+
+/** Remplace les dates ISO (AAAA-MM-JJ) d'un texte par des dates lisibles. */
+const humanizeDates = (text: string): string =>
+  text.replace(/\d{4}-\d{2}-\d{2}/g, (m) => fmtDate(m));
+
+/** Assemble un texte parlé en français simple à partir de morceaux. */
+const speak = (...parts: (string | undefined)[]): string =>
+  parts.filter((p): p is string => typeof p === 'string' && p.trim() !== '').join(' ');
+
+/** Convertit un montant en libellé « 12 500 XAF » ; undefined si absent. */
+const fmtCostXAF = (v: unknown): string | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? `${fmtInt(v)} XAF` : undefined;
 
 const asArray = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const asRecord = (v: unknown): Record<string, unknown> =>
@@ -93,23 +108,44 @@ const VERDICT_STYLE: Record<string, string> = {
 
 // ---------- Briques ----------
 
+/** Même pattern que ConsolePage : synthèse vocale au clic, jamais d'autoplay. */
+async function synthesizeToUrl(text: string): Promise<string | null> {
+  try {
+    const res = await api.synthesizeVoice(text);
+    const bin = atob(res.audio_base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+    return URL.createObjectURL(new Blob([bytes], { type: res.mime_type }));
+  } catch {
+    return null;
+  }
+}
+
+function ListenButton({ text }: { text: string }) {
+  if (text === '') return null;
+  return <VoicePlayer onRequestAudio={() => synthesizeToUrl(text)} />;
+}
+
 function CardShell({
   title,
   meta,
   actions,
+  listenText,
   children,
 }: {
   title: string;
   meta?: string;
   actions?: ReactNode;
+  listenText?: string;
   children: ReactNode;
 }) {
   return (
     <Card className="p-4 sm:p-5">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-b border-stone-200/80 pb-3 dark:border-white/[0.07]">
         <h3 className="font-display text-[17px] font-bold leading-snug tracking-tight">{title}</h3>
-        {(meta !== undefined || actions) && (
+        {(meta !== undefined || actions !== undefined || listenText !== undefined) && (
           <div className="flex flex-wrap items-center gap-2">
+            {listenText !== undefined && listenText !== '' && <ListenButton text={listenText} />}
             {meta !== undefined && (
               <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{meta}</span>
             )}
@@ -287,10 +323,16 @@ function IncidentPickerCard({
     setPicked(ref);
     onAsk?.(ref);
   };
+  const countLabel = candidates.length <= 1 ? '1 incident' : `${candidates.length} incidents`;
   return (
     <CardShell
       title={title}
-      meta={hint === undefined ? `${candidates.length} incidents` : `« ${hint} » · ${candidates.length}`}
+      meta={hint === undefined ? countLabel : `« ${hint} » · ${countLabel}`}
+      listenText={speak(
+        'Plusieurs incidents sont possibles.',
+        hint !== undefined ? `Tu as dit : ${hint}.` : undefined,
+        'Choisis le bon dans la liste.',
+      )}
     >
       <p className="mb-3 text-sm text-stone-500 dark:text-stone-400">
         Plusieurs incidents correspondent. Cliquez sur le bon — école, urgence et élèves aident à trancher.
@@ -354,10 +396,24 @@ function IncidentCard({
   const priority = typeof data.priority_score === 'number' ? data.priority_score : null;
   const school = fmtOpt(data.school_name);
   const incidentId = typeof data.id === 'number' ? data.id : null;
+  const affected = typeof data.affected_students === 'number' ? data.affected_students : null;
+  const summary = typeof data.summary === 'string' ? data.summary : fmtOpt(data.insight);
   return (
     <CardShell
       title={title}
       meta={fmtOpt(data.reference_code)}
+      listenText={speak(
+        "Détail de l'intervention.",
+        summary,
+        school !== undefined ? `École : ${school}.` : undefined,
+        affected === null
+          ? undefined
+          : affected === 0
+            ? 'Aucun élève touché.'
+            : affected === 1
+              ? '1 élève touché.'
+              : `${affected} élèves touchés.`,
+      )}
       actions={
         <>
           {onDetail !== undefined && incidentId !== null && (
@@ -394,7 +450,15 @@ function IncidentCard({
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat label="Élèves affectés" value={fmtInt(data.affected_students)} />
         <Stat label="Signalé le" value={fmtDate(data.reported_at)} mono={false} />
-        <Stat label="Catégorie" value={fmtText(data.category)} mono={false} />
+        <Stat
+          label="Catégorie"
+          value={
+            typeof data.category === 'string' && data.category !== ''
+              ? (CATEGORY_LABEL[data.category] ?? data.category)
+              : 'Non précisée'
+          }
+          mono={false}
+        />
       </div>
       <FollowUps
         onAsk={onAsk}
@@ -422,9 +486,21 @@ function RankingCard({
   const ranking = asArray<Record<string, unknown>>(data.ranking);
   const max = Math.max(0, ...ranking.map((r) => (typeof r.need_score === 'number' ? r.need_score : 0)));
   const top = fmtOpt(ranking[0]?.school_name);
+  const totalSchools = typeof data.total === 'number' ? data.total : ranking.length;
+  const schoolsMeta =
+    totalSchools === 0 ? 'Aucune école' : `${fmtInt(totalSchools)} école${totalSchools > 1 ? 's' : ''}`;
+  const rankingInsight = fmtOpt(data.insight) ?? '';
   return (
-    <CardShell title={title} meta={`${fmtInt(data.total)} écoles`}>
-      <InsightLine text={fmtOpt(data.insight) ?? ''} />
+    <CardShell
+      title={title}
+      meta={schoolsMeta}
+      listenText={speak(
+        'Classement des écoles par besoin.',
+        rankingInsight !== '' ? rankingInsight : undefined,
+        top !== undefined ? `En premier : ${top}.` : 'Aucune école à classer.',
+      )}
+    >
+      <InsightLine text={rankingInsight} />
       {ranking.length === 0 ? (
         <p className="text-sm text-stone-600 dark:text-stone-400">Aucune école à classer.</p>
       ) : (
@@ -433,6 +509,12 @@ function RankingCard({
             const urg = typeof r.top_urgency === 'string' ? r.top_urgency : 'low';
             const score = typeof r.need_score === 'number' ? r.need_score : 0;
             const n = typeof r.open_incidents === 'number' ? r.open_incidents : 0;
+            const pupils = typeof r.affected_students === 'number' ? r.affected_students : 0;
+            const oldest = typeof r.oldest_days === 'number' ? r.oldest_days : 0;
+            const incidentsLabel = n === 0 ? 'Aucun incident' : `${fmtInt(n)} incident${n > 1 ? 's' : ''}`;
+            const pupilsLabel =
+              pupils === 0 ? 'aucun élève' : `${fmtInt(pupils)} élève${pupils > 1 ? 's' : ''}`;
+            const oldestLabel = oldest <= 0 ? "aujourd'hui" : `${fmtInt(oldest)} j`;
             const schoolId = typeof r.school_id === 'number' ? r.school_id : null;
             const clickable = onDetail !== undefined && schoolId !== null;
             const rowClass = `flex items-center gap-3 py-2.5 first:pt-0 last:pb-0 ${
@@ -446,8 +528,7 @@ function RankingCard({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{fmtText(r.school_name)}</span>
                   <span className="block font-mono text-[11px] text-stone-500 dark:text-stone-400">
-                    {fmtText(r.district)} · {fmtInt(n)} incident{n === 1 ? '' : 's'} ·{' '}
-                    {fmtInt(r.affected_students)} élèves · {fmtInt(r.oldest_days)} j
+                    {fmtText(r.district)} · {incidentsLabel} · {pupilsLabel} · {oldestLabel}
                   </span>
                   <span className="mt-1.5 block">
                     <NeedBar value={score} max={max} />
@@ -504,8 +585,17 @@ function AnalysisCard({
   const ratio = typeof data.repair_ratio_percent === 'number' ? data.repair_ratio_percent : null;
   const open = asArray<Record<string, unknown>>(data.open_incidents);
   const school = fmtOpt(data.school_name);
+  const justification = typeof data.justification === 'string' ? data.justification : undefined;
   return (
-    <CardShell title={title} meta={fmtOpt(data.district)}>
+    <CardShell
+      title={title}
+      meta={fmtOpt(data.district)}
+      listenText={speak(
+        school !== undefined ? `Analyse de ${school}.` : "Analyse de l'école.",
+        reco?.label,
+        justification,
+      )}
+    >
       {reco && (
         <div
           className={`mb-3 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${VERDICT_STYLE[reco.tone]}`}
@@ -588,15 +678,29 @@ function DistrictCard({
   const byCategory = asRecord(data.by_category);
   const schools = asArray<string>(data.schools_involved);
   const total = typeof data.open_incidents === 'number' ? data.open_incidents : 0;
+  const totalPupils = typeof data.total_affected_students === 'number' ? data.total_affected_students : 0;
+  const districtInsight = fmtOpt(data.insight);
   const urgEntries = Object.entries(byUrgency).filter(([, v]) => typeof v === 'number') as [string, number][];
   return (
-    <CardShell title={title}>
+    <CardShell
+      title={title}
+      listenText={speak(
+        'Synthèse du district.',
+        districtInsight,
+        total === 0
+          ? 'Aucun incident ouvert.'
+          : total === 1
+            ? '1 incident ouvert.'
+            : `${total} incidents ouverts.`,
+        totalPupils === 0 ? 'Aucun élève touché.' : `${totalPupils} élèves touchés.`,
+      )}
+    >
       <div className="grid grid-cols-2 gap-3">
         <HeroStat label="Incidents ouverts" value={fmtInt(data.open_incidents)} />
         <HeroStat label="Élèves affectés" value={fmtInt(data.total_affected_students)} />
       </div>
       <div className="mt-3">
-        <InsightLine text={fmtOpt(data.insight) ?? ''} />
+        <InsightLine text={districtInsight ?? ''} />
       </div>
       {urgEntries.length > 0 && (
         <div className="mt-3 space-y-1.5">
@@ -667,14 +771,28 @@ function TrendCard({
   const delta = last !== undefined && avg > 0 ? ((last - avg) / avg) * 100 : null;
   const currency = typeof figures.currency === 'string' ? ` (${figures.currency})` : '';
   const school = fmtOpt(data.school_name);
+  const months = typeof data.months === 'number' && Number.isFinite(data.months) ? data.months : null;
+  const trendInsight = fmtOpt(data.insight);
   return (
-    <CardShell title={title} meta={typeof data.months === 'number' ? `${fmtInt(data.months)} mois` : undefined}>
+    <CardShell
+      title={title}
+      meta={months === null ? undefined : months <= 1 ? '1 mois' : `${fmtInt(months)} mois`}
+      listenText={speak(
+        months === null
+          ? 'Tendances.'
+          : months <= 1
+            ? 'Tendance du mois.'
+            : `Tendances sur ${months} mois.`,
+        trendInsight,
+        school !== undefined ? `École : ${school}.` : undefined,
+      )}
+    >
       <div className="flex items-end justify-between gap-3">
         <HeroStat label={`Coût total${currency}`} value={fmtInt(figures.total_cost)} delta={delta} invert />
         <Sparkline data={costs} />
       </div>
       <div className="mt-3">
-        <InsightLine text={fmtOpt(data.insight) ?? ''} />
+        <InsightLine text={trendInsight ?? ''} />
       </div>
       <div className="mt-3 grid grid-cols-3 gap-3">
         <Stat label="Pannes" value={fmtInt(figures.total_incidents)} />
@@ -704,14 +822,21 @@ function TrendCard({
 
 function ConfirmationCard({ title, data }: { title: string; data: Record<string, unknown> }) {
   const matched = asRecord(data.matched_school);
+  const description = typeof data.description === 'string' ? data.description : undefined;
+  const matchedName = fmtOpt(matched.school_name);
   return (
     <CardShell
       title={title}
       meta="Brouillon"
       actions={data.needs_confirmation === true ? <Badge tone="warn">Confirmation requise</Badge> : undefined}
+      listenText={speak(
+        'Vérifie ce brouillon.',
+        description,
+        matchedName !== undefined ? `École : ${matchedName}.` : undefined,
+      )}
     >
-      {typeof data.description === 'string' && data.description !== '' && (
-        <p className="text-sm leading-relaxed">{data.description}</p>
+      {description !== undefined && (
+        <p className="text-sm leading-relaxed">{description}</p>
       )}
       {Object.keys(matched).length > 0 && (
         <p className="mt-2 text-sm">
@@ -775,6 +900,20 @@ function ActionConfirmationCard({
     return Number.isNaN(d.getTime()) ? null : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   })();
 
+  const recapText =
+    typeof data.recap === 'string' && data.recap !== ''
+      ? data.recap
+      : rows
+          .slice(0, 4)
+          .map((r) => {
+            const row = asRecord(r);
+            const label = fmtOpt(row.label);
+            const value = fmtOpt(row.value);
+            if (label !== undefined && value !== undefined) return `${label} : ${value}`;
+            return value ?? label ?? '';
+          })
+          .filter((s) => s !== '')
+          .join('. ');
   return (
     <CardShell
       title={title}
@@ -788,6 +927,7 @@ function ActionConfirmationCard({
           <Badge tone="warn">Confirmation requise</Badge>
         )
       }
+      listenText={speak('Confirme ton choix.', recapText !== '' ? recapText : undefined)}
     >
       <dl className="space-y-1.5">
         {rows.map((r, i) => {
@@ -840,10 +980,12 @@ function ActionConfirmationCard({
 
 function ActionResultCard({ title, data }: { title: string; data: Record<string, unknown> }) {
   const status = typeof data.status === 'string' ? data.status : 'confirmed';
+  const resultSummary = typeof data.summary === 'string' ? data.summary : undefined;
   return (
     <CardShell
       title={title}
       meta="Résultat"
+      listenText={speak(title, resultSummary)}
       actions={
         status === 'confirmed' ? (
           <Badge tone="success">Exécuté</Badge>
@@ -854,7 +996,7 @@ function ActionResultCard({ title, data }: { title: string; data: Record<string,
         )
       }
     >
-      <p className="text-sm leading-relaxed">{fmtText(data.summary)}</p>
+      <p className="text-sm leading-relaxed">{resultSummary ?? 'Terminé.'}</p>
       {typeof data.reference_code === 'string' && data.reference_code !== '' && (
         <p className="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400">{data.reference_code}</p>
       )}
@@ -863,23 +1005,16 @@ function ActionResultCard({ title, data }: { title: string; data: Record<string,
 }
 
 function GenericCard({ card }: { card: AgentCard }) {
-  const entries = Object.entries(card.data);
+  const data = asRecord(card.data);
+  const insight =
+    fmtOpt(data.insight) ?? fmtOpt(data.summary) ?? fmtOpt(data.description) ?? fmtOpt(data.message);
+  const text =
+    insight !== undefined
+      ? humanizeDates(insight)
+      : "Le résultat est prêt. Appuie sur Écouter pour l'entendre, ou demande un résumé.";
   return (
-    <CardShell title={card.title} meta={card.type}>
-      {entries.length === 0 ? (
-        <p className="text-sm text-stone-600 dark:text-stone-400">Aucune donnée.</p>
-      ) : (
-        <dl className="space-y-1.5">
-          {entries.map(([k, v]) => (
-            <div key={k} className="flex items-start justify-between gap-3 text-sm">
-              <dt className="shrink-0 font-mono text-xs text-stone-500 dark:text-stone-400">{k}</dt>
-              <dd className="min-w-0 break-words text-right font-mono text-xs tabular-nums">
-                {typeof v === 'object' ? JSON.stringify(v)?.slice(0, 200) : fmtText(v)}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
+    <CardShell title={card.title} listenText={speak(card.title, text)}>
+      <p className="text-sm leading-relaxed">{text}</p>
     </CardShell>
   );
 }
@@ -917,9 +1052,23 @@ function TerritoryMapCard({
     });
   });
   const district = fmtOpt(data.district);
+  const territoryInsight = fmtOpt(data.insight) ?? '';
   return (
-    <CardShell title={title} meta={points.length > 0 ? `${points.length} écoles` : undefined}>
-      <InsightLine text={fmtOpt(data.insight) ?? ''} />
+    <CardShell
+      title={title}
+      meta={points.length === 0 ? undefined : points.length === 1 ? '1 école' : `${points.length} écoles`}
+      listenText={speak(
+        'Carte du territoire.',
+        territoryInsight !== '' ? territoryInsight : undefined,
+        district !== undefined ? `District : ${district}.` : undefined,
+        points.length === 0
+          ? 'Aucune école sur la carte.'
+          : points.length === 1
+            ? '1 école sur la carte.'
+            : `${points.length} écoles sur la carte.`,
+      )}
+    >
+      <InsightLine text={territoryInsight} />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Écoles géolocalisées" value={fmtInt(data.total)} />
         <Stat label="Incidents ouverts" value={fmtInt(data.open_incidents)} />
@@ -977,8 +1126,151 @@ function BriefingDeckCard({ title, data }: { title: string; data: Record<string,
   });
   if (slides.length === 0) return null;
   return (
-    <CardShell title={title} meta={`${slides.length} slides`}>
+    <CardShell
+      title={title}
+      meta={slides.length <= 1 ? '1 page' : `${slides.length} pages`}
+      listenText={speak(
+        'Briefing prêt.',
+        slides.length <= 1 ? '1 page.' : `${slides.length} pages.`,
+        `Première page : ${slides[0].title}.`,
+      )}
+    >
       <SlideDeck slides={slides} />
+    </CardShell>
+  );
+}
+
+function MaintenanceLogsCard({
+  title,
+  data,
+  onAsk,
+}: {
+  title: string;
+  data: Record<string, unknown>;
+  onAsk?: (q: string) => void;
+}) {
+  const items = asArray<Record<string, unknown>>(data.items);
+  const total =
+    typeof data.total === 'number' && Number.isFinite(data.total) ? Math.max(0, Math.round(data.total)) : items.length;
+  const empty = data.is_empty === true || items.length === 0;
+  const dayLabel = fmtDate(data.date);
+  const displayTitle = dayLabel === '—' ? title : `Interventions du ${dayLabel}`;
+  const insight = humanizeDates(fmtOpt(data.insight) ?? '');
+  const filters = asRecord(data.applied_filters);
+  const unknownSchool =
+    filters.school_matched === false &&
+    typeof filters.school_raw === 'string' &&
+    filters.school_raw.trim() !== ''
+      ? filters.school_raw.trim()
+      : undefined;
+  const schoolWarning =
+    unknownSchool !== undefined ? `École « ${unknownSchool} » non reconnue — filtre ignoré.` : undefined;
+
+  if (empty) {
+    const phrase = 'Aucune intervention ce jour-là.';
+    return (
+      <CardShell
+        title={displayTitle}
+        listenText={speak(
+          phrase,
+          dayLabel === '—' ? undefined : `Jour demandé : ${dayLabel}.`,
+          schoolWarning,
+          'Choisis une autre date.',
+        )}
+      >
+        <div className="flex flex-col items-center py-4 text-center">
+          <span
+            aria-hidden="true"
+            className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-700/10 text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
+          >
+            <Icon name="inbox" className="h-7 w-7" />
+          </span>
+          <p className="mt-3 text-[15px] font-semibold leading-relaxed">{phrase}</p>
+          {dayLabel !== '—' && (
+            <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">{dayLabel}</p>
+          )}
+          {schoolWarning !== undefined && (
+            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{schoolWarning}</p>
+          )}
+          {onAsk !== undefined && (
+            <Button
+              variant="primary"
+              size="sm"
+              className="mt-3"
+              onClick={() => onAsk('Voir les interventions à une autre date')}
+            >
+              Voir une autre date ?
+            </Button>
+          )}
+        </div>
+      </CardShell>
+    );
+  }
+
+  const rest = Math.max(0, total - items.length);
+  return (
+    <CardShell
+      title={displayTitle}
+      listenText={speak(
+        total <= 1 ? '1 intervention ce jour-là.' : `${total} interventions ce jour-là.`,
+        insight !== '' ? insight : undefined,
+        schoolWarning,
+      )}
+    >
+      <HeroStat
+        label={total <= 1 ? 'Intervention ce jour-là' : 'Interventions ce jour-là'}
+        value={fmtInt(total)}
+      />
+      {insight !== '' && (
+        <div className="mt-3">
+          <InsightLine text={insight} />
+        </div>
+      )}
+      {schoolWarning !== undefined && (
+        <p className="mb-3 text-sm text-amber-700 dark:text-amber-400">{schoolWarning}</p>
+      )}
+      <ul className="divide-y divide-stone-200 dark:divide-stone-800">
+        {items.map((it, i) => {
+          const logSchool = fmtOpt(it.school_name) ?? 'École non précisée';
+          const ref = fmtOpt(it.incident_ref);
+          const logTitle = fmtOpt(it.incident_title);
+          const cost = fmtCostXAF(it.cost_amount);
+          const notes = fmtOpt(it.notes);
+          const when = fmtDate(it.created_at);
+          return (
+            <li key={String(it.id ?? it.incident_id ?? i)} className="flex gap-3 py-3 first:pt-0 last:pb-0">
+              <span
+                aria-hidden="true"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-700/10 text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
+              >
+                <Icon name="school" className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold leading-snug">{logSchool}</p>
+                {logTitle !== undefined && (
+                  <p className="mt-0.5 text-sm leading-snug text-stone-600 dark:text-stone-400">{logTitle}</p>
+                )}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {ref !== undefined && <Badge>{ref}</Badge>}
+                  {cost !== undefined && <Badge tone="info">{cost}</Badge>}
+                  {when !== '—' && (
+                    <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{when}</span>
+                  )}
+                </div>
+                {notes !== undefined && (
+                  <p className="mt-1.5 text-sm leading-relaxed">{notes}</p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {rest > 0 && (
+        <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+          {rest === 1 ? '+ 1 autre intervention' : `+ ${rest} autres interventions`}
+        </p>
+      )}
+      <FollowUps onAsk={onAsk} items={['Voir une autre date ?']} />
     </CardShell>
   );
 }
@@ -1008,6 +1300,8 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <TerritoryMapCard title={card.title} data={data} onAsk={onAsk} />;
     case 'briefing_deck':
       return <BriefingDeckCard title={card.title} data={data} />;
+    case 'maintenance_logs':
+      return <MaintenanceLogsCard title={card.title} data={data} onAsk={onAsk} />;
     default:
       return <GenericCard card={card} />;
   }
