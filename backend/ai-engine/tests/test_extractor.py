@@ -59,5 +59,42 @@ class OtherNeverStoredTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res.data.issue_type, "blockage")
 
 
+class LocalKeywordsTest(unittest.TestCase):
+    """Filet langues locales (conservateur) + non-régression du filet FR."""
+
+    def setUp(self) -> None:
+        self.ex = WashExtractor(llm=None)  # type: ignore[arg-type]
+
+    def test_pidgin_wata_spoil_is_water_point(self) -> None:
+        self.assertEqual(
+            self.ex._guess_infrastructure("Wata don spoil for school pump."),
+            "water_point",
+        )
+
+    def test_douala_madiba_leak_is_water_point(self) -> None:
+        text = "Fuite autour du point madiba, l'eau coule depuis hier."
+        self.assertEqual(self.ex._guess_infrastructure(text), "water_point")
+        self.assertEqual(self.ex._guess_issue(text), "leak")
+
+    def test_pidgin_toilet_is_latrines(self) -> None:
+        self.assertEqual(
+            self.ex._guess_infrastructure("The school toilet is blocked."),
+            "toilets_latrines",
+        )
+
+    def test_french_net_unchanged(self) -> None:
+        self.assertEqual(self.ex._guess_issue("L'eau ne coule plus au robinet."), "total_breakdown")
+        self.assertEqual(
+            self.ex._guess_infrastructure("Les latrines des filles sont bouchées et débordent."),
+            "toilets_latrines",
+        )
+
+    def test_french_wins_over_local(self) -> None:
+        self.assertEqual(
+            self.ex._guess_infrastructure("Les toilettes sont bouchées, wata partout dans la cour."),
+            "toilets_latrines",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

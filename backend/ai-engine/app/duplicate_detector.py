@@ -1,16 +1,38 @@
+"""Détection de doublons par similarité cosinus sur embeddings.
+
+Seuils constatés (hérités du code, NON calibrés empiriquement — heuristiques) :
+- Décision doublon : 0.80 par défaut (`DuplicateCheckRequest.similarity_threshold`,
+  schemas.py). Le service Laravel appelle avec threshold=0.80 : cohérent.
+  Surcharge possible par appel via le paramètre `threshold` de `check()`.
+- Inscription en liste `matches` : 0.70 (interne, fixe).
+- Repli textuel Jaccard (embeddings indisponibles) : 0.50 (interne, fixe,
+  indépendant du seuil cosinus).
+"""
 from __future__ import annotations
 
 import numpy as np
 from .providers import BaseLLMProvider
 from .schemas import DuplicateCheckRequest, DuplicateCheckResponse, DuplicateMatch
 
+DEFAULT_SIMILARITY_THRESHOLD = 0.80
+"""Miroir documenté du défaut `DuplicateCheckRequest.similarity_threshold` (0.80)."""
+
 
 class DuplicateDetector:
     def __init__(self, llm: BaseLLMProvider):
         self.llm = llm
 
-    async def check(self, request: DuplicateCheckRequest) -> DuplicateCheckResponse:
-        """Compare un nouveau signalement aux incidents ouverts pour identifier les doublons."""
+    async def check(
+        self,
+        request: DuplicateCheckRequest,
+        threshold: float | None = None,
+    ) -> DuplicateCheckResponse:
+        """Compare un nouveau signalement aux incidents ouverts pour identifier les doublons.
+
+        `threshold` (optionnel) surcharge `request.similarity_threshold` pour cet
+        appel uniquement. `None` (défaut) = comportement actuel inchangé.
+        """
+        effective_threshold = request.similarity_threshold if threshold is None else threshold
         if not request.active_incidents:
             return DuplicateCheckResponse(is_duplicate=False)
 
@@ -43,7 +65,7 @@ class DuplicateDetector:
             similarity = float(np.dot(q_arr, i_arr) / (q_norm * i_norm))
 
             if similarity >= 0.70:
-                conf = "high" if similarity >= request.similarity_threshold else "moderate"
+                conf = "high" if similarity >= effective_threshold else "moderate"
                 matches.append(DuplicateMatch(
                     incident_id=inc.id,
                     similarity=round(similarity, 3),
@@ -54,7 +76,7 @@ class DuplicateDetector:
                 max_similarity = similarity
                 best_match_id = inc.id
 
-        is_dup = max_similarity >= request.similarity_threshold
+        is_dup = max_similarity >= effective_threshold
 
         return DuplicateCheckResponse(
             is_duplicate=is_dup,
@@ -64,7 +86,10 @@ class DuplicateDetector:
         )
 
     def _fallback_text_match(self, request: DuplicateCheckRequest) -> DuplicateCheckResponse:
-        """Fallback basique par intersection de mots-clés si Ollama Embeddings est injoignable."""
+        """Fallback basique par intersection de mots-clés si Ollama Embeddings est injoignable.
+
+        Seuil Jaccard fixe 0.50, indépendant du seuil cosinus (comportement hérité).
+        """
         incoming_words = set(request.incoming_summary.lower().split())
         best_id = None
         max_overlap = 0.0

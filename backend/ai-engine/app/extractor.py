@@ -1,3 +1,10 @@
+"""Extraction WASH : appel LLM + filets de mots-clés de repli (fallback).
+
+Les filets `_INFRA_KEYWORDS` / `_ISSUE_KEYWORDS` (français) et `_LOCAL_KEYWORDS`
+(pidgin camerounais + douala, conservateur) ne servent qu'à normaliser les
+réponses LLM hors-liste vers des catégories valides. Ils ne modifient ni le
+prompt ni la formule de priorité `calculate_priority_score` (inchangée).
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -109,10 +116,30 @@ class WashExtractor:
         (("volé", "volée", "vandalis", "saccag", "détruit", "disparu"), "vandalism"),
         (("eau jaune", "eau sale", "saleté", "contamin", "choléra", "cholera", "pollu", "trouble", "couleur"), "contamination"),
     )
+    # Filet langues locales — CONSERVATEUR : uniquement des termes haute-confiance.
+    # Règle : en cas de doute sur un mot, NE PAS l'ajouter. Chaque entrée indique
+    # langue + confiance. Consulté APRÈS le filet français (priorité au français).
+    _LOCAL_KEYWORDS = (
+        # Pidgin camerounais — confiance HAUTE : « toilet » = toilettes/latrines.
+        (("toilet",), "toilets_latrines"),
+        # Pidgin camerounais — confiance HAUTE : « wata » = eau → point d'eau.
+        (("wata",), "water_point"),
+        # Douala — terme NOTOIRE pour l'eau → point d'eau.
+        # AVERTISSEMENT : validation par locuteur recommandée avant élargissement.
+        (("madiba",), "water_point"),
+    )
 
     def _guess_infrastructure(self, raw_text: str) -> str:
+        """Filet FR d'abord, puis filet local conservateur, sinon « water_point ».
+
+        L'ordre du filet français est inchangé (non-régression) : le filet
+        local ne s'applique qu'aux textes sans mot-clé français reconnu.
+        """
         t = raw_text.lower()
         for keywords, value in self._INFRA_KEYWORDS:
+            if any(k in t for k in keywords):
+                return value
+        for keywords, value in self._LOCAL_KEYWORDS:
             if any(k in t for k in keywords):
                 return value
         return "water_point"
