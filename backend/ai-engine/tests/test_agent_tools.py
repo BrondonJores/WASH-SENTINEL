@@ -336,3 +336,97 @@ class PrepareDescriptionsTest(unittest.TestCase):
                     if t["function"]["name"] == "prepare_incident")
         self.assertIn("CREATION", desc)
         self.assertIn("UNIQUEMENT", desc)
+
+
+class TolerantSchoolFilterTest(unittest.TestCase):
+    """Filtre école tolérant : hint parasite → filtre ignoré + avertissement.
+
+    Non-régression : le petit modèle passait « aujourd'hui » comme école, ce
+    qui renvoyait items=[] en silence alors que des logs existaient.
+    """
+
+    def test_parasite_hint_today_ignores_filter(self) -> None:
+        res = TOOL_EXECUTORS["list_maintenance_logs"](
+            {"date": "2026-10-31", "school": "aujourd'hui"},
+            ListMaintenanceLogsTest.LOG_CONTEXT)
+        self.assertEqual(res["total"], 2)
+        self.assertEqual(len(res["items"]), 2)
+        self.assertTrue(res["insight"].startswith(
+            "École aujourd'hui non reconnue — filtre ignoré. "))
+        self.assertFalse(res["is_empty"])
+        self.assertEqual(res["applied_filters"],
+                         {"date": "2026-10-31", "school_raw": "aujourd'hui",
+                          "school_matched": False})
+
+    def test_parasite_hint_xyz_ignores_filter(self) -> None:
+        res = TOOL_EXECUTORS["list_maintenance_logs"](
+            {"date": "2026-10-31", "school": "xyz"},
+            ListMaintenanceLogsTest.LOG_CONTEXT)
+        self.assertEqual(res["total"], 2)
+        self.assertTrue(res["insight"].startswith(
+            "École xyz non reconnue — filtre ignoré. "))
+        self.assertFalse(res["applied_filters"]["school_matched"])
+
+    def test_parasite_hint_on_empty_day_warns_but_stays_honest(self) -> None:
+        res = TOOL_EXECUTORS["list_maintenance_logs"](
+            {"date": "2026-10-29", "school": "xyz"},
+            ListMaintenanceLogsTest.LOG_CONTEXT)
+        self.assertEqual(res["total"], 0)
+        self.assertTrue(res["is_empty"])
+        self.assertTrue(res["insight"].startswith(
+            "École xyz non reconnue — filtre ignoré. "))
+        self.assertIn("Aucune intervention journalisée le 2026-10-29.",
+                      res["insight"])
+
+    def test_valid_partial_hint_still_filters(self) -> None:
+        ctx = {
+            "schools": [
+                {"school_id": 1, "school_name": "École Publique de Bonanjo"},
+                {"school_id": 3, "school_name": "École de Nkol"},
+            ],
+            "maintenance_logs": [
+                {"id": 11, "school_name": "École Publique de Bonanjo",
+                 "created_at": "2026-10-31T08:15:00+00:00"},
+                {"id": 12, "school_name": "École de Nkol",
+                 "created_at": "2026-10-31T14:40:00+00:00"},
+            ],
+        }
+        res = TOOL_EXECUTORS["list_maintenance_logs"](
+            {"date": "2026-10-31", "school": "nkol"}, ctx)
+        self.assertEqual(res["total"], 1)
+        self.assertEqual(res["items"][0]["school_name"], "École de Nkol")
+        self.assertNotIn("non reconnue", res["insight"])
+        self.assertTrue(res["applied_filters"]["school_matched"])
+        self.assertFalse(res["is_empty"])
+
+    def test_reverse_substring_counts_as_match(self) -> None:
+        from app.agent_tools import _school_hint_matches_known
+        self.assertTrue(_school_hint_matches_known(
+            "École Rurale de Ngok et environs",
+            ListMaintenanceLogsTest.LOG_CONTEXT))
+        self.assertFalse(_school_hint_matches_known(
+            "xyz", ListMaintenanceLogsTest.LOG_CONTEXT))
+
+    def test_absurd_or_missing_date_falls_back_to_today(self) -> None:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        ctx = {"schools": [], "maintenance_logs": [
+            {"id": 1, "school_name": "E1",
+             "created_at": f"{today}T07:00:00+00:00"},
+            {"id": 2, "school_name": "E2",
+             "created_at": "2000-01-01T07:00:00+00:00"},
+        ]}
+        for bad in ("aujourd'hui", "xyz", "", "2026-13-99", "31/10/2026", None):
+            with self.subTest(date=bad):
+                res = TOOL_EXECUTORS["list_maintenance_logs"]({"date": bad}, ctx)
+                self.assertEqual(res["date"], today)
+                self.assertEqual(res["total"], 1)
+                self.assertEqual(res["applied_filters"]["date"], today)
+
+    def test_echo_present_on_empty_observation(self) -> None:
+        res = TOOL_EXECUTORS["list_maintenance_logs"](
+            {"date": "2026-10-29"}, ListMaintenanceLogsTest.LOG_CONTEXT)
+        self.assertTrue(res["is_empty"])
+        self.assertEqual(res["applied_filters"],
+                         {"date": "2026-10-29", "school_raw": None,
+                          "school_matched": True})

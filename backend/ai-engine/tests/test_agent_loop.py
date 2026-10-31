@@ -579,3 +579,95 @@ class SystemPromptDateTest(unittest.TestCase):
         today = datetime.now(timezone.utc).date().isoformat()
         self.assertIn(f"Aujourd'hui : {today}", _build_system_prompt("fr"))
         self.assertIn(today, _build_system_prompt("en"))
+
+
+class ContradictionGuardUnitTest(unittest.TestCase):
+    """Garde contradiction : référence WASH-* + absence + liste vide."""
+
+    def test_cites_reference_triggers(self) -> None:
+        from app.agent_loop import _cites_reference
+        self.assertTrue(_cites_reference(
+            "Récapitulatif : WASH-2026-0005 — Pompe cassée."))
+        self.assertTrue(_cites_reference("Voir WASH-2024-ZQNU8W pour le détail."))
+
+    def test_cites_reference_quiet(self) -> None:
+        from app.agent_loop import _cites_reference
+        self.assertFalse(_cites_reference("2 interventions journalisées."))
+        self.assertFalse(_cites_reference("Aucune intervention aujourd'hui."))
+        self.assertFalse(_cites_reference(""))
+
+    def test_has_empty_list_obs(self) -> None:
+        from app.agent_loop import _has_empty_list_obs
+        self.assertTrue(_has_empty_list_obs([("list_maintenance_logs", {"total": 0})]))
+        self.assertFalse(_has_empty_list_obs([("list_maintenance_logs", {"total": 2})]))
+        self.assertFalse(_has_empty_list_obs([]))
+        self.assertFalse(_has_empty_list_obs([("prepare_incident", {"total": 0})]))
+
+    def test_nudge_wording(self) -> None:
+        from app.agent_loop import CONTRADICTION_CORRECTION_NUDGE
+        self.assertIn("Tu cites une référence précise puis affirmes une absence",
+                      CONTRADICTION_CORRECTION_NUDGE)
+
+
+class ContradictionGuardLoopTest(unittest.IsolatedAsyncioTestCase):
+    """Bug reproduit : 'Récapitulatif WASH-* ... aucune intervention' avec liste vide."""
+
+    def _log_context(self) -> AgentContext:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        return AgentContext(
+            schools=[{"school_id": 1, "school_name": "E1", "district": "Wouri"}],
+            incidents=[],
+            maintenance_logs=[
+                {"id": 1, "school_name": "E1", "incident_title": "Pompe",
+                 "created_at": f"{today}T08:00:00+00:00"},
+            ],
+        )
+
+    async def test_contradiction_triggers_correction(self) -> None:
+        loop = AgentLoop(StubLLM([
+            _call("list_maintenance_logs", {"date": "2000-01-01"}),
+            _say("Récapitulatif : WASH-2026-0005 — Pompe cassée. "
+                 "Aucune intervention réalisée aujourd'hui."),
+            _call("list_maintenance_logs", {}),
+            _say("1 intervention journalisée aujourd'hui à E1."),
+        ]))
+        res = await loop.chat(AgentChatRequest(
+            message="donne-moi les interventions réalisées aujourd'hui",
+            context=self._log_context()))
+        self.assertEqual(res.tools_executed,
+                         ["list_maintenance_logs", "list_maintenance_logs"])
+        self.assertEqual(res.answer, "1 intervention journalisée aujourd'hui à E1.")
+
+    async def test_absence_without_ref_passes_through(self) -> None:
+        stub = StubLLM([
+            _call("list_maintenance_logs", {"date": "2000-01-01"}),
+            _say("Aucune intervention journalisée le 2000-01-01."),
+        ])
+        res = await AgentLoop(stub).chat(AgentChatRequest(
+            message="donne-moi les interventions réalisées aujourd'hui",
+            context=self._log_context()))
+        self.assertIn("Aucune intervention", res.answer)
+        self.assertEqual(stub.calls, 2)
+
+    async def test_ref_with_non_empty_list_passes_through(self) -> None:
+        stub = StubLLM([
+            _call("list_maintenance_logs", {}),
+            _say("WASH-2026-0001 : pompe réparée, aucune autre intervention."),
+        ])
+        res = await AgentLoop(stub).chat(AgentChatRequest(
+            message="donne-moi les interventions réalisées aujourd'hui",
+            context=self._log_context()))
+        self.assertIn("WASH-2026-0001", res.answer)
+        self.assertEqual(stub.calls, 2)
+
+    async def test_ref_without_absence_passes_through(self) -> None:
+        stub = StubLLM([
+            _call("list_maintenance_logs", {"date": "2000-01-01"}),
+            _say("Voir WASH-2026-0005 pour le détail de l'intervention."),
+        ])
+        res = await AgentLoop(stub).chat(AgentChatRequest(
+            message="donne-moi les interventions réalisées aujourd'hui",
+            context=self._log_context()))
+        self.assertIn("WASH-2026-0005", res.answer)
+        self.assertEqual(stub.calls, 2)

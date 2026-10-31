@@ -693,12 +693,55 @@ def _log_matches_school(log: dict[str, Any], hint: Any, context: dict[str, Any])
     return any(c and c in name for c in candidates)
 
 
+def _school_hint_matches_known(hint: Any, context: dict[str, Any]) -> bool:
+    """Le hint école désigne-t-il au moins une école connue du contexte ?
+
+    Comparaison insensible à la casse, sous-chaîne dans les deux sens, sur
+    les school_name des écoles du contexte, des journaux et des incidents.
+    Un hint vide (pas de filtre) ou un id exact connu → True.
+    """
+    if hint is None or str(hint).strip() == "":
+        return True
+    raw = str(hint).strip()
+    try:
+        wanted = int(raw)
+    except (TypeError, ValueError):
+        wanted = None
+    if wanted is not None:
+        for pool in (context.get("schools", []), context.get("maintenance_logs", []),
+                     context.get("incidents", [])):
+            for row in pool:
+                if isinstance(row, dict) and row.get("school_id") == wanted:
+                    return True
+        return False
+    low = raw.lower()
+    names: list[str] = []
+    for pool in (context.get("schools", []), context.get("maintenance_logs", []),
+                 context.get("incidents", [])):
+        for row in pool:
+            if isinstance(row, dict):
+                names.append(str(row.get("school_name") or ""))
+    for name in names:
+        nlow = name.strip().lower()
+        if not nlow:
+            continue
+        if low in nlow or nlow in low:
+            return True
+    return False
+
+
 def tool_list_maintenance_logs(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Liste les interventions DÉJÀ réalisées et journalisées (lecture seule)."""
     today = datetime.now(timezone.utc).date().isoformat()
     raw_date = str(args.get("date") or "").strip()
-    date = raw_date[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", raw_date) else today
+    candidate = raw_date[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", raw_date) else ""
+    try:
+        date = datetime.strptime(candidate, "%Y-%m-%d").date().isoformat() if candidate else today
+    except ValueError:
+        date = today
     hint = args.get("school")
+    matched = _school_hint_matches_known(hint, context)
+    effective_hint = hint if matched else None
     try:
         limit = int(args.get("limit", 10) or 10)
     except (TypeError, ValueError):
@@ -707,12 +750,17 @@ def tool_list_maintenance_logs(args: dict[str, Any], context: dict[str, Any]) ->
 
     filtered = [
         log for log in context.get("maintenance_logs", [])
-        if _log_day(log) == date and _log_matches_school(log, hint, context)
+        if _log_day(log) == date and _log_matches_school(log, effective_hint, context)
     ]
     total = len(filtered)
+    applied_filters = {"date": date, "school_raw": hint, "school_matched": matched}
+    prefix = ""
+    if not matched:
+        prefix = f"École {str(hint).strip()} non reconnue — filtre ignoré. "
     if not filtered:
         return {"date": date, "items": [], "total": 0,
-                "insight": f"Aucune intervention journalisée le {date}."}
+                "insight": f"{prefix}Aucune intervention journalisée le {date}.",
+                "applied_filters": applied_filters, "is_empty": True}
     names: list[str] = []
     for log in filtered:
         name = str(log.get("school_name") or "").strip()
@@ -736,7 +784,8 @@ def tool_list_maintenance_logs(args: dict[str, Any], context: dict[str, Any]) ->
         "notes": log.get("notes"),
         "created_at": log.get("created_at") or log.get("repaired_at"),
     } for log in filtered[:limit]]
-    return {"date": date, "items": items, "total": total, "insight": insight}
+    return {"date": date, "items": items, "total": total, "insight": f"{prefix}{insight}",
+            "applied_filters": applied_filters, "is_empty": False}
 
 
 TOOL_EXECUTORS = {

@@ -128,6 +128,34 @@ def _has_read_tool(executed: list[tuple[str, dict[str, Any]]]) -> bool:
     return any(name in READ_TOOLS for name, _ in executed)
 
 
+WASH_REF_RE = re.compile(r"WASH-\d{4}-[A-Z0-9]+")
+
+CONTRADICTION_CORRECTION_NUDGE = (
+    "STOP. Tu cites une référence précise puis affirmes une absence "
+    "(aucun/aucune/rien/zéro) alors que ton observation de liste adossée a "
+    "un total de 0 : c'est contradictoire. Relis tes observations : si une "
+    "référence WASH-AAAA-XXXX existe vraiment, décris-la sans affirmer "
+    "d'absence ; si le total est vraiment 0, ne cite aucune référence. "
+    "Rappelle MAINTENANT l'outil de liste adapté (list_maintenance_logs pour "
+    "les interventions passées) SANS filtre école parasite, puis réponds de "
+    "façon cohérente à partir de son observation. N'écris aucun texte, "
+    "appelle juste l'outil."
+)
+
+
+def _cites_reference(answer: str) -> bool:
+    """La réponse cite-t-elle une référence WASH-AAAA-XXXX concrète ?"""
+    return bool(answer and WASH_REF_RE.search(answer))
+
+
+def _has_empty_list_obs(executed: list[tuple[str, dict[str, Any]]]) -> bool:
+    """Une observation de liste adossée a-t-elle un total de 0 ?"""
+    return any(
+        name in READ_TOOLS and isinstance(obs, dict) and obs.get("total") == 0
+        for name, obs in executed
+    )
+
+
 REFUSAL_PATTERNS = (
     "je suis désolé",
     "je ne peux pas vous aider",
@@ -469,6 +497,15 @@ class AgentLoop:
             else:
                 answer = UNVERIFIED_HONEST_ANSWER
 
+        if (answer.strip() and _cites_reference(answer) and _claims_absence(answer)
+                and _has_empty_list_obs(executed)):
+            if used_iterations < MAX_ITERATIONS:
+                answer = await self._absence_correction_pass(
+                    messages, context, executed, seen, active_tools,
+                    nudge=CONTRADICTION_CORRECTION_NUDGE)
+            else:
+                answer = self._fallback_answer(executed)
+
         return AgentChatResponse(
             answer=answer.strip(),
             tools_executed=[name for name, _ in executed],
@@ -534,14 +571,16 @@ class AgentLoop:
         executed: list[tuple[str, dict[str, Any]]],
         seen: set[tuple[str, str]],
         tools: list[dict[str, Any]],
+        nudge: str = ABSENCE_CORRECTION_NUDGE,
     ) -> str:
-        """Recadrage anti-hallucination : absence affirmée sans lecture.
+        """Recadrage anti-hallucination : absence affirmée sans lecture
+        (ou contradiction référence + absence, via un nudge adapté).
 
         Une seule tentative (bornée par MAX_ITERATIONS à l'appel) : on exige un
         outil de lecture puis on conclut ; si le modèle persiste sans observer,
         réponse honnête (jamais d'invention).
         """
-        messages.append({"role": "user", "content": ABSENCE_CORRECTION_NUDGE})
+        messages.append({"role": "user", "content": nudge})
         retry = await self.llm.chat(messages, tools)
         messages.append(retry["raw"])
         for call in retry.get("tool_calls", []):
