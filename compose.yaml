@@ -136,6 +136,13 @@ services:
             LARAVEL_URL: 'http://laravel:8080'
             MESH_INGEST_KEY: '${MESH_INGEST_KEY:-}'
             MESH_RELAY_API_KEY: '${MESH_RELAY_API_KEY:-}'
+            MESH_DB_PATH: '/data/relay.db'
+            MESH_UPLINK_RETRIES: '3'
+            MESH_UPLINK_BACKOFF: '0.5'
+            MESH_UPLINK_BREAKER_THRESHOLD: '5'
+            MESH_UPLINK_BREAKER_COOLDOWN: '60'
+        volumes:
+            - 'mesh-relay-data:/data'
         networks:
             - wash-network
         depends_on:
@@ -174,4 +181,6 @@ volumes:
     wash-ollama:
         driver: local
     wash-frontend-modules:
+        driver: local
+    mesh-relay-data:
         driver: local
