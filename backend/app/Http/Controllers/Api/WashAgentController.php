@@ -182,6 +182,80 @@ class WashAgentController extends Controller
         return response()->json($response);
     }
 
+    public function converseStream(Request $request, AiEngineClient $ai, AgentProposalService $proposals)
+    {
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'max:2000'],
+            'history' => ['nullable', 'array', 'max:20'],
+            'history.*.role' => ['required_with:history', 'in:user,assistant,tool'],
+            'history.*.content' => ['required_with:history', 'string', 'max:2000'],
+            'district' => ['nullable', 'string', 'max:128'],
+        ]);
+
+        $user = $this->optionalUser($request);
+        $vote = $user ? $this->interceptVote($user, $validated['message'], $proposals) : null;
+        $context = [
+            'schools' => $this->maintenanceProfiles($validated['district'] ?? null),
+            'incidents' => $this->openIncidentSnapshots($validated['district'] ?? null),
+            'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
+            'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
+        ];
+
+        return response()->stream(function () use ($validated, $context, $user, $vote, $ai, $proposals) {
+            $emit = function (string $event, array $data): void {
+                echo "event: {$event}\ndata: " . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+                flush();
+            };
+            // Repli honnête : une réponse complète réémise en events SSE.
+            $emitFull = function (array $full) use ($emit): void {
+                $emit('tools', ['event' => 'tools', 'tools' => $full['tools_executed'] ?? []]);
+                $emit('cards', ['event' => 'cards', 'cards' => $full['cards'] ?? []]);
+                foreach (mb_str_split((string) ($full['answer'] ?? ''), 40) as $chunk) {
+                    $emit('delta', ['event' => 'delta', 'text' => $chunk]);
+                }
+                $emit('done', ['event' => 'done', 'model' => $full['model_used'] ?? '', 'follow_ups' => $full['follow_ups'] ?? []]);
+            };
+
+            if ($vote !== null) {
+                $emitFull($vote);
+
+                return;
+            }
+
+            try {
+                $client = new \GuzzleHttp\Client([
+                    'base_uri' => (string) config('services.ai_engine.url', 'http://ai-engine:8000'),
+                    'timeout' => (int) config('services.ai_engine.timeout', 120),
+                ]);
+                $upstream = $client->post('/v1/agent/chat/stream', [
+                    'stream' => true,
+                    'headers' => ['Accept' => 'text/event-stream'] + $ai->profileHeaders() + $ai->sttHeaders(),
+                    'json' => [
+                        'message' => $validated['message'],
+                        'history' => $validated['history'] ?? [],
+                        'context' => $context,
+                    ],
+                ]);
+                $body = $upstream->getBody();
+                while (! $body->eof()) {
+                    echo $body->read(1024);
+                    flush();
+                }
+            } catch (\Throwable) {
+                $full = $this->persistProposals($user, $ai->agentChat(
+                    $validated['message'],
+                    $validated['history'] ?? [],
+                    $context,
+                ), $proposals);
+                $emitFull($full);
+            }
+        }, 200, [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache',
+            'X-Accel-Buffering' => 'no',
+        ]);
+    }
+
     protected function optionalUser(Request $request): ?User
     {
         try {

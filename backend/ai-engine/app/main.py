@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from .agent_loop import AgentLoop
+from .agent_stream import format_sse, stream_agent_events
 from .ai_metrics import summary as ai_metrics_summary
 from .decision_agent import DecisionAgent
 from .duplicate_detector import DuplicateDetector
@@ -447,3 +449,20 @@ async def agent_chat(request: Request, payload: AgentChatRequest) -> AgentChatRe
             status_code=500,
             detail=f"Erreur de l'agent conversationnel : {str(exc)}"
         ) from exc
+
+
+@app.post("/v1/agent/chat/stream")
+async def agent_chat_stream(request: Request, payload: AgentChatRequest) -> StreamingResponse:
+    """Même boucle que /v1/agent/chat, rejouée en SSE temps réel.
+
+    Events : tools (transparence immédiate) -> cards -> deltas (~40 car.)
+    -> done (model + follow_ups).
+    """
+    async def _frames():
+        try:
+            async for event in stream_agent_events(AgentLoop(_llm(request)), payload):
+                yield format_sse(event)
+        except Exception as exc:
+            yield format_sse({"event": "error", "message": str(exc)[:300]})
+
+    return StreamingResponse(_frames(), media_type="text/event-stream")
