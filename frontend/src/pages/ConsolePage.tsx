@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { api } from '../lib/api';
+import { api, converseStream } from '../lib/api';
 import type { ChatHistoryMessage, TerritoryPulse , AgentCard } from '../lib/api';
 import type { DialogueMessage as Msg } from '../lib/dialogues';
 import { useAuth } from '../auth/AuthContext';
@@ -11,6 +11,7 @@ import type { OrbState } from '../components/SentinelOrb';
 import { AgentCardList, FollowUps } from '../components/AgentCards';
 import { DetailDrawer } from '../components/DetailDrawer';
 import { VoicePlayer, VoiceRecorder } from '../components/VoiceControls';
+import { VoicePreview } from '../components/VoicePreview';
 import type { DetailKind, DetailTarget } from '../components/DetailDrawer';
 import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
@@ -41,6 +42,45 @@ const HINTS = [
   'Tendances de Bonanjo sur 3 mois.',
   'Montre-moi la carte du territoire.',
 ];
+
+const PLACEHOLDER_EXAMPLES = [
+  'Essaie : quelles \u00e9coles ont besoin d\u2019aide ?',
+  'Essaie : tendances de Bonanjo sur 3 mois',
+  'Essaie : faut-il r\u00e9parer ou remplacer \u00e0 Ngok ?',
+  'Essaie : montre-moi la carte du territoire',
+  'Essaie : r\u00e9sume la situation du district',
+];
+
+const CHIPS_ALERT = ['Qui envoyer sur place ?', 'Voir les d\u00e9tails ?', 'Comparer les \u00e9coles ?'];
+const CHIPS_TREND = ['Voir sur 6 mois ?', 'Comparer avec un autre district ?', 'Voir la carte ?'];
+const CHIPS_CONFIRM = ['Confirmer ?', 'Annuler ?'];
+
+const ALERT_TOOLS = new Set([
+  'district_alerts',
+  'epidemic_alerts',
+  'summarize_district',
+  'observatoire',
+  'relances_proactives',
+  'explain_incident',
+]);
+
+const TREND_TOOLS = new Set(['repair_trends', 'territory_overview', 'compare_schools']);
+
+const CONFIRM_TOOLS = new Set([
+  'prepare_report',
+  'prepare_incident',
+  'prepare_maintenance_log',
+  'prepare_chantier_update',
+  'saisie_assistee',
+  'document_briefing',
+]);
+
+function composerChips(tools: string[]): string[] {
+  if (tools.some((t) => ALERT_TOOLS.has(t))) return CHIPS_ALERT;
+  if (tools.some((t) => TREND_TOOLS.has(t))) return CHIPS_TREND;
+  if (tools.some((t) => CONFIRM_TOOLS.has(t))) return CHIPS_CONFIRM;
+  return HINTS.slice(0, 3);
+}
 
 const TOOL_FR: Record<string, string> = {
   summarize_district: 'Synthèse du district',
@@ -150,6 +190,7 @@ export default function ConsolePage() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
   const [streamId, setStreamId] = useState<number | null>(null);
   const [visible, setVisible] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -260,11 +301,50 @@ export default function ConsolePage() {
       .map((m) => ({ role: m.role, content: m.content }));
     const idx = messages.length + 1;
     setMessages((prev) => [...prev, { role: 'user', content: message, tools: [], cards: [], model: '', at: Date.now(), follow_ups: [] }]);
+    let assistantIdx: number | null = null;
+    const blankAssistant = (): Msg => (
+      { role: 'assistant', content: '', tools: [], cards: [], model: '', at: Date.now(), follow_ups: [] }
+    );
     try {
-      const res = await api.converse(message, prior);
-      setMessages((prev) => [
-        ...prev,
-        {
+      await converseStream(message, prior, (ev) => {
+        if (ev.kind === 'tools') {
+          assistantIdx = idx;
+          const tools = ev.tools;
+          setMessages((prev) => [...prev, { ...blankAssistant(), tools }]);
+        } else if (ev.kind === 'cards') {
+          const cards = ev.cards;
+          if (assistantIdx === null) {
+            assistantIdx = idx;
+            setMessages((prev) => [...prev, { ...blankAssistant(), cards }]);
+          } else {
+            const at = assistantIdx;
+            setMessages((prev) => prev.map((m, j) => (j === at ? { ...m, cards } : m)));
+          }
+        } else if (ev.kind === 'delta') {
+          const text = ev.text;
+          if (assistantIdx === null) {
+            assistantIdx = idx;
+            setMessages((prev) => [...prev, { ...blankAssistant(), content: text }]);
+          } else {
+            const at = assistantIdx;
+            setMessages((prev) => prev.map((m, j) => (j === at ? { ...m, content: m.content + text } : m)));
+          }
+        } else {
+          const model = ev.model;
+          const follow_ups = ev.follow_ups;
+          if (assistantIdx === null) {
+            assistantIdx = idx;
+            setMessages((prev) => [...prev, { ...blankAssistant(), model, follow_ups }]);
+          } else {
+            const at = assistantIdx;
+            setMessages((prev) => prev.map((m, j) => (j === at ? { ...m, model, follow_ups } : m)));
+          }
+        }
+      });
+    } catch {
+      try {
+        const res = await api.converse(message, prior);
+        const full: Msg = {
           role: 'assistant',
           content: res.answer,
           tools: res.tools_executed ?? [],
@@ -272,14 +352,20 @@ export default function ConsolePage() {
           model: res.model_used ?? '',
           at: Date.now(),
           follow_ups: res.follow_ups ?? [],
-        },
-      ]);
-      if (!calm && res.answer !== '') {
-        setVisible(0);
-        setStreamId(idx);
+        };
+        if (assistantIdx === null) {
+          setMessages((prev) => [...prev, full]);
+          if (!calm && res.answer !== '') {
+            setVisible(0);
+            setStreamId(idx);
+          }
+        } else {
+          const at = assistantIdx;
+          setMessages((prev) => prev.map((m, j) => (j === at ? full : m)));
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
     } finally {
       setBusy(false);
     }
@@ -296,8 +382,11 @@ export default function ConsolePage() {
     try {
       setError(null);
       const { transcript } = await api.transcribeVoice(blob);
-      setInput(transcript);
-      inputRef.current?.focus();
+      if (transcript.trim() === '') {
+        setError('Transcription vide : aucun mot reconnu.');
+        return;
+      }
+      setPreview(transcript);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transcription impossible.');
     }
@@ -326,11 +415,25 @@ export default function ConsolePage() {
     void send(input);
   };
 
+  const [placeholderIdx, setPlaceholderIdx] = useState(0);
+  const placeholderIdle = !busy && !streaming && input.trim() === '';
+
+  useEffect(() => {
+    if (!placeholderIdle || calm) return;
+    const t = window.setInterval(
+      () => setPlaceholderIdx((i) => (i + 1) % PLACEHOLDER_EXAMPLES.length),
+      4000,
+    );
+    return () => window.clearInterval(t);
+  }, [placeholderIdle, calm]);
+
   const placeholder = busy
     ? 'Sentinel consulte les données…'
     : streaming
       ? 'Sentinel rédige…'
-      : 'Posez votre question à Sentinel…';
+      : calm
+        ? PLACEHOLDER_EXAMPLES[0]
+        : PLACEHOLDER_EXAMPLES[placeholderIdx];
 
   const composer = (large: boolean) =>
     large ? (
@@ -518,6 +621,25 @@ export default function ConsolePage() {
           )}
           <div className="stage-in stage-4 mt-8 w-full">{composer(true)}</div>
           {errorBox}
+          {preview !== null && (
+            <div className="w-full text-left">
+              <VoicePreview
+                transcript={preview}
+                onSend={() => {
+                  const p = preview;
+                  setPreview(null);
+                  void send(p);
+                }}
+                onEdit={() => {
+                  setInput(preview);
+                  setPreview(null);
+                  inputRef.current?.focus();
+                }}
+                onDiscard={() => setPreview(null)}
+                disabled={busy || streaming}
+              />
+            </div>
+          )}
         </div>
         <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} />
       </div>
@@ -628,7 +750,11 @@ export default function ConsolePage() {
           {busy && (
             <div className="msg-in flex items-center gap-3">
               <SentinelAvatar className="h-7 w-7 shrink-0 motion-safe:animate-pulse" />
-              <p className="text-sm text-ink-soft">Sentinel consulte les données</p>
+              <p className="text-sm text-ink-soft">{(() => {
+                const last = messages[messages.length - 1];
+                const n = last !== undefined && last.role === 'assistant' ? last.tools.length : 0;
+                return n > 0 ? `Sentinel consulte ${n} source${n > 1 ? 's' : ''}…` : 'Sentinel consulte les données';
+              })()}</p>
               <span className="inline-flex items-center gap-1.5" aria-hidden="true">
                 <span className="think-dot" />
                 <span className="think-dot" />
@@ -641,7 +767,44 @@ export default function ConsolePage() {
 
         {errorBox}
 
+        {preview !== null && (
+          <VoicePreview
+            transcript={preview}
+            onSend={() => {
+              const p = preview;
+              setPreview(null);
+              void send(p);
+            }}
+            onEdit={() => {
+              setInput(preview);
+              setPreview(null);
+              inputRef.current?.focus();
+            }}
+            onDiscard={() => setPreview(null)}
+            disabled={busy || streaming}
+          />
+        )}
+
         <div className="sticky bottom-5 -mx-1 -mb-5 mt-4 bg-gradient-to-t from-canvas via-canvas/70 to-transparent px-1 pb-3 pt-6">
+          <div
+            role="group"
+            aria-label="Suggestions"
+            className="mb-2 flex gap-1.5 overflow-x-auto pb-1"
+          >
+            {composerChips(
+              [...messages].reverse().find((m) => m.role === 'assistant')?.tools ?? [],
+            ).map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                onClick={() => ask(chip)}
+                disabled={busy || streaming}
+                className="shrink-0 whitespace-nowrap rounded-full border border-line bg-card px-3 py-1.5 text-[13px] text-ink-soft transition-[border-color,color,transform] duration-150 ease-snap hover:border-accent hover:text-ink active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:opacity-50"
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
           {composer(false)}
         </div>
       </div>
