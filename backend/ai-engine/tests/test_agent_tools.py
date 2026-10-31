@@ -246,3 +246,93 @@ class DistrictInsightTest(unittest.TestCase):
             ],
         })
         self.assertIn("sur 3 au total", obs["insight"])
+
+
+class ListMaintenanceLogsTest(unittest.TestCase):
+    """list_maintenance_logs : lecture seule des interventions déjà réalisées."""
+
+    LOG_CONTEXT = {
+        "schools": [
+            {"school_id": 1, "school_name": "École Publique de Bonanjo", "district": "Wouri"},
+            {"school_id": 2, "school_name": "École Rurale de Ngok", "district": "Mvila"},
+        ],
+        "maintenance_logs": [
+            {"id": 11, "incident_id": 5, "incident_ref": "WASH-2026-0005",
+             "incident_title": "Pompe cassée", "school_name": "École Publique de Bonanjo",
+             "cost_amount": 50000.0, "notes": "Joint remplacé",
+             "created_at": "2026-10-31T08:15:00+00:00"},
+            {"id": 12, "incident_id": 6, "incident_ref": "WASH-2026-0006",
+             "incident_title": "Fuite robinet", "school_name": "École Rurale de Ngok",
+             "cost_amount": 12000.0, "notes": "Robinet changé",
+             "created_at": "2026-10-31T14:40:00+00:00"},
+            {"id": 13, "incident_id": 7, "incident_ref": "WASH-2026-0007",
+             "incident_title": "Dalle latrines", "school_name": "École Rurale de Ngok",
+             "cost_amount": 80000.0, "notes": "Dalle refaite",
+             "created_at": "2026-10-30T09:00:00+00:00"},
+        ],
+    }
+
+    def test_filters_by_date_prefix(self) -> None:
+        res = TOOL_EXECUTORS["list_maintenance_logs"]({"date": "2026-10-31"}, self.LOG_CONTEXT)
+        self.assertEqual(res["total"], 2)
+        self.assertEqual(len(res["items"]), 2)
+        self.assertIn("2 interventions journalisées", res["insight"])
+
+    def test_empty_day_is_honest(self) -> None:
+        res = TOOL_EXECUTORS["list_maintenance_logs"]({"date": "2026-10-29"}, self.LOG_CONTEXT)
+        self.assertEqual(res["items"], [])
+        self.assertEqual(res["insight"], "Aucune intervention journalisée le 2026-10-29.")
+
+    def test_school_filter_matches_name_fragment(self) -> None:
+        res = TOOL_EXECUTORS["list_maintenance_logs"](
+            {"date": "2026-10-31", "school": "Ngok"}, self.LOG_CONTEXT)
+        self.assertEqual(res["total"], 1)
+        self.assertEqual(res["items"][0]["school_name"], "École Rurale de Ngok")
+
+    def test_limit_caps_items_but_keeps_total(self) -> None:
+        res = TOOL_EXECUTORS["list_maintenance_logs"](
+            {"date": "2026-10-31", "limit": 1}, self.LOG_CONTEXT)
+        self.assertEqual(len(res["items"]), 1)
+        self.assertEqual(res["total"], 2)
+
+    def test_default_date_is_today(self) -> None:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        ctx = {"schools": [], "maintenance_logs": [
+            {"id": 1, "school_name": "E1", "created_at": f"{today}T07:00:00+00:00"},
+            {"id": 2, "school_name": "E2", "created_at": "2000-01-01T07:00:00+00:00"},
+        ]}
+        res = TOOL_EXECUTORS["list_maintenance_logs"]({}, ctx)
+        self.assertEqual(res["date"], today)
+        self.assertEqual(res["total"], 1)
+
+    def test_registered_with_read_only_description(self) -> None:
+        from app.agent_tools import AGENT_TOOLS
+        names = [t["function"]["name"] for t in AGENT_TOOLS]
+        self.assertIn("list_maintenance_logs", names)
+        desc = next(t["function"]["description"] for t in AGENT_TOOLS
+                    if t["function"]["name"] == "list_maintenance_logs")
+        self.assertIn("lecture seule", desc.lower())
+        self.assertIn("interventions passées", desc)
+        self.assertIn("Exemple", desc)
+
+
+class PrepareDescriptionsTest(unittest.TestCase):
+    """Les prepare_* affichent une clause négative : JAMAIS pour lister/consulter."""
+
+    def test_negative_clause_everywhere(self) -> None:
+        from app.agent_tools import AGENT_TOOLS
+        by_name = {t["function"]["name"]: t["function"]["description"] for t in AGENT_TOOLS}
+        for name in ("prepare_incident", "prepare_report", "prepare_maintenance_log"):
+            desc = by_name[name]
+            self.assertIn("JAMAIS", desc, name)
+            self.assertIn("lister", desc, name)
+            self.assertIn("list_maintenance_logs", desc, name)
+            self.assertIn("Exemple", desc, name)
+
+    def test_prepare_incident_requires_creation_intent(self) -> None:
+        from app.agent_tools import AGENT_TOOLS
+        desc = next(t["function"]["description"] for t in AGENT_TOOLS
+                    if t["function"]["name"] == "prepare_incident")
+        self.assertIn("CREATION", desc)
+        self.assertIn("UNIQUEMENT", desc)

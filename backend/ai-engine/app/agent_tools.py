@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -664,6 +665,80 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     }
 
 
+def _log_day(log: dict[str, Any]) -> str:
+    """Jour AAAA-MM-JJ d'un journal : created_at, repli repaired_at/reported_at."""
+    for key in ("created_at", "repaired_at", "reported_at"):
+        value = log.get(key)
+        if value and len(str(value).strip()) >= 10:
+            return str(value).strip()[:10]
+    return ""
+
+
+def _log_matches_school(log: dict[str, Any], hint: Any, context: dict[str, Any]) -> bool:
+    """Filtre école : id exact ou fragment de nom (insensible à la casse)."""
+    if hint is None or str(hint).strip() == "":
+        return True
+    try:
+        if log.get("school_id") == int(hint):
+            return True
+    except (TypeError, ValueError):
+        pass
+    resolved = _resolve_school(context, hint)
+    if resolved and log.get("school_id") == resolved.get("school_id"):
+        return True
+    name = str(log.get("school_name") or "").lower()
+    candidates = {str(hint).strip().lower()}
+    if resolved:
+        candidates.add(str(resolved.get("school_name", "")).lower())
+    return any(c and c in name for c in candidates)
+
+
+def tool_list_maintenance_logs(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Liste les interventions DÉJÀ réalisées et journalisées (lecture seule)."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    raw_date = str(args.get("date") or "").strip()
+    date = raw_date[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", raw_date) else today
+    hint = args.get("school")
+    try:
+        limit = int(args.get("limit", 10) or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    limit = min(max(limit, 1), 50)
+
+    filtered = [
+        log for log in context.get("maintenance_logs", [])
+        if _log_day(log) == date and _log_matches_school(log, hint, context)
+    ]
+    total = len(filtered)
+    if not filtered:
+        return {"date": date, "items": [], "total": 0,
+                "insight": f"Aucune intervention journalisée le {date}."}
+    names: list[str] = []
+    for log in filtered:
+        name = str(log.get("school_name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    head = (f"{total} {_plural(total, 'intervention journalisée', 'interventions journalisées')} "
+            f"le {date}")
+    if names:
+        shown = ", ".join(names[:3])
+        extra = f" (+{len(names) - 3})" if len(names) > 3 else ""
+        insight = f"{head} : {shown}{extra}."
+    else:
+        insight = f"{head}."
+    items = [{
+        "id": log.get("id"),
+        "incident_id": log.get("incident_id"),
+        "incident_ref": log.get("incident_ref") or log.get("reference_code"),
+        "incident_title": log.get("incident_title") or log.get("title"),
+        "school_name": log.get("school_name"),
+        "cost_amount": log.get("cost_amount"),
+        "notes": log.get("notes"),
+        "created_at": log.get("created_at") or log.get("repaired_at"),
+    } for log in filtered[:limit]]
+    return {"date": date, "items": items, "total": total, "insight": insight}
+
+
 TOOL_EXECUTORS = {
     "analyze_school": tool_analyze_school,
     "rank_schools_by_need": tool_rank_schools_by_need,
@@ -675,6 +750,7 @@ TOOL_EXECUTORS = {
     "repair_trends": tool_repair_trends,
     "territory_overview": tool_territory_overview,
     "build_briefing": tool_build_briefing,
+    "list_maintenance_logs": tool_list_maintenance_logs,
 }
 
 AGENT_TOOLS: list[dict[str, Any]] = [
@@ -715,6 +791,21 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {"incident_id": {"type": "integer", "description": "Identifiant de l'incident"}},
                 "required": ["incident_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_maintenance_logs",
+            "description": "Liste les interventions DEJA réalisées et journalisées (lecture seule) : filtres date AAAA-MM-JJ défaut aujourd'hui, école, limite. Pour toute question sur les interventions passées. Ne crée rien. Exemple : « donne-moi les interventions réalisées aujourd'hui » → list_maintenance_logs avec la date du jour.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Jour filtré au format AAAA-MM-JJ (défaut : aujourd'hui)"},
+                    "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école (optionnel)"},
+                    "limit": {"type": "integer", "description": "Nombre max d'interventions (défaut 10)"},
+                },
             },
         },
     },
@@ -763,7 +854,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_report",
-            "description": "Prépare un signalement COMPLET sans rien écrire : école, description, catégorie, urgence, élèves. À rappeler quand l'utilisateur fournit les éléments manquants.",
+            "description": "Prépare la CREATION d'un SIGNALEMENT (nouvelle panne signalée), dossier complet sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Exemple : « je signale une fuite aux latrines » → prepare_report ; « liste les signalements » → outils de lecture, pas cet outil.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -780,7 +871,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_incident",
-            "description": "Prépare une intervention directe COMPLETE sans rien écrire : école, titre, catégorie, urgence, élèves. Réservé aux responsables habilités.",
+            "description": "Prépare la CREATION d'un INCIDENT (nouvelle panne), dossier complet sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Exemple : « signale une panne de pompe à Ngok » → prepare_incident ; « montre les interventions réalisées » → list_maintenance_logs, pas cet outil.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -797,7 +888,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_maintenance_log",
-            "description": "Prépare un journal d'intervention COMPLET sans rien écrire : incident (titre, id ou référence), coût XAF, notes. Réservé aux responsables habilités.",
+            "description": "Prépare la CREATION d'un JOURNAL d'intervention (travaux à consigner), dossier complet sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER ou journaliser. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Exemple : « journalise des travaux à 50000 XAF » → prepare_maintenance_log ; « quelles interventions réalisées ? » → list_maintenance_logs, pas cet outil.",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -318,15 +318,21 @@ class WashAgentController extends Controller
 
     protected function maintenanceLogSnapshots(?string $district): array
     {
-        return MaintenanceLog::with('school:id,name,district')
+        return MaintenanceLog::with(['school:id,name,district', 'incident:id,reference_code,title'])
             ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
+            ->where('created_at', '>=', now()->subDays(30))
             ->latest()->take(200)->get()
             ->map(fn (MaintenanceLog $l) => [
                 'id' => $l->id,
                 'school_id' => $l->school_id,
                 'incident_id' => $l->incident_id,
+                'incident_ref' => $l->incident?->reference_code,
+                'incident_title' => $l->incident?->title,
+                'school_name' => $l->school?->name,
                 'cost_amount' => (float) $l->cost_amount,
                 'currency' => $l->currency,
+                'notes' => $l->notes,
+                'created_at' => $l->created_at?->toIso8601String(),
                 'repaired_at' => $l->repaired_at?->toIso8601String(),
                 'days_without_service' => (int) $l->days_without_service,
             ])->all();

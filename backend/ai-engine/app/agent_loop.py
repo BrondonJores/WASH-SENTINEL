@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from .agent_tools import AGENT_TOOLS, TOOL_EXECUTORS
@@ -24,6 +25,7 @@ Règles impératives :
 - N'appelle jamais deux fois le même outil avec les mêmes arguments : quand tu as le résultat, réponds.
 - Les données détaillées sont affichées dans des cartes séparées : ne recopie pas tout dans ta réponse.
 - Réponds toujours dans la langue du dernier message (français par défaut) ; termes techniques WASH traduisibles, références/codes inchangés ; si l'utilisateur écrit en langue locale, réponds en français simple et propose de reformuler.
+- N'affirme jamais une absence (« aucun », « rien », « zéro ») sans observation d'un tool de liste (list_maintenance_logs, summarize_district, rank_schools_by_need, repair_trends, explain_incident, territory_overview, analyze_school, build_briefing) ; si aucun outil ne couvre la question, dis-le et propose tes capacités.
 """
 
 MAX_ITERATIONS = 5
@@ -37,7 +39,7 @@ NO_TOOL_NUDGE = (
     "STOP. Tu as répondu à une question de données SANS appeler d'outil, "
     "c'est strictement interdit : tu dois appeler l'outil adapté MAINTENANT "
     "(rank_schools_by_need, summarize_district, analyze_school, repair_trends, "
-    "explain_incident, territory_overview ou build_briefing). "
+    "explain_incident, territory_overview, build_briefing ou list_maintenance_logs). "
     "N'écris aucun texte, appelle juste l'outil."
 )
 
@@ -50,6 +52,80 @@ DATA_QUESTION_HINTS = (
     "signal", "cré", "cree", "ajoute", "enregistre", "journalis",
     "déclare", "declare",
 )
+
+
+# Routeur déterministe liste/création : indices en minuscules, comparaison par
+# sous-chaîne sur la question. Les formes sans accent doublent les accentuées.
+LIST_INTENT_HINTS = (
+    "réalisé", "realise", "aujourd'hui", "aujourd’hui", "aujourdhui",
+    "hier", "semaine", "mois", "liste", "lister", "combien",
+    "quels travaux", "historique", "passé", "passe", "affiche", "montre",
+)
+
+CREATE_INTENT_HINTS = (
+    "crée", "créer", "cree", "creer", "ajoute", "nouveau", "nouvelle",
+    "journalise", "enregistre", "signale", "déclare", "declare",
+    "prépare", "prepare", "planifie",
+)
+
+
+def route_intent(question: str) -> Literal["list", "create", "other"]:
+    """Route la question : consultation du passé, création, ou autre (fonction pure).
+
+    « create » seulement si un indice de création est présent SANS aucun indice
+    de liste ; sinon « list » dès qu'un indice de liste est présent.
+    """
+    lowered = (question or "").lower()
+    has_list = any(h in lowered for h in LIST_INTENT_HINTS)
+    has_create = any(h in lowered for h in CREATE_INTENT_HINTS)
+    if has_create and not has_list:
+        return "create"
+    if has_list:
+        return "list"
+    return "other"
+
+
+def tools_for_intent(intent: str) -> list[dict[str, Any]]:
+    """Jeu d'outils exposé : en consultation, les prepare_* (création) sont masqués."""
+    if intent == "list":
+        return [t for t in AGENT_TOOLS
+                if not t.get("function", {}).get("name", "").startswith("prepare_")]
+    return list(AGENT_TOOLS)
+
+
+# Garde-fou abstention : outils de lecture dont l'observation autorise un constat.
+READ_TOOLS = frozenset({
+    "list_maintenance_logs", "summarize_district", "rank_schools_by_need",
+    "repair_trends", "explain_incident", "territory_overview",
+    "analyze_school", "build_briefing",
+})
+
+ABSENCE_RE = re.compile(r"aucun|aucune|pas d|rien|zéro|zero", re.IGNORECASE)
+
+ABSENCE_CORRECTION_NUDGE = (
+    "STOP. Tu viens d'affirmer une absence (aucun/aucune/rien/zéro) SANS avoir "
+    "observé un outil de lecture, c'est strictement interdit : appelle MAINTENANT "
+    "l'outil de liste adapté (list_maintenance_logs pour les interventions passées, "
+    "sinon summarize_district, rank_schools_by_need, repair_trends, explain_incident, "
+    "territory_overview, analyze_school ou build_briefing) puis réponds à partir de "
+    "son observation. N'écris aucun texte, appelle juste l'outil."
+)
+
+UNVERIFIED_HONEST_ANSWER = (
+    "Je ne peux pas vérifier les interventions pour cette question : aucun outil "
+    "de liste n'a retourné de donnée observable. Précisez une date (AAAA-MM-JJ) "
+    "ou un nom d'école et je consulterai le journal."
+)
+
+
+def _claims_absence(answer: str) -> bool:
+    """La réponse affirme-t-elle une absence (aucun, rien, zéro...) ?"""
+    return bool(answer and ABSENCE_RE.search(answer))
+
+
+def _has_read_tool(executed: list[tuple[str, dict[str, Any]]]) -> bool:
+    """Au moins un outil de lecture a-t-il été appelé ce tour-ci ?"""
+    return any(name in READ_TOOLS for name, _ in executed)
 
 
 REFUSAL_PATTERNS = (
@@ -135,7 +211,12 @@ def _resolve_lang(req: AgentChatRequest) -> Literal["fr", "en"]:
 def _build_system_prompt(lang: str) -> str:
     """Prompt système + langue de réponse explicite transmise au provider (en tête : primauté)."""
     head = "REPLY ONLY IN ENGLISH. Never use French." if lang == "en" else "Réponds en français."
-    return f"{head}\n{SYSTEM_PROMPT}\nLangue de réponse : {lang}."
+    today = datetime.now(timezone.utc).date().isoformat()
+    return (
+        f"{head}\n{SYSTEM_PROMPT}\nLangue de réponse : {lang}.\n"
+        f"Aujourd'hui : {today} (date du jour — utilise-la pour 'aujourd'hui' ; "
+        "'hier' = la veille, 'cette semaine' = les 7 derniers jours)."
+    )
 
 
 def _fmt_int(value: Any) -> str:
@@ -248,6 +329,20 @@ def _summarize_proposal(obs: dict[str, Any]) -> str:
     )
 
 
+def _summarize_maintenance_logs(obs: dict[str, Any]) -> str:
+    items = obs.get("items", []) or []
+    date = obs.get("date", "?")
+    n = int(obs.get("total", len(items)) or 0)
+    if not items and n == 0:
+        return f"Aucune intervention journalisée le {date}."
+    names = [str(i.get("school_name", "?")) for i in items[:3]]
+    suffix = f" : {', '.join(names)}" if names else ""
+    return (
+        f"{n} {_plural(n, 'intervention journalisée', 'interventions journalisées')} "
+        f"le {date}{suffix}. Le détail est dans la carte ci-dessous."
+    )
+
+
 def _summarize_territory(obs: dict[str, Any]) -> str:
     total = int(obs.get("total", 0) or 0)
     n = int(obs.get("open_incidents", 0) or 0)
@@ -263,6 +358,7 @@ def _summarize_territory(obs: dict[str, Any]) -> str:
 
 
 FALLBACK_SUMMARIES = {
+    "list_maintenance_logs": _summarize_maintenance_logs,
     "summarize_district": _summarize_district,
     "repair_trends": _summarize_trends,
     "rank_schools_by_need": _summarize_ranking,
@@ -321,6 +417,7 @@ class AgentLoop:
     async def chat(self, req: AgentChatRequest) -> AgentChatResponse:
         context = req.context.model_dump()
         lang = _resolve_lang(req)
+        active_tools = tools_for_intent(route_intent(req.message))
         messages: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(lang)}]
         for turn in req.history[-6:]:
             messages.append({"role": turn.role, "content": turn.content})
@@ -330,8 +427,10 @@ class AgentLoop:
         seen: set[tuple[str, str]] = set()
         nudged = False
         answer = ""
+        used_iterations = 0
         for _ in range(MAX_ITERATIONS):
-            reply = await self.llm.chat(messages, AGENT_TOOLS)
+            used_iterations += 1
+            reply = await self.llm.chat(messages, active_tools)
             messages.append(reply["raw"])
             calls = reply.get("tool_calls", [])
             if not calls:
@@ -358,10 +457,17 @@ class AgentLoop:
             answer = self._fallback_answer(executed)
 
         if not executed and answer.strip() and self._looks_like_data_question(req.message):
-            answer = await self._force_tool_pass(messages, context, executed)
+            answer = await self._force_tool_pass(messages, context, executed, active_tools)
 
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
             answer = self._fallback_answer(executed)
+
+        if answer.strip() and _claims_absence(answer) and not _has_read_tool(executed):
+            if used_iterations < MAX_ITERATIONS:
+                answer = await self._absence_correction_pass(
+                    messages, context, executed, seen, active_tools)
+            else:
+                answer = UNVERIFIED_HONEST_ANSWER
 
         return AgentChatResponse(
             answer=answer.strip(),
@@ -395,14 +501,16 @@ class AgentLoop:
         messages: list[dict[str, Any]],
         context: dict[str, Any],
         executed: list[tuple[str, dict[str, Any]]],
+        tools: list[dict[str, Any]] | None = None,
     ) -> str:
         """Dernier recadrage : réponse directe à une question de données.
 
         On exige un appel d'outil immédiat. S'il obéit, on le laisse conclure
         sur les observations ; sinon, réponse honnête (jamais d'invention).
         """
+        tools = AGENT_TOOLS if tools is None else tools
         messages.append({"role": "user", "content": NO_TOOL_NUDGE})
-        retry = await self.llm.chat(messages, AGENT_TOOLS)
+        retry = await self.llm.chat(messages, tools)
         messages.append(retry["raw"])
         for call in retry.get("tool_calls", []):
             name = call.get("name", "")
@@ -412,7 +520,45 @@ class AgentLoop:
             messages.append(self.llm.format_tool_result(name, observation, call.get("id")))
         if not executed:
             return self._fallback_answer(executed)
-        final = await self.llm.chat(messages, AGENT_TOOLS)
+        final = await self.llm.chat(messages, tools)
+        messages.append(final["raw"])
+        answer = final.get("content", "")
+        if not answer.strip() or self._is_bogus_refusal(answer, executed):
+            return self._fallback_answer(executed)
+        return answer
+
+    async def _absence_correction_pass(
+        self,
+        messages: list[dict[str, Any]],
+        context: dict[str, Any],
+        executed: list[tuple[str, dict[str, Any]]],
+        seen: set[tuple[str, str]],
+        tools: list[dict[str, Any]],
+    ) -> str:
+        """Recadrage anti-hallucination : absence affirmée sans lecture.
+
+        Une seule tentative (bornée par MAX_ITERATIONS à l'appel) : on exige un
+        outil de lecture puis on conclut ; si le modèle persiste sans observer,
+        réponse honnête (jamais d'invention).
+        """
+        messages.append({"role": "user", "content": ABSENCE_CORRECTION_NUDGE})
+        retry = await self.llm.chat(messages, tools)
+        messages.append(retry["raw"])
+        for call in retry.get("tool_calls", []):
+            name = call.get("name", "")
+            arguments = call.get("arguments", {}) or {}
+            key = (name, json.dumps(arguments, sort_keys=True, default=str))
+            if key in seen:
+                messages.append(self.llm.format_tool_result(
+                    name, {"note": REPEAT_NUDGE}, call.get("id")))
+                continue
+            seen.add(key)
+            observation = self._execute_tool(name, arguments, context)
+            executed.append((name, observation))
+            messages.append(self.llm.format_tool_result(name, observation, call.get("id")))
+        if not _has_read_tool(executed):
+            return UNVERIFIED_HONEST_ANSWER
+        final = await self.llm.chat(messages, tools)
         messages.append(final["raw"])
         answer = final.get("content", "")
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
@@ -518,6 +664,12 @@ class AgentLoop:
                 cards.append(AgentCard(
                     type="trend_chart",
                     title=f"Tendances — {observation.get('school_name', '?')} ({observation.get('months', 3)} mois)",
+                    data=observation,
+                ))
+            elif name == "list_maintenance_logs":
+                cards.append(AgentCard(
+                    type="maintenance_logs",
+                    title=f"Interventions journalisées — {observation.get('date', '?')}",
                     data=observation,
                 ))
         unique: list[AgentCard] = []

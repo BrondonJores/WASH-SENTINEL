@@ -402,3 +402,180 @@ class LangWiringTest(unittest.IsolatedAsyncioTestCase):
             message="Bonjour", context=CONTEXT))
         self.assertEqual(res.answer, "Bonjour !")
         self.assertIn("Langue de réponse : fr.", stub.seen_messages[0]["content"])
+
+
+class RouteIntentTest(unittest.TestCase):
+    """Routeur déterministe : consultation du passé vs création vs autre."""
+
+    CASES = [
+        ("donne-moi les interventions réalisées aujourd'hui", "list"),
+        ("Liste les interventions d'hier", "list"),
+        ("Combien d'interventions ce mois-ci ?", "list"),
+        ("Montre-moi l'historique des travaux", "list"),
+        ("Quelles interventions passées à Bonanjo ?", "list"),
+        ("Affiche les travaux réalisés cette semaine", "list"),
+        ("Crée une intervention pour l'école de Ngok", "create"),
+        ("Journalise des travaux pour 50000 XAF", "create"),
+        ("Signale une panne de pompe à Nkol", "create"),
+        ("Prépare un dossier pour une nouvelle fuite", "create"),
+        ("Bonjour Sentinel", "other"),
+        ("Résume mon district", "other"),
+        ("Signale une panne et montre-moi la liste", "list"),
+    ]
+
+    def test_routing_table(self) -> None:
+        from app.agent_loop import route_intent
+        for question, expected in self.CASES:
+            with self.subTest(question=question):
+                self.assertEqual(route_intent(question), expected)
+
+    def test_exact_failure_question_routes_to_list(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(
+            route_intent("donne-moi les interventions réalisées aujourd'hui"), "list")
+
+    def test_list_hides_prepare_tools(self) -> None:
+        from app.agent_loop import tools_for_intent
+        names = [t["function"]["name"] for t in tools_for_intent("list")]
+        self.assertIn("list_maintenance_logs", names)
+        self.assertTrue(all(not n.startswith("prepare_") for n in names))
+
+    def test_create_and_other_keep_full_set(self) -> None:
+        from app.agent_loop import tools_for_intent
+        from app.agent_tools import AGENT_TOOLS
+        for intent in ("create", "other"):
+            names = [t["function"]["name"] for t in tools_for_intent(intent)]
+            self.assertEqual(len(names), len(AGENT_TOOLS))
+            self.assertIn("prepare_incident", names)
+
+    def test_no_tool_nudge_names_list_tool(self) -> None:
+        from app.agent_loop import NO_TOOL_NUDGE
+        self.assertIn("list_maintenance_logs", NO_TOOL_NUDGE)
+
+    def test_system_prompt_bans_unverified_absence(self) -> None:
+        from app.agent_loop import SYSTEM_PROMPT
+        self.assertIn("tool de liste", SYSTEM_PROMPT)
+        self.assertIn("propose tes capacités", SYSTEM_PROMPT)
+
+
+class AbsenceGuardUnitTest(unittest.TestCase):
+    """Garde-fou abstention : déclenche / ne déclenche pas."""
+
+    def test_claims_absence_triggers(self) -> None:
+        from app.agent_loop import _claims_absence
+        for text in ("Aucune intervention aujourd'hui.",
+                     "Il n'y a rien à signaler.",
+                     "Zéro incident ouvert.",
+                     "Pas d'école concernée."):
+            with self.subTest(text=text):
+                self.assertTrue(_claims_absence(text))
+
+    def test_claims_absence_quiet(self) -> None:
+        from app.agent_loop import _claims_absence
+        for text in ("2 interventions journalisées le 2026-10-31.",
+                     "Voici le résumé du district.",
+                     "Bonjour !"):
+            with self.subTest(text=text):
+                self.assertFalse(_claims_absence(text))
+
+    def test_has_read_tool(self) -> None:
+        from app.agent_loop import _has_read_tool
+        self.assertTrue(_has_read_tool([("list_maintenance_logs", {})]))
+        self.assertTrue(_has_read_tool([("prepare_incident", {}), ("summarize_district", {})]))
+        self.assertFalse(_has_read_tool([]))
+        self.assertFalse(_has_read_tool([("prepare_incident", {})]))
+
+
+class AbsenceGuardLoopTest(unittest.IsolatedAsyncioTestCase):
+    """Bug reproduit : prepare_incident appelé puis 'Aucune intervention' sans lecture."""
+
+    def _log_context(self) -> AgentContext:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        return AgentContext(
+            schools=[{"school_id": 1, "school_name": "E1", "district": "Wouri"}],
+            incidents=[],
+            maintenance_logs=[
+                {"id": 1, "school_name": "E1", "incident_title": "Pompe",
+                 "created_at": f"{today}T08:00:00+00:00"},
+                {"id": 2, "school_name": "E1", "incident_title": "Fuite",
+                 "created_at": f"{today}T09:00:00+00:00"},
+            ],
+        )
+
+    async def test_unverified_absence_triggers_correction(self) -> None:
+        loop = AgentLoop(StubLLM([
+            _call("prepare_incident", {"school": "E1"}),
+            _say("Aucune intervention réalisée aujourd'hui."),
+            _call("list_maintenance_logs", {}),
+            _say("2 interventions journalisées aujourd'hui à E1."),
+        ]))
+        res = await loop.chat(AgentChatRequest(
+            message="donne-moi les interventions réalisées aujourd'hui",
+            context=self._log_context()))
+        self.assertIn("list_maintenance_logs", res.tools_executed)
+        self.assertEqual(res.answer, "2 interventions journalisées aujourd'hui à E1.")
+        self.assertTrue(any(c.type == "maintenance_logs" for c in res.cards))
+
+    async def test_verified_absence_passes_through(self) -> None:
+        stub = StubLLM([
+            _call("list_maintenance_logs", {"date": "2000-01-01"}),
+            _say("Aucune intervention journalisée le 2000-01-01."),
+        ])
+        res = await AgentLoop(stub).chat(AgentChatRequest(
+            message="donne-moi les interventions réalisées aujourd'hui",
+            context=self._log_context()))
+        self.assertEqual(res.tools_executed, ["list_maintenance_logs"])
+        self.assertIn("Aucune intervention", res.answer)
+        self.assertEqual(stub.calls, 2)
+
+    async def test_stubborn_absence_ends_honest(self) -> None:
+        loop = AgentLoop(StubLLM([
+            _call("prepare_incident", {"school": "E1"}),
+            _say("Aucune intervention réalisée aujourd'hui."),
+            _say("Toujours aucune intervention, promis."),
+        ]))
+        res = await loop.chat(AgentChatRequest(
+            message="donne-moi les interventions réalisées aujourd'hui",
+            context=self._log_context()))
+        self.assertIn("je ne peux pas vérifier", res.answer.lower())
+
+
+class MaintenanceLogsCardTest(unittest.TestCase):
+    """Carte + résumé déterministe pour list_maintenance_logs."""
+
+    def test_card_type(self) -> None:
+        loop = AgentLoop(StubLLM([CALL_DISTRICT]))
+        cards = loop._build_cards([("list_maintenance_logs", {
+            "date": "2026-10-31", "items": [{"id": 1}], "total": 1,
+            "insight": "1 intervention journalisée le 2026-10-31."})])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "maintenance_logs")
+
+    def test_fallback_summary(self) -> None:
+        loop = AgentLoop(StubLLM([CALL_DISTRICT]))
+        text = loop._fallback_answer([("list_maintenance_logs", {
+            "date": "2026-10-31",
+            "items": [{"school_name": "E1"}, {"school_name": "E2"}], "total": 2})])
+        self.assertIn("2 interventions journalisées", text)
+        self.assertIn("carte", text)
+
+    def test_fallback_empty_is_honest(self) -> None:
+        loop = AgentLoop(StubLLM([CALL_DISTRICT]))
+        text = loop._fallback_answer([("list_maintenance_logs", {
+            "date": "2026-10-31", "items": [], "total": 0})])
+        self.assertIn("Aucune intervention journalisée le 2026-10-31", text)
+
+
+class SystemPromptDateTest(unittest.TestCase):
+    """Non-régression E2E : le modèle recevait une date périmée (2024-02-20)
+    faute de repère temporel. La date du jour est injectée dans le prompt."""
+
+    def test_today_injected_fr_and_en(self) -> None:
+        from datetime import datetime, timezone
+
+        from app.agent_loop import _build_system_prompt
+
+        today = datetime.now(timezone.utc).date().isoformat()
+        self.assertIn(f"Aujourd'hui : {today}", _build_system_prompt("fr"))
+        self.assertIn(today, _build_system_prompt("en"))
