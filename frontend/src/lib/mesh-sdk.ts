@@ -42,8 +42,10 @@ export interface MeshBundle {
   fragment_total?: number;
   custody_requested?: boolean;
   priority?: 'normal' | 'high' | 'alert';
-  /** Réservé Phase 3 : signature Ed25519 du manifest. */
+  /** V2 signatures : Ed25519 base64 (88 car.) sur les octets canoniques, clé `node_pubkey`. */
   signature?: string;
+  /** V2 signatures : clé publique Ed25519 du nœud origine (base64, 44 car.). Auto-annoncée (TOFU), incluse dans les octets signés. */
+  node_pubkey?: string;
   /** V2 E2E : enveloppe scellée (base64) ; `message` reste vide quand présent. */
   sealed?: string;
   sealed_alg?: 'nacl-sealed-box';
@@ -77,9 +79,33 @@ function uuid(): string {
   });
 }
 
-/** sha256 hex — WebCrypto, fallback FNV si indisponible (http non-secure). */
+/**
+ * Forme canonique signée (zéro dépendance) : JSON compact, clés triées,
+ * UTF-8 brut — exactement le `raw` de `checksumOf`, moins le champ
+ * `signature` (auto-exclusion : une signature ne peut pas couvrir sa
+ * propre valeur). `node_pubkey` est INCLUSE : la signature lie le contenu
+ * à la clé annoncée. Même forme en Python (`mesh_verify.canonical_bytes`)
+ * et PHP (`MeshSignature::canonicalBytes`).
+ */
+export function canonicalString(bundle: Omit<MeshBundle, 'checksum' | 'signature'>): string {
+  // Immuables + node_pubkey seuls : hops/previous_node/copies_remaining
+  // vivent à chaque saut, checksum/signature sont des témoins.
+  const { checksum: _omit, hops: _h, previous_node: _p, copies_remaining: _c, signature: _s, ...rest } = bundle as MeshBundle;
+  return JSON.stringify(rest, Object.keys(rest).sort());
+}
+
+/** Octets UTF-8 de `canonicalString` — l'entrée exacte d'Ed25519. */
+export function canonicalBytes(bundle: Omit<MeshBundle, 'checksum' | 'signature'>): Uint8Array {
+  return new TextEncoder().encode(canonicalString(bundle));
+}
+
+/**
+ * sha256 hex — WebCrypto, fallback FNV si indisponible (http non-secure).
+ * Couvre aussi `signature`/`node_pubkey` quand présents (même ensemble que
+ * le relai) — donc toujours (re)calculer APRÈS `signBundle` (qui le fait).
+ */
 export async function checksumOf(bundle: Omit<MeshBundle, 'checksum'>): Promise<string> {
-  // Immuables seuls : hops/previous_node/copies_remaining vivent à chaque saut.
+  // Tout sauf hops/previous_node/copies_remaining (mutés à chaque saut) : couvre aussi signature/node_pubkey.
   const { checksum: _omit, hops: _h, previous_node: _p, copies_remaining: _c, ...rest } = bundle as MeshBundle;
   const raw = JSON.stringify(rest, Object.keys(rest).sort());
   try {
@@ -145,7 +171,7 @@ export interface ForwardResult {
  * Spray-and-Wait binaire : je donne floor(n/2) copies au contact et j'en
  * garde ceil(n/2). Retourne null si boucle/TTL/hops dépassés ou s'il ne
  * reste qu'une copie (livraison directe au serveur uniquement).
- * Après un forward réussi, appeler `outbox.update(id, { copies_remaining })`.
+ * Après un forward réussi, appeler `outbox.update(id, { copies_remaining: result.keepCopies })`.
  */
 export function forwardBundle(bundle: MeshBundle, myNodeId: string = nodeId()): ForwardResult | null {
   if (bundle.hops.includes(myNodeId)) return null; // anti-boucle
@@ -165,7 +191,7 @@ export function forwardBundle(bundle: MeshBundle, myNodeId: string = nodeId()): 
   };
 }
 
-/** Payload compact pour QR code (base64url du JSON). ~1 Ko en texte. */
+/** Payload compact pour QR code (base64url du JSON). ~0,5 Ko en texte (~700 car. QR, ~900 signé V2 — mesuré). */
 export function serializeForQR(bundle: MeshBundle): string {
   const json = JSON.stringify(bundle);
   return btoa(unescape(encodeURIComponent(json))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -383,10 +409,12 @@ export async function uploadToLaravel(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       bundles: bundles.map((b) => ({
+        v: b.v,
         bundle_id: b.bundle_id,
         origin_node_id: b.origin_node_id,
         school_id: b.school_id,
         school_code: b.school_code,
+        created_at: b.created_at,
         message: b.message,
         channel: b.channel ?? 'text',
         hops: b.hops,
@@ -401,9 +429,10 @@ export async function uploadToLaravel(
         copies_remaining: b.copies_remaining ?? DEFAULT_COPIES,
         fragment_offset: b.fragment_offset,
         fragment_total: b.fragment_total,
-        custody_requested: b.custody_requested ?? false,
+        custody_requested: b.custody_requested,
         priority: b.priority ?? 'normal',
         signature: b.signature,
+        node_pubkey: b.node_pubkey,
         sealed: b.sealed,
         sealed_alg: b.sealed_alg,
         bundle_group: b.bundle_group,
