@@ -9,6 +9,8 @@ import { SentinelOrb } from '../components/SentinelOrb';
 import { SentinelAvatar } from '../components/SentinelAvatar';
 import type { OrbState } from '../components/SentinelOrb';
 import { AgentCardList, FollowUps } from '../components/AgentCards';
+import { DetailDrawer } from '../components/DetailDrawer';
+import type { DetailKind, DetailTarget } from '../components/DetailDrawer';
 import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
 
@@ -244,6 +246,16 @@ export default function ConsolePage() {
     [send],
   );
 
+  const [detail, setDetail] = useState<DetailTarget | null>(null);
+
+  const openDetail = useCallback((kind: DetailKind, id: number) => {
+    setDetail({ kind, id });
+  }, []);
+
+  const closeDetail = useCallback(() => {
+    setDetail(null);
+  }, []);
+
   const appendAssistant = useCallback((content: string, cards?: AgentCard[]) => {
     setMessages((prev) => [
       ...prev,
@@ -446,6 +458,7 @@ export default function ConsolePage() {
           <div className="stage-in stage-4 mt-8 w-full">{composer(true)}</div>
           {errorBox}
         </div>
+        <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} />
       </div>
     );
   }
@@ -529,7 +542,7 @@ export default function ConsolePage() {
                       </div>
                     )}
                     <div className="cards-in">
-                      <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} />
+                      <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} onDetail={openDetail} />
                     </div>
                     <FollowUps items={m.follow_ups ?? []} onAsk={ask} />
                   </>
@@ -558,6 +571,7 @@ export default function ConsolePage() {
           {composer(false)}
         </div>
       </div>
+      <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} />
     </div>
   );
 }

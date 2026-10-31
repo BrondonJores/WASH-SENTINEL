@@ -11,6 +11,7 @@ import { TerritoryLegend, TerritoryMap } from './TerritoryMap';
 import { SlideDeck } from './SlideDeck';
 import type { DeckSlide } from './SlideDeck';
 import type { TerritoryPoint } from './TerritoryMap';
+import type { DetailKind } from './DetailDrawer';
 
 // ---------- Helpers défensifs (les observations tools varient) ----------
 
@@ -342,19 +343,31 @@ function IncidentCard({
   title,
   data,
   onAsk,
+  onDetail,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  onDetail?: (kind: DetailKind, id: number) => void;
 }) {
   const urgency = typeof data.urgency === 'string' ? data.urgency : 'medium';
   const priority = typeof data.priority_score === 'number' ? data.priority_score : null;
   const school = fmtOpt(data.school_name);
+  const incidentId = typeof data.id === 'number' ? data.id : null;
   return (
     <CardShell
       title={title}
       meta={fmtOpt(data.reference_code)}
-      actions={<CopyButton value={fmtOpt(data.reference_code) ?? ''} label="Référence" />}
+      actions={
+        <>
+          {onDetail !== undefined && incidentId !== null && (
+            <Button size="sm" onClick={() => onDetail('incident', incidentId)}>
+              Détails
+            </Button>
+          )}
+          <CopyButton value={fmtOpt(data.reference_code) ?? ''} label="Référence" />
+        </>
+      }
     >
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
@@ -399,10 +412,12 @@ function RankingCard({
   title,
   data,
   onAsk,
+  onDetail,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  onDetail?: (kind: DetailKind, id: number) => void;
 }) {
   const ranking = asArray<Record<string, unknown>>(data.ranking);
   const max = Math.max(0, ...ranking.map((r) => (typeof r.need_score === 'number' ? r.need_score : 0)));
@@ -418,33 +433,50 @@ function RankingCard({
             const urg = typeof r.top_urgency === 'string' ? r.top_urgency : 'low';
             const score = typeof r.need_score === 'number' ? r.need_score : 0;
             const n = typeof r.open_incidents === 'number' ? r.open_incidents : 0;
-            return (
-              <div
-                key={String(r.school_id ?? i)}
-                className={`flex items-center gap-3 py-2.5 first:pt-0 last:pb-0 ${
-                  i === 0 ? '-mx-2 rounded-lg bg-teal-50/70 px-2 dark:bg-teal-950/30' : ''
-                }`}
-              >
+            const schoolId = typeof r.school_id === 'number' ? r.school_id : null;
+            const clickable = onDetail !== undefined && schoolId !== null;
+            const rowClass = `flex items-center gap-3 py-2.5 first:pt-0 last:pb-0 ${
+              i === 0 ? '-mx-2 rounded-lg bg-teal-50/70 px-2 dark:bg-teal-950/30' : ''
+            }`;
+            const content = (
+              <>
                 <span className="w-7 shrink-0 font-display text-sm font-bold tabular-nums text-stone-400 dark:text-stone-500">
                   {String(i + 1).padStart(2, '0')}
                 </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{fmtText(r.school_name)}</p>
-                  <p className="font-mono text-[11px] text-stone-500 dark:text-stone-400">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{fmtText(r.school_name)}</span>
+                  <span className="block font-mono text-[11px] text-stone-500 dark:text-stone-400">
                     {fmtText(r.district)} · {fmtInt(n)} incident{n === 1 ? '' : 's'} ·{' '}
                     {fmtInt(r.affected_students)} élèves · {fmtInt(r.oldest_days)} j
-                  </p>
-                  <div className="mt-1.5">
+                  </span>
+                  <span className="mt-1.5 block">
                     <NeedBar value={score} max={max} />
-                  </div>
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
+                  </span>
+                </span>
+                <span className="flex shrink-0 flex-col items-end gap-1">
                   <span className="font-display text-lg font-extrabold tabular-nums">{fmtNum1(score)}</span>
                   <span className="inline-flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-400">
                     <UrgencyDot level={urg} />
                     {URGENCY_LABEL[urg] ?? urg}
                   </span>
-                </div>
+                </span>
+              </>
+            );
+            return clickable ? (
+              <button
+                key={String(schoolId ?? i)}
+                type="button"
+                onClick={() => {
+                  if (schoolId !== null) onDetail?.('school', schoolId);
+                }}
+                title="Voir le détail de l'école"
+                className={`${rowClass} w-full rounded-lg text-left transition-[background-color,transform] duration-150 ease-snap hover:bg-raised active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100`}
+              >
+                {content}
+              </button>
+            ) : (
+              <div key={String(r.school_id ?? i)} className={rowClass}>
+                {content}
               </div>
             );
           })}
@@ -951,13 +983,13 @@ function BriefingDeckCard({ title, data }: { title: string; data: Record<string,
   );
 }
 
-function AgentCardViewInner({ card, onAsk, onAppend }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void }) {
+function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void }) {
   const data = asRecord(card.data);
   switch (card.type) {
     case 'incident_detail':
-      return <IncidentCard title={card.title} data={data} onAsk={onAsk} />;
+      return <IncidentCard title={card.title} data={data} onAsk={onAsk} onDetail={onDetail} />;
     case 'school_ranking':
-      return <RankingCard title={card.title} data={data} onAsk={onAsk} />;
+      return <RankingCard title={card.title} data={data} onAsk={onAsk} onDetail={onDetail} />;
     case 'school_analysis':
       return <AnalysisCard title={card.title} data={data} onAsk={onAsk} />;
     case 'district_summary':
@@ -983,12 +1015,12 @@ function AgentCardViewInner({ card, onAsk, onAppend }: { card: AgentCard; onAsk?
 
 export const AgentCardView = memo(AgentCardViewInner);
 
-export function AgentCardList({ cards, onAsk, onAppend }: { cards: AgentCard[]; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void }) {
+export function AgentCardList({ cards, onAsk, onAppend, onDetail }: { cards: AgentCard[]; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void }) {
   if (cards.length === 0) return null;
   return (
     <div className="space-y-3 pt-1">
       {cards.map((c, i) => (
-        <AgentCardView key={`${c.type}-${i}`} card={c} onAsk={onAsk} onAppend={onAppend} />
+        <AgentCardView key={`${c.type}-${i}`} card={c} onAsk={onAsk} onAppend={onAppend} onDetail={onDetail} />
       ))}
     </div>
   );
