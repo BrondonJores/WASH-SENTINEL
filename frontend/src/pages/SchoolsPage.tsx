@@ -1,21 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../lib/api';
 import type { School } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import { ErrorBanner, Field, Pager } from '../components/crud';
-import {
-  INPUT_CLS,
-  STATUS_FR,
-  URGENCY_FR,
-  fmtDate,
-  fmtNum,
-  statusTone,
-  urgencyTone,
-} from '../lib/wash';
+import { DetailDrawer } from '../components/DetailDrawer';
+import type { DetailTarget } from '../components/DetailDrawer';
+import { Icon } from '../components/icons';
+import { INPUT_CLS, fmtNum } from '../lib/wash';
 
 const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
 const toNum = (v: string): number | undefined => (v === '' ? undefined : Number(v));
+const errorCls = 'mt-1 text-xs font-medium text-danger';
 
 export default function SchoolsPage() {
   const { user } = useAuth();
@@ -27,12 +23,14 @@ export default function SchoolsPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [searchV, setSearchV] = useState('');
 
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [detail, setDetail] = useState<School | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [searchV, setSearchV] = useState('');
+  const [search, setSearch] = useState('');
+  const [districtV, setDistrictV] = useState('');
+  const [district, setDistrict] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const [detail, setDetail] = useState<DetailTarget | null>(null);
 
   const [showForm, setShowForm] = useState(false);
   const [fName, setFName] = useState('');
@@ -41,14 +39,57 @@ export default function SchoolsPage() {
   const [fStudents, setFStudents] = useState('');
   const [fTeachers, setFTeachers] = useState('');
   const [fPhone, setFPhone] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  const nameRef = useRef<HTMLInputElement>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
+  const districtRef = useRef<HTMLInputElement>(null);
+  const studentsRef = useRef<HTMLInputElement>(null);
+  const teachersRef = useRef<HTMLInputElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
+
+  // Recherche live debounced 300 ms (remplace le bouton).
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setSearch(searchV.trim());
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [searchV]);
+
+  // Filtre district en direct (debounced pour limiter les requêtes).
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setDistrict(districtV.trim());
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [districtV]);
+
+  // Raccourci « / » : focus sur la recherche.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/') return;
+      const t = e.target;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.schools({ page, search: search || undefined });
+      const res = await api.schools({
+        page,
+        search: search || undefined,
+        district: district || undefined,
+      });
       setItems(res.data);
       setLastPage(res.last_page);
       setTotal(res.total);
@@ -57,37 +98,91 @@ export default function SchoolsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search]);
+  }, [page, search, district]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const select = useCallback(async (id: number) => {
-    setSelectedId(id);
-    setDetailLoading(true);
-    try {
-      setDetail(await api.school(id));
-    } catch (e) {
-      setDetail(null);
-      setMsg(errMsg(e));
-    } finally {
-      setDetailLoading(false);
+  const districts = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of items) {
+      if (s.district.trim() !== '') set.add(s.district);
     }
+    return [...set].sort((a, b) => a.localeCompare(b, 'fr'));
+  }, [items]);
+
+  const hasFilters = searchV.trim() !== '' || districtV.trim() !== '';
+  const resetFilters = () => {
+    setSearchV('');
+    setSearch('');
+    setDistrictV('');
+    setDistrict('');
+    setPage(1);
+  };
+
+  const openDetail = useCallback((id: number) => {
+    setDetail({ kind: 'school', id });
   }, []);
 
+  const closeDetail = useCallback(() => {
+    setDetail(null);
+  }, []);
+
+  const validate = (): Record<string, string> => {
+    const errors: Record<string, string> = {};
+    if (fName.trim() === '') errors.name = 'Le nom est requis.';
+    if (fCode.trim() === '') errors.code = 'Le code est requis.';
+    if (fDistrict.trim() === '') errors.district = 'Le district est requis.';
+    if (fStudents.trim() !== '') {
+      const n = Number(fStudents);
+      if (!Number.isInteger(n) || n < 0) errors.students = 'Indiquez un nombre entier positif (ou laissez vide).';
+    }
+    if (fTeachers.trim() !== '') {
+      const n = Number(fTeachers);
+      if (!Number.isInteger(n) || n < 0) errors.teachers = 'Indiquez un nombre entier positif (ou laissez vide).';
+    }
+    if (fPhone.trim() !== '' && fPhone.trim().length < 6) {
+      errors.phone = 'Numéro de téléphone trop court.';
+    }
+    return errors;
+  };
+
+  const focusFirstError = (errors: Record<string, string>) => {
+    const order: Array<[string, { current: HTMLInputElement | null }]> = [
+      ['name', nameRef],
+      ['code', codeRef],
+      ['district', districtRef],
+      ['students', studentsRef],
+      ['teachers', teachersRef],
+      ['phone', phoneRef],
+    ];
+    for (const [key, ref] of order) {
+      if (errors[key]) {
+        ref.current?.focus();
+        return;
+      }
+    }
+  };
+
   const create = async () => {
-    if (busy || !fName || !fCode || !fDistrict) return;
+    if (busy) return;
+    const errors = validate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) {
+      focusFirstError(errors);
+      return;
+    }
     setBusy(true);
     setMsg(null);
     try {
       const res = await api.createSchool({
-        name: fName,
-        code: fCode,
-        district: fDistrict,
-        student_count: toNum(fStudents),
-        teacher_count: toNum(fTeachers),
-        contact_phone: fPhone || undefined,
+        name: fName.trim(),
+        code: fCode.trim(),
+        district: fDistrict.trim(),
+        student_count: toNum(fStudents.trim()),
+        teacher_count: toNum(fTeachers.trim()),
+        contact_phone: fPhone.trim() || undefined,
       });
       setMsg(res.message);
       setShowForm(false);
@@ -97,14 +192,17 @@ export default function SchoolsPage() {
       setFStudents('');
       setFTeachers('');
       setFPhone('');
+      setFieldErrors({});
       await load();
-      await select(res.school.id);
+      setDetail({ kind: 'school', id: res.school.id });
     } catch (e) {
       setMsg(errMsg(e));
     } finally {
       setBusy(false);
     }
   };
+
+  const errorList = Object.values(fieldErrors).filter((v) => v !== '');
 
   return (
     <div className="mx-auto w-full max-w-6xl">
@@ -123,90 +221,213 @@ export default function SchoolsPage() {
 
       {showForm && (
         <Card className="mb-4 p-4">
+          {errorList.length > 0 && (
+            <div role="alert" className="mb-3 rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
+              <p className="font-semibold">Vérifiez {errorList.length} champ(s) :</p>
+              <ul className="mt-1 list-disc pl-5">
+                {errorList.map((m) => (
+                  <li key={m}>{m}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Nom *">
-              <input value={fName} onChange={(e) => setFName(e.target.value)} className={INPUT_CLS} />
+              <input
+                ref={nameRef}
+                value={fName}
+                onChange={(e) => {
+                  setFName(e.target.value);
+                  setFieldErrors((p) => ({ ...p, name: '' }));
+                }}
+                className={`${INPUT_CLS} ${fieldErrors.name ? 'border-danger' : ''}`}
+                aria-invalid={fieldErrors.name ? true : undefined}
+              />
+              {fieldErrors.name && <p className={errorCls}>{fieldErrors.name}</p>}
             </Field>
             <Field label="Code *">
-              <input value={fCode} onChange={(e) => setFCode(e.target.value)} className={INPUT_CLS} />
+              <input
+                ref={codeRef}
+                value={fCode}
+                onChange={(e) => {
+                  setFCode(e.target.value);
+                  setFieldErrors((p) => ({ ...p, code: '' }));
+                }}
+                className={`${INPUT_CLS} ${fieldErrors.code ? 'border-danger' : ''}`}
+                aria-invalid={fieldErrors.code ? true : undefined}
+              />
+              {fieldErrors.code && <p className={errorCls}>{fieldErrors.code}</p>}
             </Field>
             <Field label="District *">
               <input
+                ref={districtRef}
                 value={fDistrict}
-                onChange={(e) => setFDistrict(e.target.value)}
-                className={INPUT_CLS}
+                onChange={(e) => {
+                  setFDistrict(e.target.value);
+                  setFieldErrors((p) => ({ ...p, district: '' }));
+                }}
+                className={`${INPUT_CLS} ${fieldErrors.district ? 'border-danger' : ''}`}
+                aria-invalid={fieldErrors.district ? true : undefined}
               />
+              {fieldErrors.district && <p className={errorCls}>{fieldErrors.district}</p>}
             </Field>
             <Field label="Élèves">
               <input
+                ref={studentsRef}
                 type="number"
                 min={0}
+                step={1}
                 value={fStudents}
-                onChange={(e) => setFStudents(e.target.value)}
-                className={INPUT_CLS}
+                onChange={(e) => {
+                  setFStudents(e.target.value);
+                  setFieldErrors((p) => ({ ...p, students: '' }));
+                }}
+                className={`${INPUT_CLS} ${fieldErrors.students ? 'border-danger' : ''}`}
+                aria-invalid={fieldErrors.students ? true : undefined}
               />
+              {fieldErrors.students && <p className={errorCls}>{fieldErrors.students}</p>}
             </Field>
             <Field label="Enseignants">
               <input
+                ref={teachersRef}
                 type="number"
                 min={0}
+                step={1}
                 value={fTeachers}
-                onChange={(e) => setFTeachers(e.target.value)}
-                className={INPUT_CLS}
+                onChange={(e) => {
+                  setFTeachers(e.target.value);
+                  setFieldErrors((p) => ({ ...p, teachers: '' }));
+                }}
+                className={`${INPUT_CLS} ${fieldErrors.teachers ? 'border-danger' : ''}`}
+                aria-invalid={fieldErrors.teachers ? true : undefined}
               />
+              {fieldErrors.teachers && <p className={errorCls}>{fieldErrors.teachers}</p>}
             </Field>
             <Field label="Téléphone">
-              <input value={fPhone} onChange={(e) => setFPhone(e.target.value)} className={INPUT_CLS} />
+              <input
+                ref={phoneRef}
+                value={fPhone}
+                onChange={(e) => {
+                  setFPhone(e.target.value);
+                  setFieldErrors((p) => ({ ...p, phone: '' }));
+                }}
+                className={`${INPUT_CLS} ${fieldErrors.phone ? 'border-danger' : ''}`}
+                aria-invalid={fieldErrors.phone ? true : undefined}
+              />
+              {fieldErrors.phone && <p className={errorCls}>{fieldErrors.phone}</p>}
             </Field>
           </div>
-          <div className="mt-3">
+          <div className="mt-3 flex gap-2">
             <Button variant="primary" disabled={busy} onClick={() => void create()}>
-              Enregistrer
+              {busy ? 'Enregistrement…' : 'Enregistrer'}
+            </Button>
+            <Button variant="ghost" onClick={() => setShowForm(false)}>
+              Annuler
             </Button>
           </div>
         </Card>
       )}
-      {msg && <p className="mb-4 text-sm text-ink-soft">{msg}</p>}
+      {msg && (
+        <p role="status" className="mb-4 text-sm text-ink-soft">
+          {msg}
+        </p>
+      )}
 
-      <form
-        className="mb-4 flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setPage(1);
-          setSearch(searchV);
-        }}
-      >
-        <input
-          placeholder="Rechercher une école…"
-          value={searchV}
-          onChange={(e) => setSearchV(e.target.value)}
-          className={`${INPUT_CLS} max-w-sm`}
-        />
-        <Button type="submit">Rechercher</Button>
-      </form>
+      <div className="mb-2 flex flex-col gap-2 sm:flex-row">
+        <div className="relative sm:max-w-sm sm:flex-1">
+          <Icon
+            name="search"
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-faint"
+          />
+          <input
+            ref={searchInputRef}
+            placeholder="Rechercher une école…  ( / )"
+            title="Rechercher — raccourci : /"
+            value={searchV}
+            onChange={(e) => setSearchV(e.target.value)}
+            aria-label="Rechercher une école"
+            className={`${INPUT_CLS} pl-9 ${searchV !== '' ? 'pr-9' : ''}`}
+          />
+          {searchV !== '' && (
+            <button
+              type="button"
+              onClick={() => setSearchV('')}
+              aria-label="Effacer la recherche"
+              title="Effacer"
+              className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-ink-faint transition-colors hover:bg-raised hover:text-ink motion-reduce:transition-none"
+            >
+              <Icon name="x" className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <div className="sm:max-w-xs sm:flex-1">
+          <input
+            placeholder="Filtrer par district…"
+            value={districtV}
+            onChange={(e) => setDistrictV(e.target.value)}
+            aria-label="Filtrer par district"
+            list="school-district-list"
+            className={INPUT_CLS}
+          />
+          <datalist id="school-district-list">
+            {districts.map((d) => (
+              <option key={d} value={d} />
+            ))}
+          </datalist>
+        </div>
+        {hasFilters && (
+          <Button variant="ghost" onClick={resetFilters}>
+            Réinitialiser
+          </Button>
+        )}
+      </div>
+      <p aria-live="polite" className="mb-4 text-xs text-ink-soft">
+        {loading && items.length === 0 ? 'Recherche en cours…' : `${fmtNum(total)} résultat(s)`}
+        {hasFilters && total > 0 ? ` — page ${page}/${lastPage}` : ''}
+      </p>
 
-      <div className="grid items-start gap-4 lg:grid-cols-5">
-        <div className="space-y-2 lg:col-span-2">
-          {loading && items.length === 0 && (
-            <>
-              <Skeleton className="h-20" />
-              <Skeleton className="h-20" />
-              <Skeleton className="h-20" />
-            </>
-          )}
-          {!loading && items.length === 0 && (
-            <Card>
-              <EmptyState icon="school" title="Aucune école" description="Aucun établissement trouvé." />
-            </Card>
-          )}
-          {items.map((s) => (
+      <div className="space-y-2">
+        {loading && items.length === 0 && (
+          <>
+            <Skeleton className="h-20" />
+            <Skeleton className="h-20" />
+            <Skeleton className="h-20" />
+          </>
+        )}
+        {!loading && items.length === 0 && (
+          <Card>
+            {hasFilters ? (
+              <EmptyState
+                icon="school"
+                title="Aucune école trouvée"
+                description="Aucun établissement ne correspond à ces critères."
+                action={<Button onClick={resetFilters}>Réinitialiser les filtres</Button>}
+              />
+            ) : (
+              <EmptyState
+                icon="school"
+                title="Aucune école"
+                description="Aucun établissement suivi pour le moment."
+                action={
+                  admin ? (
+                    <Button variant="primary" onClick={() => setShowForm(true)}>
+                      + Nouvelle école
+                    </Button>
+                  ) : undefined
+                }
+              />
+            )}
+          </Card>
+        )}
+        {items.map((s) => {
+          const active = detail !== null && detail.kind === 'school' && detail.id === s.id;
+          return (
             <button
               key={s.id}
-              onClick={() => void select(s.id)}
-              className={`w-full rounded-xl border p-3 text-left transition-colors ${
-                selectedId === s.id
-                  ? 'border-accent bg-accent/5'
-                  : 'border-line bg-card hover:bg-raised'
+              onClick={() => openDetail(s.id)}
+              aria-current={active ? true : undefined}
+              className={`w-full rounded-xl border p-3 text-left transition-colors motion-reduce:transition-none ${
+                active ? 'border-accent bg-accent/5' : 'border-line bg-card hover:bg-raised'
               }`}
             >
               <div className="flex items-center justify-between gap-2">
@@ -220,79 +441,12 @@ export default function SchoolsPage() {
                 {s.district} · {fmtNum(s.student_count)} élèves · {s.reports_count ?? 0} signalement(s)
               </p>
             </button>
-          ))}
-          <Pager page={page} lastPage={lastPage} onPage={setPage} />
-        </div>
-
-        <div className="lg:col-span-3">
-          {detailLoading && <Skeleton className="h-64" />}
-          {!detailLoading && !detail && (
-            <Card>
-              <EmptyState
-                icon="school"
-                title="Sélectionnez une école"
-                description="Cliquez sur une école pour voir ses incidents et son historique."
-              />
-            </Card>
-          )}
-          {!detailLoading && detail && (
-            <Card className="space-y-4 p-4">
-              <div>
-                <span className="font-mono text-xs text-ink-faint">{detail.code}</span>
-                <h2 className="mt-1 font-display text-lg font-bold">{detail.name}</h2>
-                <p className="text-sm text-ink-soft">
-                  {detail.district} · {fmtNum(detail.student_count)} élèves
-                  {detail.female_students != null ? ` (dont ${fmtNum(detail.female_students)} filles)` : ''} ·{' '}
-                  {fmtNum(detail.teacher_count)} enseignant(s)
-                </p>
-                <p className="mt-1 text-sm text-ink-soft">
-                  {detail.contact_phone ? `Tél : ${detail.contact_phone} · ` : ''}
-                  {detail.equipment_type ? `Équipement : ${detail.equipment_type} · ` : ''}
-                  {detail.maintenance_logs_count ?? 0} intervention(s) journalisée(s)
-                </p>
-              </div>
-              <div>
-                <h3 className="mb-1 text-sm font-semibold">
-                  Incidents ouverts ({detail.open_incidents?.length ?? 0})
-                </h3>
-                {(detail.open_incidents?.length ?? 0) === 0 && (
-                  <p className="text-sm text-ink-faint">Aucun incident ouvert.</p>
-                )}
-                <ul className="space-y-1">
-                  {(detail.open_incidents ?? []).map((i) => (
-                    <li
-                      key={i.id}
-                      className="flex items-center justify-between gap-2 rounded-md bg-raised px-2 py-1 text-xs"
-                    >
-                      <span className="truncate">
-                        <span className="font-mono text-ink-faint">{i.reference_code}</span> · {i.title}
-                      </span>
-                      <span className="flex shrink-0 gap-1">
-                        <Badge tone={urgencyTone(i.urgency)}>{URGENCY_FR[i.urgency] ?? i.urgency}</Badge>
-                        <Badge tone={statusTone(i.status)}>{STATUS_FR[i.status] ?? i.status}</Badge>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <h3 className="mb-1 text-sm font-semibold">Dernières interventions</h3>
-                {(detail.maintenance_logs?.length ?? 0) === 0 && (
-                  <p className="text-sm text-ink-faint">Aucune intervention journalisée.</p>
-                )}
-                <ul className="space-y-1">
-                  {(detail.maintenance_logs ?? []).map((l) => (
-                    <li key={l.id} className="rounded-md bg-raised px-2 py-1 text-xs">
-                      {fmtNum(l.cost_amount)} {l.currency ?? 'XAF'} · {fmtDate(l.created_at)}
-                      {l.notes ? ` · ${l.notes}` : ''}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </Card>
-          )}
-        </div>
+          );
+        })}
+        <Pager page={page} lastPage={lastPage} onPage={setPage} />
       </div>
+
+      <DetailDrawer detail={detail} onClose={closeDetail} onDetail={(kind, id) => setDetail({ kind, id })} />
     </div>
   );
 }
