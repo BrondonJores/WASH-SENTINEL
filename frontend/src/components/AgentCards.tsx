@@ -6,8 +6,8 @@ import { VoicePlayer } from './VoiceControls';
 import type { AgentCard } from '../lib/api';
 import { api, ApiError } from '../lib/api';
 import { ThresholdGauge } from './ThresholdGauge';
-import { TrendChart } from './TrendChart';
-import type { TrendSeries } from './TrendChart';
+import { TrendChart, TrendDonut, TrendHBars } from './TrendChart';
+import type { DonutEntry, HBarEntry, TrendSeries } from './TrendChart';
 import { TerritoryLegend, TerritoryMap } from './TerritoryMap';
 import { SlideDeck } from './SlideDeck';
 import type { DeckSlide } from './SlideDeck';
@@ -742,6 +742,133 @@ function DistrictCard({
   );
 }
 
+// ---------- Tendances : vues riches (helpers privés) ----------
+
+type TrendViewId = 'courbe' | 'couts' | 'pannes' | 'ecoles' | 'urgences';
+
+const TREND_PERIODS = [3, 6, 12];
+
+const URGENCY_SLICE: Record<string, string> = {
+  critical: '#ef4444',
+  high: '#f59e0b',
+  medium: '#0284c7',
+  low: '#0d9488',
+};
+
+/** Nombre sûr (0 si absent) pour les calculs de vues. */
+const trendNum = (v: unknown): number =>
+  typeof v === 'number' && Number.isFinite(v) ? v : 0;
+
+/** Entrées anneau urgences depuis by_urgency (optionnel, défensif). */
+function trendUrgencyEntries(data: Record<string, unknown>): DonutEntry[] {
+  return Object.entries(asRecord(data.by_urgency))
+    .filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && (v as number) > 0)
+    .map(([k, v]) => ({
+      name: URGENCY_LABEL[k] ?? k,
+      value: v as number,
+      color: URGENCY_SLICE[k] ?? '#a8a29e',
+    }))
+    .sort((a, b) => b.value - a.value);
+}
+
+/** Top écoles depuis per_school (optionnel, défensif : liste ou objet). */
+function trendSchoolEntries(data: Record<string, unknown>): HBarEntry[] {
+  const raw = data.per_school;
+  const out: HBarEntry[] = [];
+  for (const r of asArray<unknown>(raw)) {
+    const rec = asRecord(r);
+    const name = fmtOpt(rec.school_name) ?? fmtOpt(rec.name) ?? fmtOpt(rec.label);
+    if (name === undefined) continue;
+    const v = rec.incidents ?? rec.total_incidents ?? rec.pannes ?? rec.count ?? rec.value ?? rec.total;
+    out.push({ name, value: trendNum(v) });
+  }
+  for (const [k, v] of Object.entries(asRecord(raw))) {
+    if (typeof v === 'number' && Number.isFinite(v)) out.push({ name: k, value: v });
+  }
+  return out
+    .filter((e) => e.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
+}
+
+/** Onglets simples en français pour changer de graphique. */
+function TrendTabs({
+  tabs,
+  active,
+  onChange,
+}: {
+  tabs: { id: TrendViewId; label: string }[];
+  active: TrendViewId;
+  onChange: (v: TrendViewId) => void;
+}) {
+  return (
+    <div role="tablist" aria-label="Choisir le graphique" className="flex flex-wrap gap-1.5">
+      {tabs.map((t, i) => {
+        const selected = t.id === active;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            onClick={() => onChange(t.id)}
+            style={{ animationDelay: `${i * 40}ms` }}
+            className={`trend-in rounded-full px-3 py-1.5 text-[13px] font-medium transition-[transform,opacity] duration-150 ease-snap active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100 ${
+              selected
+                ? 'bg-teal-700 text-white dark:bg-teal-500 dark:text-stone-950'
+                : 'border border-line bg-card text-ink-soft hover:text-ink'
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Sélecteur de période : repose une question tendances sur 3, 6 ou 12 mois. */
+function TrendPeriods({
+  current,
+  school,
+  onAsk,
+}: {
+  current: number | null;
+  school?: string;
+  onAsk: (q: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-stone-500 dark:text-stone-400">Période :</span>
+      {TREND_PERIODS.map((n) => {
+        const selected = current === n;
+        return (
+          <button
+            key={n}
+            type="button"
+            disabled={selected}
+            aria-current={selected ? 'true' : undefined}
+            onClick={() =>
+              onAsk(
+                school !== undefined
+                  ? `Voir les tendances de ${school} sur ${n} mois`
+                  : `Voir les tendances sur ${n} mois`,
+              )
+            }
+            className={`rounded-full px-2.5 py-1 text-xs font-medium transition-[transform,opacity] duration-150 ease-snap active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-default ${
+              selected
+                ? 'bg-teal-700 text-white dark:bg-teal-500 dark:text-stone-950'
+                : 'border border-line bg-card text-ink-soft hover:text-ink'
+            }`}
+          >
+            {n} mois
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function TrendCard({
   title,
   data,
@@ -770,9 +897,64 @@ function TrendCard({
   const avg = prev.length > 0 ? prev.reduce((s, v) => s + v, 0) / prev.length : 0;
   const delta = last !== undefined && avg > 0 ? ((last - avg) / avg) * 100 : null;
   const currency = typeof figures.currency === 'string' ? ` (${figures.currency})` : '';
+  const currencyCode = typeof figures.currency === 'string' ? figures.currency : 'XAF';
   const school = fmtOpt(data.school_name);
   const months = typeof data.months === 'number' && Number.isFinite(data.months) ? data.months : null;
   const trendInsight = fmtOpt(data.insight);
+  // Séries repérées par mots-clés (défensif : repli sur l'ordre backend coûts/pannes/jours).
+  const lines = series.filter((s) => s.kind === 'line');
+  const byWords = (words: string[]): number[] =>
+    series.find((s) => words.some((w) => s.label.toLowerCase().includes(w)))?.data ?? [];
+  const costData = byWords(['coût', 'cout', 'xaf', 'fcfa', 'franc', 'réparation']);
+  const incidentData = byWords(['panne', 'incident']);
+  const daysData = byWords(['jour']);
+  const costBars = costData.length > 0 ? costData : costs;
+  const incidentBars = incidentData.length > 0 ? incidentData : (lines[0]?.data ?? []);
+  const daysBars = daysData.length > 0 ? daysData : (lines[1]?.data ?? []);
+  // Enrichissements optionnels (rendu dégradé propre si absents).
+  const urgencyEntries = trendUrgencyEntries(data);
+  const schoolEntries = trendSchoolEntries(data);
+  const tabs: { id: TrendViewId; label: string }[] = [
+    { id: 'courbe', label: 'Courbe' },
+    { id: 'couts', label: 'Coûts' },
+    { id: 'pannes', label: 'Pannes' },
+    ...(schoolEntries.length > 0 ? [{ id: 'ecoles' as TrendViewId, label: 'Écoles' }] : []),
+    ...(urgencyEntries.length > 0 ? [{ id: 'urgences' as TrendViewId, label: 'Urgences' }] : []),
+  ];
+  const [view, setView] = useState<TrendViewId>('courbe');
+  const activeView = tabs.some((t) => t.id === view) ? view : 'courbe';
+  const hasChart = labels.length > 0 && series.length > 0;
+  const askMonth = (index: number): void => {
+    if (onAsk === undefined) return;
+    const label = labels[index] ?? `M${index + 1}`;
+    onAsk(school !== undefined ? `Détail de ${school} en ${label} ?` : `Détail en ${label} ?`);
+  };
+  const askSchool = (index: number): void => {
+    const entry = schoolEntries[index];
+    if (onAsk === undefined || entry === undefined) return;
+    onAsk(`Voir les tendances de ${entry.name} ?`);
+  };
+  const askUrgency = (index: number): void => {
+    const entry = urgencyEntries[index];
+    if (onAsk === undefined || entry === undefined) return;
+    const level = entry.name.toLowerCase();
+    onAsk(school !== undefined ? `Détail des incidents ${level} à ${school} ?` : `Détail des incidents ${level} ?`);
+  };
+  // Résumé parlé : « 3 pannes, 50 000 francs, en hausse. »
+  const trendDir = typeof figures.trend_direction === 'string' ? figures.trend_direction : 'stable';
+  const spokenTrend = trendDir === 'up' ? 'en hausse' : trendDir === 'down' ? 'en baisse' : 'stable';
+  const spokenMoney = currencyCode === 'XAF' ? 'francs' : currencyCode;
+  const spokenSummary =
+    typeof figures.total_incidents === 'number' && typeof figures.total_cost === 'number'
+      ? `${fmtInt(figures.total_incidents)} pannes, ${fmtInt(figures.total_cost)} ${spokenMoney}, ${spokenTrend}.`
+      : undefined;
+  const costOnly: TrendSeries[] = [
+    { key: 'couts', label: `Coût réparations (${currencyCode})`, kind: 'bar', data: costBars, color: '#0d9488' },
+  ];
+  const panneSeries: TrendSeries[] = [
+    { key: 'pannes', label: 'Pannes signalées', kind: 'bar', data: incidentBars, color: '#d97706' },
+    { key: 'jours', label: 'Jours sans service', kind: 'bar', data: daysBars, color: '#0284c7' },
+  ];
   return (
     <CardShell
       title={title}
@@ -785,8 +967,10 @@ function TrendCard({
             : `Tendances sur ${months} mois.`,
         trendInsight,
         school !== undefined ? `École : ${school}.` : undefined,
+        spokenSummary,
       )}
     >
+      <style>{`@keyframes trend-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}.trend-in{animation:trend-in 180ms cubic-bezier(0.23,1,0.32,1) both}@media (prefers-reduced-motion:reduce){.trend-in{animation:none}}`}</style>
       <div className="flex items-end justify-between gap-3">
         <HeroStat label={`Coût total${currency}`} value={fmtInt(figures.total_cost)} delta={delta} invert />
         <Sparkline data={costs} />
@@ -799,9 +983,32 @@ function TrendCard({
         <Stat label="Jours sans service" value={fmtInt(figures.total_days_lost)} />
         <Stat label="Coût / mois" value={fmtInt(figures.avg_cost_per_month)} />
       </div>
-      {labels.length > 0 && series.length > 0 ? (
-        <div className="mt-3">
-          <TrendChart labels={labels} series={series} />
+      {hasChart ? (
+        <div className="mt-3 space-y-3">
+          <TrendTabs tabs={tabs} active={activeView} onChange={setView} />
+          <div key={activeView} className="trend-in">
+            {activeView === 'courbe' && (
+              <TrendChart labels={labels} series={series} onSelect={onAsk === undefined ? undefined : askMonth} />
+            )}
+            {activeView === 'couts' && (
+              <TrendChart labels={labels} series={costOnly} onSelect={onAsk === undefined ? undefined : askMonth} />
+            )}
+            {activeView === 'pannes' && (
+              <TrendChart labels={labels} series={panneSeries} onSelect={onAsk === undefined ? undefined : askMonth} />
+            )}
+            {activeView === 'ecoles' && (
+              <TrendHBars entries={schoolEntries} unit="pannes" onSelect={onAsk === undefined ? undefined : askSchool} />
+            )}
+            {activeView === 'urgences' && (
+              <TrendDonut entries={urgencyEntries} onSelect={onAsk === undefined ? undefined : askUrgency} />
+            )}
+          </div>
+          {onAsk !== undefined && (
+            <p className="text-xs text-stone-500 dark:text-stone-400">
+              Touchez le graphique pour poser une question sur un mois.
+            </p>
+          )}
+          {onAsk !== undefined && <TrendPeriods current={months} school={school} onAsk={onAsk} />}
         </div>
       ) : (
         <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
