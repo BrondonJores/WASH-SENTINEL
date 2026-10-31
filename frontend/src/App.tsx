@@ -16,6 +16,7 @@ import SettingsPage from './pages/SettingsPage';
 import MeshPage from './pages/MeshPage';
 
 const MeshFieldPage = lazy(() => import('./pages/MeshFieldPage'));
+const PublicReportPage = lazy(() => import('./pages/PublicReportPage'));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -63,6 +64,14 @@ function AuthedApp() {
               element={
                 <Suspense fallback={<p className="p-4 text-sm text-ink-soft">Chargement du relai terrain…</p>}>
                   <MeshFieldPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/signaler"
+              element={
+                <Suspense fallback={<p className="p-4 text-sm text-ink-soft">Chargement du formulaire…</p>}>
+                  <PublicReportPage />
                 </Suspense>
               }
             />
