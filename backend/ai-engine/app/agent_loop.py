@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .agent_tools import AGENT_TOOLS, TOOL_EXECUTORS
@@ -15,7 +16,7 @@ Règles impératives :
 - Ne devine jamais : utilise tes outils pour obtenir les faits (écoles, incidents, chiffres).
 - Si l'utilisateur nomme une école ou un incident, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
-- Si l'utilisateur veut créer (signaler une panne, créer une intervention, journaliser des travaux) : rassemble TOUJOURS le dossier complet — école, description ou titre, catégorie, urgence, élèves affectés (ou incident et coût pour un journal). Si tout est donné en une phrase, appelle directement l'outil prepare_* ; sinon pose des questions courtes (2 éléments maximum par message) jusqu'au dossier complet.
+- Si l'utilisateur veut créer (signaler une panne, créer une intervention, journaliser des travaux) : rassemble TOUJOURS le dossier complet — école, description ou titre, catégorie, urgence, élèves affectés (ou incident et coût pour un journal). Si tout est donné en une phrase, appelle directement l'outil prepare_* ; sinon pose des questions courtes (2 éléments maximum par message) jusqu'au dossier complet. Si l'utilisateur répond par un mot seul ou un nom (chip cliquable), reprends le dossier en cours avec cette valeur au lieu de reposer la même question.
 - Quand un outil prepare_* répond complete=true, présente le récapitulatif et demande de cliquer Confirmer (ou de répondre « oui »). N'annonce jamais un enregistrement effectué : seul l'humain valide, y compris pour préciser une école introuvable ou plusieurs incidents possibles (propose les choix fournis — school_choices, incident_choices — au lieu d'inventer ; si une carte de choix s'affiche, invite à cliquer sur le bon incident).
 - Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).\n- Pour toute carte, visualisation géographique ou question 'où' : appelle territory_overview (la carte interactive est générée).\n- Pour tout briefing, dossier, diaporama ou synthèse exécutive : appelle build_briefing (la présentation est générée).
 - Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
@@ -200,6 +201,38 @@ FALLBACK_SUMMARIES = {
     ),
 }
 
+_STARTER_RE = re.compile(
+    r"\b(bonjour|salut|coucou|hello|bonsoir|aide|aider|help|démarrer|commencer|"
+    r"que (peux|sais)-tu|tu sais faire)\b", re.IGNORECASE)
+
+STARTER_CHIPS = ["Résumer mon district",
+                 "Quelles écoles ont le plus besoin d'aide ?",
+                 "Voir la carte du territoire"]
+CATEGORY_CHIPS = ["Point d'eau", "Latrines", "Lavage des mains", "Évacuation"]
+URGENCY_CHIPS = ["Basse", "Moyenne", "Haute", "Critique"]
+
+
+def _follow_ups(message: str, executed: list[tuple[str, dict[str, Any]]],
+                context: dict[str, Any]) -> list[str]:
+    """Relances cliquables : démarrage, ou réponses rapides au premier slot manquant."""
+    if not executed:
+        return list(STARTER_CHIPS) if _STARTER_RE.search(message or "") else []
+    name, obs = executed[-1]
+    if name not in ("prepare_report", "prepare_incident", "prepare_maintenance_log"):
+        return []
+    if obs.get("complete") or obs.get("candidates"):
+        return []
+    missing = obs.get("missing", []) or []
+    first = missing[0] if missing else ""
+    if first == "category":
+        return list(CATEGORY_CHIPS)
+    if first == "urgency":
+        return list(URGENCY_CHIPS)
+    if first == "school":
+        names = [s.get("school_name") for s in context.get("schools", [])[:3]]
+        return [n for n in names if n]
+    return []
+
 
 class AgentLoop:
     """Boucle agentique réelle : le LLM choisit ses outils, Python les exécute."""
@@ -256,6 +289,7 @@ class AgentLoop:
             tools_executed=[name for name, _ in executed],
             cards=self._build_cards(executed),
             model_used=self.llm.model,
+            follow_ups=_follow_ups(req.message, executed, context),
         )
 
     def _execute_tool(self, name: str, arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

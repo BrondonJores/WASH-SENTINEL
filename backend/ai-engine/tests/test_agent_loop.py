@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from app.agent_loop import AgentLoop
+from app.agent_loop import AgentLoop, _follow_ups
 from app.schemas import AgentChatRequest, AgentContext
 
 CONTEXT = AgentContext(
@@ -281,3 +281,49 @@ class NoToolGuardTest(unittest.IsolatedAsyncioTestCase):
             message="Combien d'écoles sont sans eau ?", context=CONTEXT))
         self.assertEqual(res.tools_executed, [])
         self.assertIn("pas pu récupérer de données", res.answer)
+
+
+class FollowUpsTest(unittest.TestCase):
+    CTX = {"schools": [
+        {"school_id": 3, "school_name": "École Publique de Bonanjo"},
+        {"school_id": 6, "school_name": "École Rurale de Ngok"},
+        {"school_id": 7, "school_name": "École de Nkol"},
+    ]}
+
+    def test_greeting_starters(self) -> None:
+        chips = _follow_ups("Bonjour Sentinel", [], self.CTX)
+        self.assertEqual(len(chips), 3)
+        self.assertIn("Voir la carte du territoire", chips)
+
+    def test_plain_answer_no_chips(self) -> None:
+        self.assertEqual(_follow_ups("merci beaucoup", [], self.CTX), [])
+
+    def test_missing_category_values(self) -> None:
+        chips = _follow_ups("signale une panne", [("prepare_report", {
+            "complete": False, "missing": ["category", "urgency"]})], self.CTX)
+        self.assertEqual(chips, ["Point d'eau", "Latrines", "Lavage des mains", "Évacuation"])
+
+    def test_missing_urgency_values(self) -> None:
+        chips = _follow_ups("x", [("prepare_report", {
+            "complete": False, "missing": ["urgency"]})], self.CTX)
+        self.assertEqual(chips, ["Basse", "Moyenne", "Haute", "Critique"])
+
+    def test_missing_school_names(self) -> None:
+        chips = _follow_ups("x", [("prepare_report", {
+            "complete": False, "missing": ["school", "description"]})], self.CTX)
+        self.assertEqual(chips, ["École Publique de Bonanjo", "École Rurale de Ngok", "École de Nkol"])
+
+    def test_missing_freetext_no_chips(self) -> None:
+        chips = _follow_ups("x", [("prepare_report", {
+            "complete": False, "missing": ["description"]})], self.CTX)
+        self.assertEqual(chips, [])
+
+    def test_complete_or_picker_no_chips(self) -> None:
+        self.assertEqual(_follow_ups("x", [("prepare_report", {
+            "complete": True, "missing": []})], self.CTX), [])
+        self.assertEqual(_follow_ups("x", [("prepare_maintenance_log", {
+            "complete": False, "missing": ["incident"],
+            "candidates": [{"id": 1}]})], self.CTX), [])
+
+    def test_data_tool_no_chips(self) -> None:
+        self.assertEqual(_follow_ups("x", [("rank_schools_by_need", {"ranking": []})], self.CTX), [])

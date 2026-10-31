@@ -7,6 +7,7 @@ export interface DialogueMessage {
   cards: AgentCard[];
   model: string;
   at: number;
+  follow_ups: string[];
 }
 
 export interface ChatItem {

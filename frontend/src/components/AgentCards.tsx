@@ -209,7 +209,7 @@ function InsightLine({ text }: { text: string }) {
   );
 }
 
-function FollowUps({ items, onAsk }: { items: string[]; onAsk?: (q: string) => void }) {
+export function FollowUps({ items, onAsk }: { items: string[]; onAsk?: (q: string) => void }) {
   if (onAsk === undefined || items.length === 0) return null;
   return (
     <div className="mt-3 flex flex-wrap gap-1.5 border-t border-stone-200/70 pt-3 dark:border-white/[0.06]">

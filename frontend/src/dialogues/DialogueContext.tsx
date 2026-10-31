@@ -39,6 +39,7 @@ function toClient(c: LibraryConversation): ChatItem {
       cards: m.cards ?? [],
       model: m.model ?? '',
       at: Date.parse(m.created_at) || 0,
+      follow_ups: [],
     })),
   };
 }

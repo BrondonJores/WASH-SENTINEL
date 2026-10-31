@@ -8,7 +8,7 @@ import { useDialogues } from '../dialogues/context';
 import { SentinelOrb } from '../components/SentinelOrb';
 import { SentinelAvatar } from '../components/SentinelAvatar';
 import type { OrbState } from '../components/SentinelOrb';
-import { AgentCardList } from '../components/AgentCards';
+import { AgentCardList, FollowUps } from '../components/AgentCards';
 import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
 
@@ -211,7 +211,7 @@ export default function ConsolePage() {
       .slice(-19)
       .map((m) => ({ role: m.role, content: m.content }));
     const idx = messages.length + 1;
-    setMessages((prev) => [...prev, { role: 'user', content: message, tools: [], cards: [], model: '', at: Date.now() }]);
+    setMessages((prev) => [...prev, { role: 'user', content: message, tools: [], cards: [], model: '', at: Date.now(), follow_ups: [] }]);
     try {
       const res = await api.converse(message, prior);
       setMessages((prev) => [
@@ -223,6 +223,7 @@ export default function ConsolePage() {
           cards: res.cards ?? [],
           model: res.model_used ?? '',
           at: Date.now(),
+          follow_ups: res.follow_ups ?? [],
         },
       ]);
       if (!calm && res.answer !== '') {
@@ -246,7 +247,7 @@ export default function ConsolePage() {
   const appendAssistant = useCallback((content: string, cards?: AgentCard[]) => {
     setMessages((prev) => [
       ...prev,
-      { role: 'assistant', content, tools: [], cards: cards ?? [], model: 'sentinel-guard', at: Date.now() },
+      { role: 'assistant', content, tools: [], cards: cards ?? [], model: 'sentinel-guard', at: Date.now(), follow_ups: [] },
     ]);
   }, []);
 
@@ -530,6 +531,7 @@ export default function ConsolePage() {
                     <div className="cards-in">
                       <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} />
                     </div>
+                    <FollowUps items={m.follow_ups ?? []} onAsk={ask} />
                   </>
                 )}
                 </div>

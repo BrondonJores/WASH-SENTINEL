@@ -327,3 +327,4 @@ class AgentChatResponse(BaseModel):
     tools_executed: list[str] = Field(default_factory=list)
     cards: list[AgentCard] = Field(default_factory=list)
     model_used: str = ""
+    follow_ups: list[str] = Field(default_factory=list)

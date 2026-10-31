@@ -105,6 +105,7 @@ export interface AgentChatResponse {
   tools_executed: string[];
   cards: AgentCard[];
   model_used: string;
+  follow_ups: string[];
 }
 
 export interface TerritoryPulse {
