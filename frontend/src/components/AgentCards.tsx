@@ -1660,6 +1660,393 @@ function BudgetCard({
   );
 }
 
+function CapabilitiesCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const items = asArray<Record<string, unknown>>(data.items);
+  if (items.length === 0) return null;
+  const insight = fmtOpt(data.insight) ?? '';
+  return (
+    <CardShell title={title} listenText={speak(insight, 'Voici des exemples de questions à me poser.')}>
+      <InsightLine text={insight} />
+      <ol className="space-y-2">
+        {items.map((it, i) => {
+          const capability = fmtOpt(it.capability) ?? `Capacité ${i + 1}`;
+          const exemple = fmtOpt(it.exemple);
+          return (
+            <li key={`${capability}-${i}`} className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-700/10 font-mono text-[11px] font-bold text-teal-800 dark:bg-teal-300/15 dark:text-teal-200">
+                {i + 1}
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold leading-snug">{capability}</p>
+                {exemple !== undefined && onAsk !== undefined ? (
+                  <button
+                    type="button"
+                    onClick={() => onAsk(exemple)}
+                    className="mt-0.5 block max-w-full truncate text-left text-[13px] text-teal-800 underline decoration-teal-700/30 underline-offset-2 hover:decoration-teal-700 dark:text-teal-300"
+                  >
+                    « {exemple} »
+                  </button>
+                ) : (
+                  exemple !== undefined && <p className="mt-0.5 text-[13px] text-stone-500 dark:text-stone-400">« {exemple} »</p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </CardShell>
+  );
+}
+
+function DistrictAlertsCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const alerts = asArray<Record<string, unknown>>(data.alerts);
+  const insight = fmtOpt(data.insight) ?? '';
+  if (alerts.length === 0) {
+    return (
+      <CardShell title={title} listenText={speak(insight === '' ? 'Aucune alerte sur ce district. Tout est calme.' : insight)}>
+        <InsightLine text={insight} />
+        <p className="text-sm text-stone-500 dark:text-stone-400">Aucune alerte — tout est calme sur ce district.</p>
+        <FollowUps onAsk={onAsk} items={['Voir un autre district ?', 'Quelles écoles ont le plus besoin d’aide ?']} />
+      </CardShell>
+    );
+  }
+  return (
+    <CardShell
+      title={title}
+      meta={`${alerts.length} alerte${alerts.length > 1 ? 's' : ''}`}
+      listenText={speak(insight, `${alerts.length} alertes à traiter.`)}
+    >
+      <InsightLine text={insight} />
+      <ul className="space-y-2">
+        {alerts.map((a, i) => (
+          <li key={i} className="flex items-start gap-2.5 border-b border-stone-200/60 pb-2 last:border-0 last:pb-0 dark:border-white/[0.06]">
+            <UrgencyDot level={fmtOpt(a.urgency) ?? fmtOpt(a.severity) ?? fmtOpt(a.level) ?? 'medium'} />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold leading-snug">
+                {fmtOpt(a.title) ?? fmtOpt(a.label) ?? fmtOpt(a.message) ?? `Alerte ${i + 1}`}
+              </p>
+              {(fmtOpt(a.school_name) ?? fmtOpt(a.school) ?? fmtOpt(a.district) ?? fmtOpt(a.reference_code)) !== undefined && (
+                <p className="mt-0.5 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+                  {[fmtOpt(a.school_name) ?? fmtOpt(a.school) ?? fmtOpt(a.district), fmtOpt(a.reference_code)].filter((s) => s !== undefined).join(' · ')}
+                </p>
+              )}
+              {(fmtOpt(a.action) ?? fmtOpt(a.detail) ?? fmtOpt(a.description) ?? fmtOpt(a.text)) !== undefined && (
+                <p className="mt-0.5 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">
+                  {fmtOpt(a.action) ?? fmtOpt(a.detail) ?? fmtOpt(a.description) ?? fmtOpt(a.text)}
+                </p>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <FollowUps onAsk={onAsk} items={['Qui envoyer sur place ?', 'Voir les détails du premier incident']} />
+    </CardShell>
+  );
+}
+
+function EpidemicAlertsCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const clusters = asArray<Record<string, unknown>>(data.clusters);
+  const insight = fmtOpt(data.insight) ?? '';
+  if (clusters.length === 0) {
+    return (
+      <CardShell title={title} listenText={speak(insight === '' ? 'Aucun foyer sanitaire détecté. La veille continue.' : insight)}>
+        <InsightLine text={insight} />
+        <p className="text-sm text-stone-500 dark:text-stone-400">Aucun foyer détecté — la veille sanitaire continue.</p>
+        <FollowUps onAsk={onAsk} items={['Voir les alertes du district ?', 'Voir les incidents ouverts']} />
+      </CardShell>
+    );
+  }
+  return (
+    <CardShell
+      title={title}
+      meta={`${clusters.length} foyer${clusters.length > 1 ? 's' : ''}`}
+      listenText={speak(insight, 'Attention, des foyers sanitaires sont suspectés.')}
+    >
+      <InsightLine text={insight} />
+      <ul className="space-y-3">
+        {clusters.map((c, i) => {
+          const schools = asArray<unknown>(c.schools).map((s) => (typeof s === 'string' ? s : fmtOpt((s as Record<string, unknown>).name) ?? '')).filter((s) => s !== '');
+          const signals = asArray<unknown>(c.signals ?? c.keywords).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
+          return (
+            <li key={i} className="rounded-lg bg-red-50/60 p-3 dark:bg-red-950/20">
+              <div className="flex items-center gap-2">
+                <UrgencyDot level="critical" />
+                <p className="text-sm font-bold">{fmtOpt(c.district) ?? fmtOpt(c.title) ?? `Foyer ${i + 1}`}</p>
+                {fmtOpt(c.risk_level) !== undefined && (
+                  <span className="ml-auto rounded-full bg-red-700 px-2 py-0.5 text-[11px] font-bold text-white dark:bg-red-400 dark:text-red-950">
+                    risque {fmtOpt(c.risk_level)}
+                  </span>
+                )}
+              </div>
+              {(typeof c.school_count === 'number' || typeof c.incident_count === 'number') && (
+                <p className="mt-1 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+                  {[typeof c.school_count === 'number' ? `${c.school_count} école${c.school_count > 1 ? 's' : ''}` : undefined, typeof c.incident_count === 'number' ? `${c.incident_count} incident${c.incident_count > 1 ? 's' : ''}` : undefined].filter((s) => s !== undefined).join(' · ')}
+                </p>
+              )}
+              {schools.length > 0 && <p className="mt-1 text-[13px] text-stone-600 dark:text-stone-400">{schools.join(' · ')}</p>}
+              {signals.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {signals.map((s) => (
+                    <span key={s} className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-800 dark:bg-red-900/50 dark:text-red-200">{s}</span>
+                  ))}
+                </div>
+              )}
+              {(fmtOpt(c.recommendation) ?? fmtOpt(c.advice)) !== undefined && (
+                <p className="mt-1.5 text-[13px] font-medium leading-relaxed">› {fmtOpt(c.recommendation) ?? fmtOpt(c.advice)}</p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <FollowUps onAsk={onAsk} items={['Qui envoyer sur place ?', 'Voir les incidents ouverts']} />
+    </CardShell>
+  );
+}
+
+function tourFallback(t: Record<string, unknown>): string {
+  const parts = [
+    typeof t.open_incidents === 'number' ? `${t.open_incidents} incident${t.open_incidents > 1 ? 's' : ''}` : undefined,
+    typeof t.affected_students === 'number' ? `${fmtInt(t.affected_students)} élèves` : undefined,
+    fmtOpt(t.max_urgency) !== undefined ? `urgence ${fmtOpt(t.max_urgency)}` : undefined,
+  ].filter((s): s is string => s !== undefined);
+  if (parts.length > 0) return parts.join(' · ');
+  return fmtOpt(t.district) ?? '';
+}
+
+function MaintenanceTeamCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const workload = asArray<Record<string, unknown>>(data.workload);
+  const tour = asArray<Record<string, unknown>>(data.suggested_tour ?? data.tour);
+  const insight = fmtOpt(data.insight) ?? '';
+  if (workload.length === 0 && tour.length === 0) return null;
+  return (
+    <CardShell title={title} listenText={speak(insight)}>
+      <InsightLine text={insight} />
+      {workload.length > 0 && (
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {workload.map((w, i) => (
+            <div key={i} className="rounded-lg bg-stone-100/70 p-2.5 dark:bg-white/[0.04]">
+              <p className="truncate text-[11px] font-semibold text-stone-500 dark:text-stone-400">{fmtOpt(w.district) ?? fmtOpt(w.label) ?? `Zone ${i + 1}`}</p>
+              <p className="mt-0.5 font-display text-xl font-extrabold tabular-nums">
+                {typeof w.open_incidents === 'number' ? w.open_incidents : typeof w.open === 'number' ? w.open : typeof w.incidents === 'number' ? w.incidents : '—'}
+              </p>
+              <p className="text-[11px] text-stone-500 dark:text-stone-400">incident(s) ouvert(s)</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {tour.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400">Tournée suggérée</p>
+          <ol className="space-y-1.5">
+            {tour.map((t, i) => (
+              <li key={i} className="flex items-start gap-2.5">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-teal-700 font-mono text-[10px] font-bold text-white dark:bg-teal-400 dark:text-teal-950">
+                  {typeof t.order === 'number' ? t.order : typeof t.step === 'number' ? t.step : i + 1}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold leading-snug">{fmtOpt(t.school_name) ?? fmtOpt(t.school) ?? fmtOpt(t.name) ?? `Étape ${i + 1}`}</p>
+                  <p className="text-[13px] text-stone-500 dark:text-stone-400">
+                    {fmtOpt(t.reason) ?? fmtOpt(t.why) ?? tourFallback(t)}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      <FollowUps onAsk={onAsk} items={['Voir les missions passées ?', 'Quelles écoles ont le plus besoin d’aide ?']} />
+    </CardShell>
+  );
+}
+
+function CompareSchoolsCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const columns = asArray<Record<string, unknown>>(data.columns);
+  const verdict = fmtOpt(data.verdict) ?? '';
+  const unresolved = asArray<unknown>(data.unresolved).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
+  const insight = fmtOpt(data.insight) ?? '';
+  if (columns.length === 0) return null;
+  const cell = (c: Record<string, unknown>, keys: string[]): string => {
+    for (const k of keys) {
+      const v = c[k];
+      if (typeof v === 'number' && Number.isFinite(v)) return fmtInt(v);
+    }
+    return '—';
+  };
+  return (
+    <CardShell title={title} listenText={speak(insight, verdict)}>
+      <InsightLine text={insight} />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[420px] border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-stone-200 dark:border-white/10">
+              <th className="py-1.5 pr-2 text-left text-[11px] font-semibold text-stone-500 dark:text-stone-400">École</th>
+              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">Ouverts</th>
+              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">Élèves</th>
+              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">Interv.</th>
+              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">Coût XAF</th>
+            </tr>
+          </thead>
+          <tbody>
+            {columns.map((c, i) => (
+              <tr key={i} className="border-b border-stone-100 last:border-0 dark:border-white/[0.05]">
+                <td className="py-1.5 pr-2 font-semibold leading-snug">{fmtOpt(c.school_name) ?? fmtOpt(c.school) ?? fmtOpt(c.name) ?? `École ${i + 1}`}</td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['open', 'incidents', 'open_incidents'])}</td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['affected', 'students', 'affected_students'])}</td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['logs', 'interventions', 'logs_count'])}</td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['total_cost_XAF', 'cost', 'cost_amount', 'total_cost'])}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {verdict !== '' && (
+        <p className="mt-3 rounded-lg bg-teal-700/[0.07] p-2.5 text-sm font-medium leading-relaxed dark:bg-teal-300/10">› {verdict}</p>
+      )}
+      {unresolved.length > 0 && (
+        <p className="mt-2 text-[13px] text-amber-700 dark:text-amber-400">Non reconnue(s) : {unresolved.join(', ')}.</p>
+      )}
+      <FollowUps onAsk={onAsk} items={verdict !== '' ? ['Pourquoi ce verdict ?', 'Voir les tendances sur 6 mois'] : ['Voir les tendances sur 6 mois']} />
+    </CardShell>
+  );
+}
+
+const FIGURE_LABELS: Record<string, string> = {
+  incident_count: 'Incidents analysés',
+  open_incidents: 'Incidents ouverts',
+  total_repair_cost: 'Coût réparations (XAF)',
+  total_days_without_service: 'Jours sans service',
+  estimated_replacement_cost: 'Coût remplacement (XAF)',
+  repair_ratio_percent: 'Ratio réparations (%)',
+  schools: 'Écoles',
+};
+
+function CopilotAnswerCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const recommendation = fmtOpt(data.recommendation_label) ?? fmtOpt(data.recommendation) ?? '';
+  const insight = fmtOpt(data.insight) ?? '';
+  const rawFigures = data.figures ?? data.chiffres;
+  const figures: Array<{ label: string; value: string }> = Array.isArray(rawFigures)
+    ? asArray<Record<string, unknown>>(rawFigures).map((f, i) => ({
+        label: fmtOpt(f.label) ?? `Chiffre ${i + 1}`,
+        value: typeof f.value === 'number' ? fmtInt(f.value) : fmtOpt(f.value) ?? '—',
+      }))
+    : Object.entries(asRecord(rawFigures)).map(([k, v]) => ({
+        label: FIGURE_LABELS[k] ?? k.replace(/_/g, ' '),
+        value: typeof v === 'number' ? fmtInt(v) : fmtOpt(v) ?? '—',
+      }));
+  if (insight === '' && recommendation === '') return null;
+  return (
+    <CardShell title={title} listenText={speak(insight, recommendation)}>
+      <InsightLine text={insight} />
+      {figures.length > 0 && (
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {figures.map((f, i) => (
+            <Stat key={`${f.label}-${i}`} label={f.label} value={f.value} />
+          ))}
+        </div>
+      )}
+      {recommendation !== '' && (
+        <p className="rounded-lg bg-teal-700/[0.07] p-2.5 text-sm font-medium leading-relaxed dark:bg-teal-300/10">› {recommendation}</p>
+      )}
+      <FollowUps onAsk={onAsk} items={['Explique-moi pourquoi ?', 'Que faire en premier ?']} />
+    </CardShell>
+  );
+}
+
+function MissionTimelineCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const items = asArray<Record<string, unknown>>(data.items);
+  const totals = asRecord(data.totals);
+  const insight = fmtOpt(data.insight) ?? '';
+  if (items.length === 0) {
+    return (
+      <CardShell title={title} listenText={speak(insight === '' ? 'Aucune mission sur cette période.' : insight)}>
+        <InsightLine text={insight} />
+        <p className="text-sm text-stone-500 dark:text-stone-400">Aucune mission sur cette période.</p>
+        <FollowUps onAsk={onAsk} items={['Voir une période plus longue ?', 'Qui envoyer sur place ?']} />
+      </CardShell>
+    );
+  }
+  const totalLabel = ((): string | undefined => {
+    const parts: string[] = [];
+    const missions = totals.missions ?? totals.count;
+    const schools = totals.schools ?? totals.schools_visited;
+    const cost = totals.cost ?? totals.cost_total;
+    if (typeof missions === 'number') parts.push(`${fmtInt(missions)} mission${missions > 1 ? 's' : ''}`);
+    if (typeof schools === 'number') parts.push(`${fmtInt(schools)} école${schools > 1 ? 's' : ''}`);
+    if (typeof cost === 'number') parts.push(`${fmtInt(cost)} XAF`);
+    return parts.length > 0 ? parts.join(' · ') : undefined;
+  })();
+  return (
+    <CardShell title={title} meta={totalLabel} listenText={speak(insight, totalLabel)}>
+      <InsightLine text={insight} />
+      <ol className="relative space-y-3 border-l-2 border-teal-700/20 pl-4 dark:border-teal-300/20">
+        {items.map((it, i) => (
+          <li key={i} className="relative">
+            <span aria-hidden="true" className="absolute -left-[23px] top-1 h-2.5 w-2.5 rounded-full bg-teal-700 dark:bg-teal-300" />
+            <p className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{fmtDate(fmtOpt(it.date) ?? fmtOpt(it.day))}</p>
+            <p className="text-sm font-semibold leading-snug">{fmtOpt(it.school) ?? fmtOpt(it.name) ?? `Mission ${i + 1}`}</p>
+            {(fmtOpt(it.action) ?? fmtOpt(it.label) ?? fmtOpt(it.notes)) !== undefined && (
+              <p className="text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(it.action) ?? fmtOpt(it.label) ?? fmtOpt(it.notes)}</p>
+            )}
+            {(typeof it.cost === 'number' || typeof it.cost_amount === 'number') && (
+              <p className="mt-0.5 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+                {fmtInt((typeof it.cost === 'number' ? it.cost : it.cost_amount) as number)} XAF
+              </p>
+            )}
+          </li>
+        ))}
+      </ol>
+      <FollowUps onAsk={onAsk} items={['Voir une période plus longue ?', 'Comparer les budgets ?']} />
+    </CardShell>
+  );
+}
+
+function DocumentBriefingCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+  const sections = asArray<Record<string, unknown>>(data.sections);
+  const rawSlides = asArray<Record<string, unknown>>(data.slides);
+  const insight = fmtOpt(data.insight) ?? '';
+  const slides: DeckSlide[] = rawSlides.length > 0
+    ? rawSlides.map((s, i) => ({
+        kind: s.kind === 'cover' || s.kind === 'stats' || s.kind === 'bullets' ? s.kind : ('bullets' as const),
+        title: fmtOpt(s.title) ?? `Point ${i + 1}`,
+        subtitle: fmtOpt(s.subtitle),
+        lines: asArray<unknown>(s.bullets ?? s.lines).map((b) => (typeof b === 'string' ? b : '')).filter((b) => b !== ''),
+        stats: asArray<Record<string, unknown>>(s.stats)
+          .map((st) => ({ label: fmtOpt(st.label) ?? '', value: fmtOpt(st.value) ?? (typeof st.value === 'number' ? fmtInt(st.value) : '') }))
+          .filter((st) => st.label !== ''),
+        note: fmtOpt(s.note),
+      }))
+    : sections.map((s, i) => ({
+        kind: 'bullets' as const,
+        title: fmtOpt(s.heading) ?? fmtOpt(s.title) ?? `Section ${i + 1}`,
+        lines: (() => {
+          const bullets = asArray<unknown>(s.bullets).map((b) => (typeof b === 'string' ? b : '')).filter((b) => b !== '');
+          const body = fmtOpt(s.body) ?? fmtOpt(s.text);
+          return bullets.length > 0 ? bullets : body !== undefined ? [body] : [];
+        })(),
+        stats: [],
+      }));
+  if (slides.length === 0 && sections.length === 0) return null;
+  return (
+    <CardShell title={title} listenText={speak(insight)}>
+      <InsightLine text={insight} />
+      {slides.length > 0 ? (
+        <SlideDeck slides={slides} />
+      ) : (
+        <div className="space-y-3">
+          {sections.map((s, i) => (
+            <div key={i}>
+              <p className="text-sm font-bold">{fmtOpt(s.heading) ?? fmtOpt(s.title) ?? `Section ${i + 1}`}</p>
+              {(fmtOpt(s.body) ?? fmtOpt(s.text)) !== undefined && (
+                <p className="mt-0.5 text-sm leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(s.body) ?? fmtOpt(s.text)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
 function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void }) {
   const data = asRecord(card.data);
   switch (card.type) {
@@ -1693,6 +2080,22 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <TimelineCard title={card.title} data={data} />;
     case 'budget_compare':
       return <BudgetCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'capabilities_list':
+      return <CapabilitiesCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'district_alerts':
+      return <DistrictAlertsCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'epidemic_alerts':
+      return <EpidemicAlertsCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'maintenance_team':
+      return <MaintenanceTeamCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'compare_schools':
+      return <CompareSchoolsCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'copilot_answer':
+      return <CopilotAnswerCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'mission_timeline':
+      return <MissionTimelineCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'document_briefing':
+      return <DocumentBriefingCard title={card.title} data={data} />;
     default:
       return <GenericCard card={card} />;
   }
