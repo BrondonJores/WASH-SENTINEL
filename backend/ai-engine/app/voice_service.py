@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import subprocess
 import tempfile
 from .schemas import VoiceSynthesisResponse, VoiceTranscriptionResponse
@@ -34,6 +35,14 @@ class VoiceService:
             language=result.get("language", language),
         )
 
+    def _resolve_voice_model(self, voice: str) -> str:
+        """Voix demandée -> fichier .onnx du même dossier (nom strict, anti path-traversal)."""
+        if voice and re.fullmatch(r"[A-Za-z0-9_.-]+", voice):
+            candidate = os.path.join(os.path.dirname(self.piper_model), f"{voice}.onnx")
+            if os.path.isfile(candidate):
+                return candidate
+        return self.piper_model
+
     def synthesize(self, text: str, voice: str = "fr_FR-upmc-medium") -> VoiceSynthesisResponse:
         """Synthétise un texte en audio via Piper TTS pour confirmation vocale.
 
@@ -46,9 +55,10 @@ class VoiceService:
                 f"Piper TTS introuvable ({self.piper_bin}) : ajoutez piper-tts aux dépendances "
                 "ou réglez VOICE_TTS_BINARY."
             )
-        if not os.path.isfile(self.piper_model):
+        model = self._resolve_voice_model(voice)
+        if not os.path.isfile(model):
             raise RuntimeError(
-                f"Voix Piper introuvable ({self.piper_model}) : téléchargez "
+                f"Voix Piper introuvable ({model}) : téléchargez "
                 "fr_FR-upmc-medium.onnx (+ .onnx.json) dans models/piper/."
             )
 
@@ -56,7 +66,7 @@ class VoiceService:
             out_wav = os.path.join(tmpdir, "speech.wav")
             piper_cmd = [
                 self.piper_bin,
-                "--model", self.piper_model,
+                "--model", model,
                 "--output_file", out_wav,
             ]
 

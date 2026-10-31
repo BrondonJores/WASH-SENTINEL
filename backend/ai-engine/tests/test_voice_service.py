@@ -65,5 +65,19 @@ class VoiceServiceTest(unittest.TestCase):
         self.assertEqual(res.mime_type, "audio/wav")
 
 
+    def test_resolve_voice_model(self) -> None:
+        svc = VoiceService()
+        svc.piper_model = "/models/piper/fr_FR-upmc-medium.onnx"
+        real_isfile = os.path.isfile
+        with patch("app.voice_service.os.path.isfile", side_effect=lambda p: p == "/models/piper/fr_FR-siwis-medium.onnx" or real_isfile(p)):
+            self.assertEqual(
+                svc._resolve_voice_model("fr_FR-siwis-medium"),
+                "/models/piper/fr_FR-siwis-medium.onnx",
+            )
+            # Voix inconnue -> voix par défaut ; traversal -> ignoré.
+            self.assertEqual(svc._resolve_voice_model("voix-absente"), svc.piper_model)
+            self.assertEqual(svc._resolve_voice_model("../../etc/passwd"), svc.piper_model)
+
+
 if __name__ == "__main__":
     unittest.main()
