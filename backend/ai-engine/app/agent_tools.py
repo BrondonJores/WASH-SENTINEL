@@ -1256,3 +1256,15 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+# --- Tools plugins auto-découverts (app/tools/*.py) : fusion, legacy intact ---
+from .tools import discover_tools as _discover_tools
+
+_PLUGIN_BUNDLES = _discover_tools()
+for _bundle in _PLUGIN_BUNDLES:
+    AGENT_TOOLS.append({"function": _bundle["def"]})
+    TOOL_EXECUTORS[_bundle["name"]] = _bundle["execute"]
+PLUGIN_HINTS: dict[str, frozenset[str]] = {b["name"]: b["hints"] for b in _PLUGIN_BUNDLES}
+PLUGIN_CARDS: dict[str, dict[str, Any]] = {b["name"]: b["cards"] for b in _PLUGIN_BUNDLES}
+PLUGIN_READ_ONLY: frozenset[str] = frozenset(b["name"] for b in _PLUGIN_BUNDLES if b["read_only"])

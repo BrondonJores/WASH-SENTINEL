@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from .agent_tools import AGENT_TOOLS, TOOL_EXECUTORS
+from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ONLY, TOOL_EXECUTORS
 from .providers import BaseLLMProvider
 from .schemas import AgentCard, AgentChatRequest, AgentChatResponse
 
@@ -39,8 +39,9 @@ NO_TOOL_NUDGE = (
     "STOP. Tu as répondu à une question de données SANS appeler d'outil, "
     "c'est strictement interdit : tu dois appeler l'outil adapté MAINTENANT "
     "(rank_schools_by_need, summarize_district, analyze_school, repair_trends, "
-    "explain_incident, territory_overview, build_briefing ou list_maintenance_logs). "
-    "N'écris aucun texte, appelle juste l'outil."
+    "explain_incident, territory_overview, build_briefing, list_maintenance_logs"
+    + "".join(f", {n}" for n in sorted(PLUGIN_READ_ONLY)) +
+    "). N'écris aucun texte, appelle juste l'outil."
 )
 
 DATA_QUESTION_HINTS = (
@@ -96,6 +97,8 @@ def route_intent(question: str) -> Literal["list", "create", "other"]:
     """
     lowered = (question or "").lower()
     has_list = any(h in lowered for h in LIST_INTENT_HINTS)
+    has_list = has_list or any(
+        h in lowered for hints in PLUGIN_HINTS.values() for h in hints)
     has_create = any(h in lowered for h in CREATE_INTENT_HINTS)
     if has_create and not has_list:
         return "create"
@@ -117,7 +120,7 @@ READ_TOOLS = frozenset({
     "list_maintenance_logs", "summarize_district", "rank_schools_by_need",
     "repair_trends", "explain_incident", "territory_overview",
     "analyze_school", "build_briefing",
-})
+}) | PLUGIN_READ_ONLY
 
 ABSENCE_RE = re.compile(r"aucun|aucune|pas d|rien|zéro|zero", re.IGNORECASE)
 
@@ -786,6 +789,11 @@ class AgentLoop:
                     title=f"Interventions journalisées — {observation.get('date', '?')}",
                     data=observation,
                 ))
+            elif name in PLUGIN_CARDS:
+                for builder in PLUGIN_CARDS[name].values():
+                    card = builder(observation)
+                    if card is not None:
+                        cards.append(card)
         unique: list[AgentCard] = []
         fingerprints: set[str] = set()
         for card in cards:
