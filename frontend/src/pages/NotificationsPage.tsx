@@ -3,6 +3,7 @@ import { api, ApiError } from '../lib/api';
 import type { AppNotification } from '../lib/api';
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton, StatusDot } from '../components/ui';
 import { ErrorBanner, Pager, Pretty } from '../components/crud';
+import { Toggle } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { URGENCY_FR, fmtNum, urgencyTone } from '../lib/wash';
@@ -140,18 +141,14 @@ export default function NotificationsPage() {
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={unreadOnly}
-            onChange={(e) => {
-              setPage(1);
-              setUnreadOnly(e.target.checked);
-            }}
-            className="h-4 w-4 accent-teal-700"
-          />
-          Non lues uniquement
-        </label>
+        <Toggle
+          checked={unreadOnly}
+          label="Non lues uniquement"
+          onChange={(v) => {
+            setPage(1);
+            setUnreadOnly(v);
+          }}
+        />
       </div>
 
       {loading && items.length === 0 && (

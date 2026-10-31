@@ -3,6 +3,7 @@ import { api, ApiError } from '../lib/api';
 import type { Report, School } from '../lib/api';
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import { ErrorBanner, Field, Pager, Pretty } from '../components/crud';
+import { Radio, Select } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { Icon } from '../components/icons';
@@ -373,44 +374,32 @@ export default function ReportsPage() {
             </div>
           )}
         </div>
-        <select
+        <Select
           value={channel}
           onChange={(e) => {
             setChannel(e.target.value);
             setPage(1);
             clearInline();
           }}
-          aria-label="Filtrer par canal"
-          className={INPUT_CLS}
-        >
-          <option value="">Tous les canaux</option>
-          {CHANNEL_KEYS.map((k) => (
-            <option key={k} value={k}>
-              {CHANNEL_FR[k] ?? k}
-            </option>
-          ))}
-        </select>
+          ariaLabel="Filtrer par canal"
+          options={[{ value: '', label: 'Tous les canaux' },
+            ...CHANNEL_KEYS.map((k) => ({ value: k, label: CHANNEL_FR[k] ?? k }))]}
+        />
         <div className="flex items-center gap-2">
-          <div role="radiogroup" aria-label="Filtrer les doublons" className="flex flex-1 gap-1">
+          <div role="radiogroup" aria-label="Filtrer les doublons" className="flex flex-1 flex-wrap gap-3">
             {dupOptions.map((o) => (
-              <button
+              <Radio
                 key={o.key}
-                type="button"
-                role="radio"
-                aria-checked={dupFilter === o.key}
-                onClick={() => {
+                name="dup-filter"
+                value={o.key}
+                checked={dupFilter === o.key}
+                onChange={() => {
                   setDupFilter(o.key);
                   setPage(1);
                   clearInline();
                 }}
-                className={`flex-1 rounded-md border px-2 py-2 text-center text-[13px] font-medium transition-colors motion-reduce:transition-none ${
-                  dupFilter === o.key
-                    ? 'border-accent bg-accent/10 text-ink'
-                    : 'border-line bg-card text-ink-soft hover:bg-raised'
-                }`}
-              >
-                {o.label}
-              </button>
+                label={o.label}
+              />
             ))}
           </div>
           {hasFilters && (

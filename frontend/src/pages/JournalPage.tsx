@@ -3,6 +3,7 @@ import { api, ApiError } from '../lib/api';
 import type { AiAnalysis } from '../lib/api';
 import { Badge, Button, Card, ConfidenceMeter, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import { ErrorBanner, Pager, Pretty } from '../components/crud';
+import { Select } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { CATEGORY_FR, CHANNEL_FR, INPUT_CLS, URGENCY_FR, fmtDate, fmtNum, urgencyTone } from '../lib/wash';
@@ -254,18 +255,13 @@ export default function JournalPage() {
       >
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-ink-soft">Type d'analyse</span>
-          <select
+          <Select
             value={typeV}
             onChange={(e) => setTypeV(e.target.value)}
-            className={`${INPUT_CLS} w-48`}
-          >
-            <option value="">Tous les types</option>
-            {ANALYSIS_TYPES.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
-              </option>
-            ))}
-          </select>
+            className="w-48"
+            options={[{ value: '', label: 'Tous les types' },
+              ...ANALYSIS_TYPES.map((t) => ({ value: t.value, label: t.label }))]}
+          />
         </label>
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-ink-soft">Incident (n°)</span>

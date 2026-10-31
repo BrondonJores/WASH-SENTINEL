@@ -4,6 +4,7 @@ import type { AssignableUser, Incident } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import { ErrorBanner, Field, Pager } from '../components/crud';
+import { Checkbox, Select } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import {
@@ -270,78 +271,51 @@ export default function IncidentsPage() {
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="flex items-center gap-2 text-sm">
           <span className="text-ink-soft">Statut</span>
-          <select
+          <Select
             value={statusF}
             onChange={(e) => {
               setStatusF(e.target.value);
               setPage(1);
             }}
-            className={INPUT_CLS}
-            aria-label="Filtrer par statut"
-          >
-            <option value="">Tous</option>
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {STATUS_FR[s]}
-              </option>
-            ))}
-          </select>
+            ariaLabel="Filtrer par statut"
+            options={[{ value: '', label: 'Tous' }, ...STATUSES.map((s) => ({ value: s, label: STATUS_FR[s] }))]}
+          />
         </label>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-ink-soft">Urgence</span>
-          <select
+          <Select
             value={urgencyF}
             onChange={(e) => {
               setUrgencyF(e.target.value);
               setPage(1);
             }}
-            className={INPUT_CLS}
-            aria-label="Filtrer par urgence"
-          >
-            <option value="">Toutes</option>
-            {URGENCIES.map((u) => (
-              <option key={u} value={u}>
-                {URGENCY_FR[u]}
-              </option>
-            ))}
-          </select>
+            ariaLabel="Filtrer par urgence"
+            options={[{ value: '', label: 'Toutes' }, ...URGENCIES.map((u) => ({ value: u, label: URGENCY_FR[u] }))]}
+          />
         </label>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-ink-soft">Catégorie</span>
-          <select
+          <Select
             value={categoryF}
             onChange={(e) => {
               setCategoryF(e.target.value);
               setPage(1);
             }}
-            className={INPUT_CLS}
-            aria-label="Filtrer par catégorie"
-          >
-            <option value="">Toutes</option>
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {CATEGORY_FR[c]}
-              </option>
-            ))}
-          </select>
+            ariaLabel="Filtrer par catégorie"
+            options={[{ value: '', label: 'Toutes' }, ...CATEGORIES.map((c) => ({ value: c, label: CATEGORY_FR[c] }))]}
+          />
         </label>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-ink-soft">Tri</span>
-          <select
+          <Select
             value={sortV}
             onChange={(e) => {
               setSortV(e.target.value);
               setPage(1);
             }}
-            className={INPUT_CLS}
-            aria-label="Trier les incidents"
-          >
-            {SORTS.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+            ariaLabel="Trier les incidents"
+            options={SORTS.map((s) => ({ value: s.value, label: s.label }))}
+          />
         </label>
         {filtersActive && (
           <Button size="sm" variant="ghost" onClick={resetFilters}>
@@ -428,18 +402,13 @@ export default function IncidentsPage() {
               <div className="grid gap-3 border-t border-line pt-3 sm:grid-cols-2">
                 <Field label="Changer le statut">
                   <div className="flex gap-2">
-                    <select
+                    <Select
                       value={statusV}
                       onChange={(e) => setStatusV(e.target.value)}
-                      className={INPUT_CLS}
+                      ariaLabel="Changer le statut"
                       disabled={busy}
-                    >
-                      {STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {STATUS_FR[s]}
-                        </option>
-                      ))}
-                    </select>
+                      options={STATUSES.map((s) => ({ value: s, label: STATUS_FR[s] }))}
+                    />
                     <Button
                       size="sm"
                       variant="primary"
@@ -453,19 +422,13 @@ export default function IncidentsPage() {
                 {admin && (
                   <Field label="Assigner à">
                     <div className="flex gap-2">
-                      <select
+                      <Select
                         value={assignV}
                         onChange={(e) => setAssignV(e.target.value)}
-                        className={INPUT_CLS}
+                        ariaLabel="Assigner à"
                         disabled={busy}
-                      >
-                        <option value="">Choisir…</option>
-                        {users.map((u) => (
-                          <option key={u.id} value={u.id}>
-                            {u.name}
-                          </option>
-                        ))}
-                      </select>
+                        options={[{ value: '', label: 'Choisir…' }, ...users.map((u) => ({ value: String(u.id), label: u.name }))]}
+                      />
                       <Button
                         size="sm"
                         variant="primary"
@@ -491,18 +454,13 @@ export default function IncidentsPage() {
                         className={INPUT_CLS}
                         disabled={busy}
                       />
-                      <select
+                      <Select
                         value={scoreUrgencyV}
                         onChange={(e) => setScoreUrgencyV(e.target.value)}
-                        className={INPUT_CLS}
+                        ariaLabel="Forcer l'urgence"
                         disabled={busy}
-                      >
-                        {URGENCIES.map((u) => (
-                          <option key={u} value={u}>
-                            {URGENCY_FR[u]}
-                          </option>
-                        ))}
-                      </select>
+                        options={URGENCIES.map((u) => ({ value: u, label: URGENCY_FR[u] }))}
+                      />
                       <Button
                         size="sm"
                         variant="primary"
@@ -592,23 +550,16 @@ export default function IncidentsPage() {
             </Button>
             <label className="flex items-center gap-2 text-sm">
               <span className="text-ink-soft">Statut</span>
-              <select
+              <Select
                 value={bulkStatus}
                 onChange={(e) => {
                   setBulkStatus(e.target.value);
                   setBulkConfirm(false);
                 }}
-                className={INPUT_CLS}
                 disabled={bulkRunning}
-                aria-label="Statut à appliquer en masse"
-              >
-                <option value="">Choisir…</option>
-                {STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {STATUS_FR[s]}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="Statut à appliquer en masse"
+                options={[{ value: '', label: 'Choisir…' }, ...STATUSES.map((s) => ({ value: s, label: STATUS_FR[s] }))]}
+              />
             </label>
             <Button
               size="sm"
@@ -664,15 +615,12 @@ export default function IncidentsPage() {
 
       {agent && items.length > 0 && (
         <div className="mb-2">
-          <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-ink-soft">
-            <input
-              type="checkbox"
-              checked={allPageChecked}
-              onChange={toggleAllPage}
-              className="h-4 w-4 accent-teal-700"
-            />
-            Tout sélectionner (page)
-          </label>
+          <Checkbox
+            checked={allPageChecked}
+            onChange={toggleAllPage}
+            label="Tout sélectionner (page)"
+            className="text-xs text-ink-soft"
+          />
         </div>
       )}
 
@@ -715,12 +663,11 @@ export default function IncidentsPage() {
             }`}
           >
             {agent && (
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={checked.includes(i.id)}
                 onChange={() => toggleCheck(i.id)}
-                aria-label={`Sélectionner ${i.reference_code}`}
-                className="h-4 w-4 shrink-0 accent-teal-700"
+                ariaLabel={`Sélectionner ${i.reference_code}`}
+                className="shrink-0"
               />
             )}
             <button

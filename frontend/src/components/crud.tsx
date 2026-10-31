@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Button } from './ui';
-import { INPUT_CLS, fmtNum } from '../lib/wash';
+import { Select } from './controls';
+import { fmtNum } from '../lib/wash';
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -117,18 +118,12 @@ export function Pager({
       {showPerPage && (
         <label className="flex items-center gap-2 text-sm text-ink-soft">
           <span aria-hidden="true">Afficher</span>
-          <select
-            value={perPage}
+          <Select
+            value={String(perPage)}
             onChange={(e) => onPerPage(Number(e.target.value))}
-            aria-label="Nombre d'éléments par page"
-            className={`${INPUT_CLS} w-auto`}
-          >
-            {PER_PAGE_OPTIONS.map((n) => (
-              <option key={n} value={n}>
-                {n} / page
-              </option>
-            ))}
-          </select>
+            ariaLabel="Nombre d'éléments par page"
+            options={PER_PAGE_OPTIONS.map((n) => ({ value: String(n), label: `${n} / page` }))}
+          />
         </label>
       )}
     </nav>
