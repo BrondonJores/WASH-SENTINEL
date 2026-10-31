@@ -117,6 +117,59 @@ class CardContractTest(unittest.TestCase):
         for key in ("kind", "title", "lines", "stats"):
             self.assertIn(key, res["slides"][0])
 
+    def test_chantier_dossier_keys(self) -> None:
+        from app.tools.prepare_chantier_update import execute
+        res = execute({"incident": "Bonanjo", "progress_percent": 50}, CONTEXT)
+        for key in ("insight", "fields", "missing", "questions", "ready"):
+            self.assertIn(key, res)
+
+    def test_saisie_assistee_keys(self) -> None:
+        from app.tools.saisie_assistee import execute
+        res = execute({}, CONTEXT)
+        for key in ("step", "question", "options", "progress_percent"):
+            self.assertIn(key, res)
+        self.assertGreater(len(res["options"]), 0)
+
+    def test_offline_queue_keys(self) -> None:
+        from app.tools.offline_queue import execute
+        ctx = dict(CONTEXT)
+        ctx["offline_queue"] = [
+            {"id": "tmp-1", "school": "École de Nkol",
+             "summary": "Fuite signalée hors ligne",
+             "created_at": RECENT, "status": "pending"},
+        ]
+        ctx["sync_status"] = {"online": False, "last_sync": OLD}
+        res = execute({}, ctx)
+        for key in ("insight", "pending", "count", "online"):
+            self.assertIn(key, res)
+        self.assertGreater(len(res["pending"]), 0)
+
+    def test_relances_keys(self) -> None:
+        from app.tools.relances_proactives import execute
+        ctx = {"schools": SCHOOLS, "incidents": [INCIDENTS[0]],
+               "maintenance_logs": []}
+        res = execute({"days": 7}, ctx)
+        self.assertGreater(len(res.get("items", [])), 0)
+        for key in ("school_name", "incident_title", "reference_code",
+                    "days_idle", "draft_message"):
+            self.assertIn(key, res["items"][0])
+
+    def test_observatoire_keys(self) -> None:
+        from app.tools.observatoire import execute
+        res = execute({}, CONTEXT)
+        for key in ("incidents_open", "schools", "affected_students",
+                    "critical"):
+            self.assertIn(key, res.get("totals", {}))
+        self.assertGreater(len(res.get("by_district", [])), 0)
+        for key in ("district", "open"):
+            self.assertIn(key, res["by_district"][0])
+        self.assertGreater(len(res.get("by_urgency", [])), 0)
+        for key in ("urgency", "count"):
+            self.assertIn(key, res["by_urgency"][0])
+        self.assertGreater(len(res.get("trend", [])), 0)
+        for key in ("month", "count"):
+            self.assertIn(key, res["trend"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

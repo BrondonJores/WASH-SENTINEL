@@ -2047,6 +2047,264 @@ function DocumentBriefingCard({ title, data }: { title: string; data: Record<str
   );
 }
 
+const CHANTIER_LABELS: Record<string, string> = {
+  incident: 'Incident',
+  progress_percent: 'Avancement',
+  step: 'Étape',
+  cost_amount: 'Coût (XAF)',
+  notes: 'Notes',
+};
+
+function ChantierDossierCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const fields = asRecord(data.fields);
+  const missingLabels = asArray<unknown>(data.missing_labels).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
+  const questions = asArray<unknown>(data.questions).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
+  const ready = data.ready === true || data.complete === true;
+  const insight = fmtOpt(data.insight) ?? '';
+  const recap = fmtOpt(data.recap);
+  const entries = Object.entries(CHANTIER_LABELS)
+    .map(([k, label]) => ({ label, value: fields[k] }))
+    .filter((e) => e.value !== undefined && e.value !== null && e.value !== '');
+  if (entries.length === 0 && questions.length === 0) return null;
+  const progress = typeof fields.progress_percent === 'number' ? Math.max(0, Math.min(100, fields.progress_percent)) : undefined;
+  return (
+    <CardShell
+      title={title}
+      meta={ready ? 'Dossier prêt' : 'En cours'}
+      listenText={speak(insight, recap, ready ? 'Le dossier est prêt à valider.' : undefined)}
+    >
+      <InsightLine text={insight} />
+      {progress !== undefined && (
+        <div className="mb-3">
+          <div className="h-2 overflow-hidden rounded-full bg-stone-200 dark:bg-white/10">
+            <div className="h-full rounded-full bg-teal-700 transition-[width] dark:bg-teal-400" style={{ width: `${progress}%` }} />
+          </div>
+          <p className="mt-1 font-mono text-[11px] text-stone-500 dark:text-stone-400">{progress} % d'avancement</p>
+        </div>
+      )}
+      <dl className="space-y-1.5">
+        {entries.filter((e) => e.label !== 'Avancement').map((e) => (
+          <div key={e.label} className="flex items-baseline justify-between gap-3 text-sm">
+            <dt className="shrink-0 text-[11px] font-semibold text-stone-500 dark:text-stone-400">{e.label}</dt>
+            <dd className="text-right font-medium leading-snug">
+              {typeof e.value === 'number' ? fmtInt(e.value) : String(e.value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {missingLabels.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap gap-1">
+          {missingLabels.map((m) => (
+            <span key={m} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">manque : {m}</span>
+          ))}
+        </div>
+      )}
+      {questions.length > 0 && onAsk !== undefined && (
+        <div className="mt-3 space-y-1.5">
+          {questions.map((q) => (
+            <button
+              key={q}
+              type="button"
+              onClick={() => onAsk(q)}
+              className="block w-full rounded-lg border border-line bg-card px-3 py-2 text-left text-sm transition-[border-color] hover:border-accent"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
+function SaisieAssisteeCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const question = fmtOpt(data.question) ?? '';
+  const options = asArray<unknown>(data.options).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
+  const progress = typeof data.progress_percent === 'number' ? Math.max(0, Math.min(100, Math.round(data.progress_percent))) : 0;
+  const recap = asRecord(data.recap);
+  const recapEntries = Object.entries(recap).filter(([, v]) => v !== undefined && v !== null && v !== '');
+  const insight = fmtOpt(data.insight) ?? '';
+  if (question === '' && options.length === 0) return null;
+  return (
+    <CardShell title={title} meta={`${progress} %`} listenText={speak(question, options.length > 0 ? `Choix possibles : ${options.join(', ')}.` : undefined)}>
+      <div className="mb-3 h-2 overflow-hidden rounded-full bg-stone-200 dark:bg-white/10">
+        <div className="h-full rounded-full bg-teal-700 transition-[width] dark:bg-teal-400" style={{ width: `${progress}%` }} />
+      </div>
+      <InsightLine text={insight} />
+      <p className="text-[15px] font-bold leading-snug">{question}</p>
+      {options.length > 0 && (
+        <div className="mt-2.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          {options.map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              disabled={onAsk === undefined}
+              onClick={() => onAsk?.(opt)}
+              className="rounded-lg border border-line bg-card px-3 py-2 text-left text-sm font-medium transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.98] disabled:cursor-default disabled:hover:border-line motion-reduce:transition-none motion-reduce:active:scale-100"
+            >
+              {opt}
+            </button>
+          ))}
+        </div>
+      )}
+      {recapEntries.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1 border-t border-stone-200/70 pt-2.5 dark:border-white/[0.06]">
+          {recapEntries.map(([k, v]) => (
+            <span key={k} className="rounded-full bg-stone-100 px-2 py-0.5 text-[11px] text-stone-600 dark:bg-white/[0.06] dark:text-stone-300">
+              {k} : {String(v)}
+            </span>
+          ))}
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
+function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const pending = asArray<Record<string, unknown>>(data.pending);
+  const count = typeof data.count === 'number' ? data.count : pending.length;
+  const online = data.online === true;
+  const lastSync = fmtOpt(data.last_sync);
+  const insight = fmtOpt(data.insight) ?? '';
+  return (
+    <CardShell
+      title={title}
+      meta={online ? 'En ligne' : 'Hors ligne'}
+      listenText={speak(insight, count === 0 ? 'Aucun signalement en attente.' : `${count} signalement${count > 1 ? 's' : ''} en attente de synchronisation.`)}
+    >
+      <InsightLine text={insight} />
+      <div className="mb-3 flex items-center gap-2">
+        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${online ? 'bg-teal-700/10 text-teal-800 dark:bg-teal-300/15 dark:text-teal-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200'}`}>
+          <span aria-hidden="true" className={`h-2 w-2 rounded-full ${online ? 'bg-teal-600 dark:bg-teal-300' : 'bg-amber-500'}`} />
+          {online ? 'Connecté' : 'Hors ligne'}
+        </span>
+        <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">
+          {count} en attente{lastSync !== undefined ? ` · synchro : ${lastSync}` : ''}
+        </span>
+      </div>
+      {pending.length === 0 ? (
+        <p className="text-sm text-stone-500 dark:text-stone-400">File vide — rien à synchroniser.</p>
+      ) : (
+        <ul className="space-y-2">
+          {pending.map((p, i) => (
+            <li key={i} className="flex items-start gap-2.5 border-b border-stone-200/60 pb-2 last:border-0 last:pb-0 dark:border-white/[0.06]">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold leading-snug">{fmtOpt(p.school) ?? fmtOpt(p.school_name) ?? `Signalement ${i + 1}`}</p>
+                {(fmtOpt(p.summary) ?? fmtOpt(p.title)) !== undefined && (
+                  <p className="mt-0.5 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(p.summary) ?? fmtOpt(p.title)}</p>
+                )}
+                <p className="mt-0.5 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+                  {[fmtOpt(p.created_at), fmtOpt(p.status)].filter((s) => s !== undefined).join(' · ')}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <FollowUps onAsk={onAsk} items={['Voir les incidents ouverts ?', 'Aide-moi à remplir un signalement']} />
+    </CardShell>
+  );
+}
+
+function RelancesCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const items = asArray<Record<string, unknown>>(data.items);
+  const insight = fmtOpt(data.insight) ?? '';
+  if (items.length === 0) {
+    return (
+      <CardShell title={title} listenText={speak(insight === '' ? 'Aucun incident dormant. Tout est suivi.' : insight)}>
+        <InsightLine text={insight} />
+        <p className="text-sm text-stone-500 dark:text-stone-400">Aucun incident dormant — tout est suivi.</p>
+        <FollowUps onAsk={onAsk} items={['Voir les incidents ouverts ?', 'Voir les alertes du district ?']} />
+      </CardShell>
+    );
+  }
+  return (
+    <CardShell
+      title={title}
+      meta={`${items.length} à relancer`}
+      listenText={speak(insight, `${items.length} incidents sans nouvelles à relancer.`)}
+    >
+      <InsightLine text={insight} />
+      <ul className="space-y-3">
+        {items.map((it, i) => (
+          <li key={i} className="rounded-lg bg-stone-100/70 p-3 dark:bg-white/[0.04]">
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-bold">{fmtOpt(it.school_name) ?? fmtOpt(it.school) ?? `École ${i + 1}`}</p>
+              {typeof it.days_idle === 'number' && (
+                <span className="ml-auto shrink-0 rounded-full bg-amber-100 px-2 py-0.5 font-mono text-[11px] font-bold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">
+                  {it.days_idle} j sans nouvelles
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 text-[13px] text-stone-600 dark:text-stone-400">
+              {[fmtOpt(it.incident_title) ?? fmtOpt(it.title), fmtOpt(it.reference_code)].filter((s) => s !== undefined).join(' · ')}
+            </p>
+            {fmtOpt(it.draft_message) !== undefined && (
+              <p className="mt-1.5 border-l-2 border-teal-700/40 pl-2 text-[13px] italic leading-relaxed dark:border-teal-300/40">« {fmtOpt(it.draft_message)} »</p>
+            )}
+          </li>
+        ))}
+      </ul>
+      <FollowUps onAsk={onAsk} items={['Qui envoyer sur place ?', 'Voir les missions passées ?']} />
+    </CardShell>
+  );
+}
+
+function ObservatoireCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const totals = asRecord(data.totals);
+  const byDistrict = asArray<Record<string, unknown>>(data.by_district);
+  const byUrgency = asArray<Record<string, unknown>>(data.by_urgency);
+  const trend = asArray<Record<string, unknown>>(data.trend);
+  const insight = fmtOpt(data.insight) ?? '';
+  const openCount = typeof totals.incidents_open === 'number' ? totals.incidents_open : undefined;
+  if (openCount === undefined && byDistrict.length === 0) return null;
+  const maxOpen = Math.max(1, ...byDistrict.map((d) => (typeof d.open === 'number' ? d.open : 0)));
+  const trendCounts = trend.map((t) => (typeof t.count === 'number' ? t.count : 0));
+  return (
+    <CardShell title={title} listenText={speak(insight)}>
+      <InsightLine text={insight} />
+      <div className="mb-3 flex items-end justify-between gap-3">
+        <HeroStat label="Incidents ouverts" value={openCount !== undefined ? fmtInt(openCount) : '—'} />
+        {trendCounts.length >= 2 && <Sparkline data={trendCounts} />}
+      </div>
+      <div className="mb-3 grid grid-cols-3 gap-2">
+        <Stat label="Écoles suivies" value={typeof totals.schools === 'number' ? fmtInt(totals.schools) : '—'} />
+        <Stat label="Élèves affectés" value={typeof totals.affected_students === 'number' ? fmtInt(totals.affected_students) : '—'} />
+        <Stat label="Critiques" value={typeof totals.critical === 'number' ? fmtInt(totals.critical) : '—'} />
+      </div>
+      {byDistrict.length > 0 && (
+        <div className="mb-2 space-y-1.5">
+          {byDistrict.map((d, i) => {
+            const open = typeof d.open === 'number' ? d.open : 0;
+            return (
+              <div key={i}>
+                <div className="flex items-baseline justify-between gap-2 text-[13px]">
+                  <span className="truncate font-medium">{fmtOpt(d.district) ?? `Zone ${i + 1}`}</span>
+                  <span className="shrink-0 font-mono tabular-nums">{open}</span>
+                </div>
+                <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-stone-200 dark:bg-white/10">
+                  <div className="h-full rounded-full bg-teal-700 dark:bg-teal-400" style={{ width: `${Math.round((open / maxOpen) * 100)}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {byUrgency.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {byUrgency.map((u, i) => (
+            <span key={i} className="inline-flex items-center gap-1.5 rounded-full bg-stone-100 px-2 py-0.5 text-[11px] font-semibold dark:bg-white/[0.06]">
+              <UrgencyDot level={fmtOpt(u.urgency) ?? 'medium'} />
+              {fmtOpt(u.urgency) ?? '?'} · {typeof u.count === 'number' ? u.count : '—'}
+            </span>
+          ))}
+        </div>
+      )}
+      <FollowUps onAsk={onAsk} items={['Quelles écoles ont le plus besoin d’aide ?', 'Voir les alertes du district ?']} />
+    </CardShell>
+  );
+}
+
 function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void }) {
   const data = asRecord(card.data);
   switch (card.type) {
@@ -2096,6 +2354,16 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <MissionTimelineCard title={card.title} data={data} onAsk={onAsk} />;
     case 'document_briefing':
       return <DocumentBriefingCard title={card.title} data={data} />;
+    case 'chantier_dossier':
+      return <ChantierDossierCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'saisie_assistee':
+      return <SaisieAssisteeCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'offline_queue':
+      return <OfflineQueueCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'relances':
+      return <RelancesCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'observatoire':
+      return <ObservatoireCard title={card.title} data={data} onAsk={onAsk} />;
     default:
       return <GenericCard card={card} />;
   }
