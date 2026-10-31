@@ -552,22 +552,29 @@ export default function ConsolePage() {
                         }}
                       />
                     </div>
-                    {m.tools.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-[12px] text-ink-faint">
-                          <Icon name="check" className="h-3.5 w-3.5 text-teal-600 dark:text-teal-300" />
-                          Vérifié :
-                        </span>
-                        {m.tools.map((t, j) => (
-                          <span
-                            key={`${t}-${j}`}
-                            className="msg-in rounded-full bg-teal-700/10 px-2.5 py-0.5 text-[12px] font-medium text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
-                          >
-                            {TOOL_FR[t] ?? t}
+                    {m.tools.length > 0 &&
+                      ((m.cards ?? []).length > 0 ? (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="inline-flex items-center gap-1 text-[12px] text-ink-faint">
+                            <Icon name="check" className="h-3.5 w-3.5 text-teal-600 dark:text-teal-300" />
+                            Vérifié :
                           </span>
-                        ))}
-                      </div>
-                    )}
+                          {m.tools.map((t, j) => (
+                            <span
+                              key={`${t}-${j}`}
+                              className="msg-in rounded-full bg-teal-700/10 px-2.5 py-0.5 text-[12px] font-medium text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
+                            >
+                              {TOOL_FR[t] ?? t}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[12px] text-ink-faint">
+                            Sources : {m.tools.length} outil{m.tools.length > 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      ))}
                     <div className="cards-in">
                       <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} onDetail={openDetail} />
                     </div>
