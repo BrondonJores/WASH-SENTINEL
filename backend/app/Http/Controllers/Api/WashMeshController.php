@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Api;
 use App\Contracts\IncidentTriage;
 use App\Http\Controllers\Controller;
 use App\Models\MeshBundle;
+use App\Models\MeshNodeKey;
 use App\Models\School;
 use App\Services\MeshMediaAssembler;
 use App\Services\MeshSeal;
+use App\Services\MeshSignature;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -44,7 +46,7 @@ class WashMeshController extends Controller
             }
         }
 
-        $summary = ['accepted' => 0, 'duplicates' => 0, 'expired' => 0, 'rejected' => 0, 'quota_exceeded' => 0, 'fragments' => 0];
+        $summary = ['accepted' => 0, 'duplicates' => 0, 'expired' => 0, 'rejected' => 0, 'quota_exceeded' => 0, 'fragments' => 0, 'key_changed' => 0];
         $incidents = [];
         $assembler = app(MeshMediaAssembler::class);
 
@@ -71,6 +73,27 @@ class WashMeshController extends Controller
                 Log::warning('mesh.bundle.rejected', ['bundle_id' => $item['bundle_id'], 'cause' => 'max_hops', 'hop_count' => $hopCount]);
                 $summary['rejected']++;
                 continue;
+            }
+
+            // V2 signatures : non-signés acceptés, signés-invalides rejetés.
+            // Avant le déchiffrement sealed (qui remplace `message`).
+            // Ne vérifie que l'upload direct (le relai reformate les bundles).
+            $signatureVerified = false;
+            if (! empty($item['signature'])) {
+                $tsShape = $item;
+                unset($tsShape['received_via_node_id'], $tsShape['previous_node_id']);
+                foreach (['destination_eid' => 'destination', 'report_to_eid' => 'report_to'] as $from => $to) {
+                    if (array_key_exists($from, $tsShape)) {
+                        $tsShape[$to] = $tsShape[$from];
+                        unset($tsShape[$from]);
+                    }
+                }
+                if (! MeshSignature::verify($tsShape)) {
+                    Log::warning('mesh.bundle.rejected', ['bundle_id' => $item['bundle_id'], 'cause' => 'bad_signature', 'origin' => $item['origin_node_id']]);
+                    $summary['rejected']++;
+                    continue;
+                }
+                $signatureVerified = true;
             }
 
             // V2 E2E : enveloppe scellée → déchiffrement (le serveur est le
@@ -162,6 +185,31 @@ class WashMeshController extends Controller
             if ($isManifest) {
                 // Les fragments ont pu arriver avant le manifeste.
                 $assembler->tryAssemble($bundle['bundle']->bundle_id);
+            }
+
+            // TOFU node_pubkey : mémorisé sur signature VÉRIFIÉE uniquement,
+            // jamais sur rejet. La première clé vue devient la référence ;
+            // un changement est une ALERTE (log + compteur), pas un rejet :
+            // refuser couperait un nœud légitime qui a régénéré sa clé.
+            if ($signatureVerified) {
+                $known = MeshNodeKey::where('origin_node_id', $item['origin_node_id'])->first();
+                if ($known === null) {
+                    MeshNodeKey::create([
+                        'origin_node_id' => $item['origin_node_id'],
+                        'node_pubkey' => $item['node_pubkey'],
+                        'first_seen_at' => now(),
+                    ]);
+                } elseif ($known->node_pubkey !== $item['node_pubkey']) {
+                    Log::warning('mesh.node.key_changed', [
+                        'bundle_id' => $item['bundle_id'],
+                        'origin' => $item['origin_node_id'],
+                    ]);
+                    $known->update([
+                        'node_pubkey' => $item['node_pubkey'],
+                        'last_changed_at' => now(),
+                    ]);
+                    $summary['key_changed']++;
+                }
             }
 
             Log::info('mesh.bundle.accepted', [
@@ -260,6 +308,8 @@ class WashMeshController extends Controller
             'custody_requested' => ['nullable', 'boolean'],
             'priority' => ['nullable', 'in:normal,high,alert'],
             'signature' => ['nullable', 'string', 'max:128'],
+            'node_pubkey' => ['nullable', 'string', 'max:64'],
+            'v' => ['nullable', 'integer'],
             'sealed' => ['nullable', 'string', 'max:20000'],
             'sealed_alg' => ['nullable', 'string', 'max:32'],
             // V2b médias différés.
@@ -300,6 +350,7 @@ class WashMeshController extends Controller
             'custody_requested' => (bool) ($item['custody_requested'] ?? false),
             'priority' => $item['priority'] ?? 'normal',
             'signature' => $item['signature'] ?? null,
+            'node_pubkey' => $item['node_pubkey'] ?? null,
             'sealed_payload' => $item['sealed'] ?? null,
             'sealed_alg' => $item['sealed_alg'] ?? null,
         ];
