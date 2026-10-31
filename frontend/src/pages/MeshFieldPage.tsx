@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import QRCode from 'qrcode';
 import { Html5Qrcode } from 'html5-qrcode';
 import { api, ApiError } from '../lib/api';
@@ -13,6 +14,7 @@ import {
   createBundle,
   isIOS,
   nodeId,
+  outboxAdd,
   parseFromQR,
   serializeForQR,
   smsGateway,
@@ -22,11 +24,28 @@ import {
   uploadToLaravel,
 } from '../lib/mesh';
 import type { MeshBundle } from '../lib/mesh';
+import { MESH_SYNC_MESSAGE, shouldFlushOutbox } from '../lib/mesh-sync';
+import {
+  MAX_SENT_HISTORY,
+  bundleLabel,
+  deriveOutboxView,
+  loadOutboxMeta,
+  outboxSummary,
+  saveOutboxMeta,
+} from '../lib/mesh-outbox-status';
+import type { OutboxMeta, OutboxViewItem } from '../lib/mesh-outbox-status';
+import {
+  dismissIosHelp,
+  iosHelpDismissed,
+  isStandaloneDisplay,
+  useInstallPrompt,
+} from '../lib/install-prompt';
 import { SEAL_ALG, fetchSealKey, sealMessage } from '../lib/mesh-crypto';
 import type { SealKey } from '../lib/mesh-crypto';
 
 const outbox = new MeshOutbox();
 const SCANNER_ID = 'mesh-field-qr-reader';
+const FILE_SCAN_ID = 'mesh-field-qr-file';
 const SMS_TYPES = [
   { value: 'P', label: 'P — Panne pompe/forage' },
   { value: 'L', label: 'L — Latrine' },
@@ -35,6 +54,13 @@ const SMS_TYPES = [
 ] as const;
 
 const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
+
+/** Raison du premier échec de la file, sous la liste. */
+function itemErrorHint(items: OutboxViewItem[]): ReactNode {
+  const first = items.find((i) => i.status === 'failed' && i.error);
+  if (!first?.error) return null;
+  return <p className="text-xs text-red-800 dark:text-red-300">Dernier échec : {first.error}</p>;
+}
 
 function blobToB64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -112,11 +138,84 @@ export default function MeshFieldPage() {
   const [photo, setPhoto] = useState<{ b64: string; mime: string } | null>(null);
   const [audio, setAudio] = useState<{ b64: string; mime: string } | null>(null);
   const [recording, setRecording] = useState(false);
+  const [meta, setMeta] = useState<OutboxMeta>(() => loadOutboxMeta());
+  const [sending, setSending] = useState(false);
+  const [iosHelpVisible, setIosHelpVisible] = useState(
+    () => isIOS() && !isStandaloneDisplay() && !iosHelpDismissed(),
+  );
+  const [standalone] = useState(() => isStandaloneDisplay());
+  const install = useInstallPrompt();
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const flushInFlight = useRef(false);
+  const flushRef = useRef<() => Promise<void>>(async () => {});
 
   const refresh = useCallback(() => setItems(outbox.all()), []);
+
+  // Envoie la file vers Laravel. `manual` = tap explicite (message détaillé).
+  const flush = useCallback(
+    async (manual = false) => {
+      if (
+        !shouldFlushOutbox({
+          online: navigator.onLine,
+          pendingCount: outbox.size,
+          flushInFlight: flushInFlight.current,
+        })
+      ) {
+        if (manual && !navigator.onLine && outbox.size > 0) {
+          setError('Hors-ligne : la file reste stockée, elle partira au retour réseau.');
+        }
+        return;
+      }
+      flushInFlight.current = true;
+      setSending(true);
+      const before = outbox.all().filter((b) => !b.chunk);
+      try {
+        const r = await uploadToLaravel(outbox, apiBase());
+        const afterIds = new Set(outbox.all().map((b) => b.bundle_id));
+        const delivered = before.filter((b) => !afterIds.has(b.bundle_id));
+        setMeta((prev) => {
+          const failed = { ...prev.failed };
+          for (const b of delivered) delete failed[b.bundle_id];
+          const sent = [
+            ...delivered.map((b) => ({
+              id: b.bundle_id,
+              label: bundleLabel(b),
+              at: Date.now(),
+            })),
+            ...prev.sent,
+          ].slice(0, MAX_SENT_HISTORY);
+          const next = { failed, sent };
+          saveOutboxMeta(next);
+          return next;
+        });
+        refresh();
+        if (manual || r.accepted + r.duplicates > 0) {
+          setNotice(
+            manual
+              ? `${r.accepted} envoyé(s), ${r.duplicates} déjà reçu(s) par le serveur.`
+              : `${r.accepted} signalement(s) envoyé(s), ${r.duplicates} déjà reçu(s).`,
+          );
+        }
+      } catch (e) {
+        const msg = errMsg(e);
+        setMeta((prev) => {
+          const failed = { ...prev.failed };
+          for (const b of before) failed[b.bundle_id] = { at: Date.now(), error: msg };
+          const next = { ...prev, failed };
+          saveOutboxMeta(next);
+          return next;
+        });
+        setError(`Envoi impossible (${msg}). La file est conservée — réessayez au retour réseau.`);
+      } finally {
+        flushInFlight.current = false;
+        setSending(false);
+      }
+    },
+    [refresh],
+  );
 
   useEffect(() => {
     const onFlip = () => setOnline(navigator.onLine);
@@ -145,20 +244,57 @@ export default function MeshFieldPage() {
     fetchSealKey(apiBase()).then(setSealKey);
   }, [online]);
 
-  // Upload auto à la reconnexion.
+  // Flush best-effort : message du SW (Background Sync) + fallbacks page
+  // (retour online, onglet visible, minuteur 30 s) pour iOS/Safari.
   useEffect(() => {
-    if (!online || outbox.size === 0) return;
-    uploadToLaravel(outbox, apiBase())
-      .then((r) => {
-        if (r.accepted + r.duplicates > 0) {
-          setNotice(`${r.accepted} signalement(s) envoyé(s), ${r.duplicates} déjà reçu(s).`);
-          refresh();
-        }
-      })
-      .catch(() => {
-        /* on réessaiera à la prochaine reconnexion */
-      });
-  }, [online, refresh]);
+    flushRef.current = flush;
+  }, [flush]);
+
+  useEffect(() => {
+    const kick = () => {
+      void flushRef.current();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') kick();
+    };
+    const onSwMessage = (ev: MessageEvent) => {
+      const data = ev.data as { type?: string } | null;
+      if (data?.type === MESH_SYNC_MESSAGE) kick();
+    };
+    const sw = 'serviceWorker' in navigator ? navigator.serviceWorker : undefined;
+    window.addEventListener('online', kick);
+    document.addEventListener('visibilitychange', onVisible);
+    sw?.addEventListener('message', onSwMessage);
+    const timer = window.setInterval(kick, 30000);
+    kick();
+    return () => {
+      window.removeEventListener('online', kick);
+      document.removeEventListener('visibilitychange', onVisible);
+      sw?.removeEventListener('message', onSwMessage);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // Traite un texte QR (caméra ou fichier image) : même validation, même file.
+  const ingestQrText = useCallback((decoded: string): boolean => {
+    try {
+      const bundle = parseFromQR(decoded);
+      if (!bundle.bundle_id || !bundle.origin_node_id || !bundle.school_id) {
+        setError('QR reçu : bundle incomplet.');
+        return false;
+      }
+      if (outboxAdd(outbox, bundle)) {
+        setNotice('Bundle reçu et stocké. Uploadez dès que possible.');
+        refresh();
+      } else {
+        setNotice('Bundle déjà dans la file.');
+      }
+      return true;
+    } catch {
+      setError('QR illisible : pas un bundle WASH.');
+      return false;
+    }
+  }, [refresh]);
 
   // Cycle de vie du scanner caméra.
   useEffect(() => {
@@ -167,23 +303,8 @@ export default function MeshFieldPage() {
     scannerRef.current = scanner;
     scanner
       .start({ facingMode: 'environment' }, { fps: 10, qrbox: 250 }, (decoded) => {
-        try {
-          const bundle = parseFromQR(decoded);
-          if (!bundle.bundle_id || !bundle.origin_node_id || !bundle.school_id) {
-            setError('QR reçu : bundle incomplet.');
-            return;
-          }
-          if (outbox.add(bundle)) {
-            setNotice('Bundle reçu et stocké. Uploadez dès que possible.');
-            refresh();
-          } else {
-            setNotice('Bundle déjà dans la file.');
-          }
-        } catch {
-          setError('QR illisible : pas un bundle WASH.');
-        } finally {
-          setScanning(false);
-        }
+        ingestQrText(decoded);
+        setScanning(false);
       }, undefined)
       .catch(() => {
         setError('Caméra inaccessible (HTTPS requis, autorisation à accorder).');
@@ -194,7 +315,7 @@ export default function MeshFieldPage() {
       scanner.stop().catch(() => undefined);
       scanner.clear();
     };
-  }, [scanning, refresh]);
+  }, [scanning, refresh, ingestQrText]);
 
   const selectedSchool = schools.find((s) => String(s.id) === schoolId) ?? null;
   const effectiveId = selectedSchool ? selectedSchool.id : Number(manualId) || 0;
@@ -286,8 +407,8 @@ export default function MeshFieldPage() {
             ? (plain) => sealMessage(plain, key.public_key).then((sealed) => ({ sealed, alg: SEAL_ALG }))
             : undefined,
         });
-        outbox.add(split.manifest);
-        split.fragments.forEach((f) => outbox.add(f));
+        outboxAdd(outbox, split.manifest);
+        split.fragments.forEach((f) => outboxAdd(outbox, f));
         setNotice(
           `Signalement + média enregistré offline (${split.fragments.length} fragments${key ? ', chiffrés' : ''}).`,
         );
@@ -300,7 +421,7 @@ export default function MeshFieldPage() {
           sealed,
           sealedAlg: key ? SEAL_ALG : undefined,
         });
-        outbox.add(bundle);
+        outboxAdd(outbox, bundle);
         setNotice(
           key
             ? 'Signalement chiffré enregistré offline. Montrez son QR ou uploadez.'
@@ -334,31 +455,48 @@ export default function MeshFieldPage() {
     }
   };
 
-  const uploadAll = async () => {
+  const uploadAll = () => {
     setError(null);
     setNotice(null);
-    setBusy(true);
-    try {
-      const r = await uploadToLaravel(outbox, apiBase());
-      refresh();
-      setNotice(`${r.accepted} envoyé(s), ${r.duplicates} déjà reçu(s) par le serveur.`);
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setBusy(false);
-    }
+    void flush(true);
   };
 
   const removeItem = (id: string) => {
     // Retirer un manifeste retire aussi ses fragments.
     const grouped = outbox.all().filter((b) => b.bundle_group === id).map((b) => b.bundle_id);
     outbox.remove([id, ...grouped]);
+    setMeta((prev) => {
+      const failed = { ...prev.failed };
+      delete failed[id];
+      const next = { ...prev, failed };
+      saveOutboxMeta(next);
+      return next;
+    });
     refresh();
+  };
+
+  const clearSent = () => {
+    setMeta((prev) => {
+      const next = { ...prev, sent: [] };
+      saveOutboxMeta(next);
+      return next;
+    });
+  };
+
+  const showQrById = (id: string) => {
+    const bundle = items.find((b) => b.bundle_id === id);
+    if (bundle) void showQr(bundle);
   };
 
   const gateway = smsGateway();
   const smsLink =
     gateway && effectiveCode ? smsHref(gateway, smsText(effectiveCode, smsType, message)) : null;
+  const outboxView = deriveOutboxView({
+    bundles: items,
+    sending,
+    failed: meta.failed,
+    sent: meta.sent,
+  });
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-4 p-4 pb-16">
@@ -370,12 +508,55 @@ export default function MeshFieldPage() {
         <Badge tone={online ? 'success' : 'warn'}>{online ? 'En ligne' : 'Hors-ligne'}</Badge>
       </header>
 
-      {isIOS() && (
-        <Card className="p-3 text-xs text-ink-soft">
-          Sur iPhone : le relai automatique en tâche de fond est impossible (limites Apple).
-          Créez vos signalements ici, transmettez-les par QR à un téléphone Android relai,
-          ou uploadez directement. Astuce : ajoutez cette page à l&apos;écran d&apos;accueil
-          pour la retrouver sans réseau.
+      {install.canInstall && !standalone && (
+        <Card className="flex flex-wrap items-center justify-between gap-2 p-3">
+          <p className="text-xs text-ink-soft">
+            Installez WASH Relai pour un accès direct, même hors-ligne.
+          </p>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                void install.install();
+              }}
+              aria-label="Installer l'application WASH Relai"
+            >
+              Installer
+            </Button>
+            <Button size="sm" variant="ghost" onClick={install.dismiss} aria-label="Masquer le bouton d'installation">
+              Plus tard
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {iosHelpVisible && (
+        <Card className="space-y-2 p-3 text-xs text-ink-soft">
+          <p>
+            Sur iPhone : le relai automatique en tâche de fond est impossible (limites Apple).
+            Créez vos signalements ici, transmettez-les par QR à un téléphone Android relai,
+            ou uploadez directement.
+          </p>
+          <div>
+            <p className="font-semibold text-ink">Ajouter à l&apos;écran d&apos;accueil :</p>
+            <ol className="list-decimal pl-5">
+              <li>Touchez <span className="font-medium">Partager</span> (carré avec flèche vers le haut).</li>
+              <li>Choisissez <span className="font-medium">« Sur l&apos;écran d&apos;accueil »</span>.</li>
+              <li>Touchez <span className="font-medium">Ajouter</span> en haut à droite.</li>
+            </ol>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              dismissIosHelp();
+              setIosHelpVisible(false);
+            }}
+            aria-label="Masquer l'aide d'installation iPhone"
+          >
+            Compris
+          </Button>
         </Card>
       )}
 
@@ -472,28 +653,64 @@ export default function MeshFieldPage() {
 
       <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">
-            File d&apos;envoi ({items.filter((b) => !b.chunk).length}
-            {items.some((b) => b.chunk) ? ` + ${items.filter((b) => b.chunk).length} fragments` : ''})
-          </h2>
-          <Button size="sm" variant="primary" disabled={busy || items.length === 0} onClick={uploadAll}>
-            {busy ? 'Envoi…' : 'Tout uploader'}
+          <h2 className="text-sm font-semibold">File d&apos;envoi</h2>
+          <Button size="sm" variant="primary" disabled={sending || items.length === 0} onClick={uploadAll}>
+            {sending ? 'Envoi…' : 'Tout uploader'}
           </Button>
         </div>
-        {items.length === 0 && <p className="text-xs text-ink-soft">File vide. Les signalements en attente de réseau apparaissent ici.</p>}
-        <ul className="space-y-2">
-          {items.filter((b) => !b.chunk).map((b) => (
-            <li key={b.bundle_id} className="flex items-center justify-between gap-2 rounded-md border border-line px-2 py-1.5 text-xs">
-              <span className="min-w-0 flex-1 truncate">
-                <span className="font-mono">{b.bundle_id.slice(0, 8)}</span>
-                {' · '}{b.sealed ? '(chiffré)' : (b.message?.slice(0, 60) ?? '(sans texte)')}
-                {b.fragment_total ? ` · média (${b.fragment_total} frag.)` : ''}
+        <p role="status" aria-live="polite" className="text-xs text-ink-soft">
+          {outboxSummary(outboxView.counts, outboxView.fragmentCount)}
+        </p>
+        {items.length === 0 && meta.sent.length === 0 && <p className="text-xs text-ink-soft">File vide. Les signalements en attente de réseau apparaissent ici.</p>}
+        <ul className="space-y-2" aria-label="Signalements en attente d'envoi">
+          {outboxView.items.map((item) => (
+            <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-2 py-1.5 text-xs">
+              <span className="min-w-0 flex-1 basis-full truncate sm:basis-auto">
+                <span className="font-mono">{item.shortId}</span>
+                {' · '}{item.label}
+                {item.detail ? ` · ${item.detail}` : ''}
               </span>
-              <Button size="sm" onClick={() => showQr(b)}>QR</Button>
-              <Button size="sm" variant="ghost" onClick={() => removeItem(b.bundle_id)}>Retirer</Button>
+              <Badge tone={item.status === 'failed' ? 'danger' : item.status === 'sending' ? 'info' : 'warn'}>
+                {item.status === 'failed' ? 'Échec' : item.status === 'sending' ? 'Envoi…' : 'En attente'}
+              </Badge>
+              {item.status === 'failed' && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={sending}
+                  onClick={uploadAll}
+                  aria-label={`Réessayer l'envoi du signalement ${item.shortId}`}
+                >
+                  Réessayer
+                </Button>
+              )}
+              <Button size="sm" onClick={() => showQrById(item.id)} aria-label={`Afficher le QR du signalement ${item.shortId}`}>QR</Button>
+              <Button size="sm" variant="ghost" onClick={() => removeItem(item.id)} aria-label={`Retirer le signalement ${item.shortId} de la file`}>Retirer</Button>
             </li>
           ))}
         </ul>
+        {itemErrorHint(outboxView.items)}
+        {meta.sent.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-ink-soft">Envoyés récemment</h3>
+              <Button size="sm" variant="ghost" onClick={clearSent} aria-label="Effacer l'historique des signalements envoyés">
+                Effacer
+              </Button>
+            </div>
+            <ul className="space-y-2" aria-label="Signalements envoyés">
+              {meta.sent.map((s) => (
+                <li key={`${s.id}-${s.at}`} className="flex items-center justify-between gap-2 rounded-md border border-line px-2 py-1.5 text-xs">
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="font-mono">{s.id.slice(0, 8)}</span>
+                    {' · '}{s.label}
+                  </span>
+                  <Badge tone="success">Envoyé</Badge>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {qrUrl && (
           <div className="flex flex-col items-center gap-1 pt-2">
             <img src={qrUrl} alt="QR du bundle" className="h-56 w-56 rounded-md bg-white p-2" />
@@ -512,6 +729,32 @@ export default function MeshFieldPage() {
             <Button variant="ghost" onClick={() => setScanning(false)} className="w-full">Fermer</Button>
           </div>
         )}
+        <div>
+          <div id={FILE_SCAN_ID} className="hidden" aria-hidden="true" />
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (!file) return;
+              setError(null);
+              const reader = new Html5Qrcode(FILE_SCAN_ID);
+              try {
+                ingestQrText(await reader.scanFile(file, false));
+              } catch {
+                setError('Image illisible : aucun QR WASH détecté.');
+              } finally {
+                reader.clear();
+              }
+            }}
+          />
+          <Button variant="ghost" onClick={() => fileRef.current?.click()} className="w-full">
+            … ou importer une photo de QR
+          </Button>
+        </div>
       </Card>
 
       {gateway && (

@@ -11,6 +11,7 @@ import {
 } from './mesh-sdk';
 import type { MeshBundle } from './mesh-sdk';
 import type { School } from './api';
+import { registerMeshSync } from './mesh-sync';
 
 export {
   MEDIA_MAX_BYTES,
@@ -64,4 +65,14 @@ export function cachedSchools(): School[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Ajout outbox + demande de Background Sync best-effort (voir mesh-sync).
+ * À utiliser pour chaque ajout : création locale comme réception QR.
+ */
+export function outboxAdd(outbox: MeshOutbox, bundle: MeshBundle): boolean {
+  const added = outbox.add(bundle);
+  if (added) void registerMeshSync();
+  return added;
 }
