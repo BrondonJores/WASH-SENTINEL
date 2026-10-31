@@ -714,3 +714,43 @@ class ListNonRegressionVoiceTest(unittest.TestCase):
         from app.agent_loop import route_intent
         self.assertEqual(
             route_intent("quels travaux réalisés cette semaine ?"), "list")
+
+
+class FollowUpDateRoutingTest(unittest.TestCase):
+    """Non-régression : le bouton 'autre date' routait 'other' -> création."""
+
+    def test_old_button_query_routes_list(self) -> None:
+        from app.agent_loop import route_intent
+        self.assertEqual(
+            route_intent("Voir les interventions à une autre date"), "list")
+
+    def test_create_forms_unaffected(self) -> None:
+        from app.agent_loop import route_intent
+        for q in ("enregistre une intervention", "note une panne",
+                  "journalise les travaux", "mets à jour le journal"):
+            self.assertEqual(route_intent(q), "create")
+
+
+class CompactObservationTest(unittest.TestCase):
+    """Le LLM reçoit un résumé, les cartes gardent le détail complet."""
+
+    def test_heatmap_days_stripped_but_totals_kept(self) -> None:
+        from app.agent_loop import _compact_observation
+        obs = {"insight": "x",
+               "calendar_heatmap": {"total_pannes": 5, "start": "s", "end": "e",
+                                    "days": [{"date": "d1", "pannes": 2},
+                                             {"date": "d2", "pannes": 3}]},
+               "budget_compare": {"total_XAF": 100,
+                                  "ecoles": [{"nom": "E1", "cumul_reparations_XAF": 100}]}}
+        slim = _compact_observation("repair_trends", obs)
+        self.assertEqual(slim["calendar_heatmap"]["total_pannes"], 5)
+        self.assertEqual(slim["calendar_heatmap"]["jour_max"], "d2")
+        self.assertNotIn("days", slim["calendar_heatmap"])
+        self.assertEqual(slim["budget_compare"]["top_ecole"], "E1")
+        self.assertNotIn("ecoles", slim["budget_compare"])
+        # Original intact pour les cartes.
+        self.assertEqual(len(obs["calendar_heatmap"]["days"]), 2)
+
+    def test_non_dict_passthrough(self) -> None:
+        from app.agent_loop import _compact_observation
+        self.assertEqual(_compact_observation("x", "brut"), "brut")

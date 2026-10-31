@@ -530,3 +530,301 @@ class RepairTrendsEnrichedTest(unittest.TestCase):
         for key in ("total_cost", "currency", "total_incidents",
                     "total_days_lost", "avg_cost_per_month", "trend_direction"):
             self.assertIn(key, res["figures"])
+
+
+class CalendarHeatmapTest(unittest.TestCase):
+    """Nouveau payload calendar_heatmap : bucketing, fuseau, vide."""
+
+    def test_bucketing_groups_same_day(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        from app.agent_tools import build_calendar_heatmap
+        try:
+            from zoneinfo import ZoneInfo
+            douala = ZoneInfo("Africa/Douala")
+        except Exception:
+            douala = timezone.utc
+        stamp = datetime.now(timezone.utc).replace(
+            hour=12, minute=0, second=0, microsecond=0)
+        expected_day = stamp.astimezone(douala).date().isoformat()
+        pool = [
+            {"id": 1, "school_id": 1, "school_name": "E1",
+             "reported_at": stamp.isoformat()},
+            {"id": 2, "school_id": 2, "school_name": "E2",
+             "reported_at": (stamp + timedelta(hours=1)).isoformat()},
+        ]
+        res = build_calendar_heatmap(pool, [])
+        self.assertEqual(len(res["days"]), 90)
+        day = next(d for d in res["days"] if d["date"] == expected_day)
+        self.assertEqual(day["pannes"], 2)
+        self.assertEqual(day["incidents"], 2)
+        self.assertEqual(sorted(day["ecoles_touchees"]), ["E1", "E2"])
+        self.assertEqual(res["total_pannes"], 2)
+        dates = [d["date"] for d in res["days"]]
+        self.assertEqual(dates, sorted(dates))
+
+    def test_timezone_is_douala_civil_day(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        from app.agent_tools import build_calendar_heatmap
+        # 23h30 UTC = 00h30 le lendemain à Douala (UTC+1, sans DST).
+        now = datetime(2026, 11, 1, 0, 30, tzinfo=timezone(timedelta(hours=1)))
+        pool = [{"id": 9, "school_id": 1, "school_name": "E1",
+                 "reported_at": "2026-10-31T23:30:00+00:00"}]
+        res = build_calendar_heatmap(pool, [], now=now)
+        by_date = {d["date"]: d for d in res["days"]}
+        if res["timezone"] == "Africa/Douala":
+            self.assertEqual(res["end"], "2026-11-01")
+            self.assertEqual(by_date["2026-11-01"]["pannes"], 1)
+            self.assertEqual(by_date["2026-10-31"]["pannes"], 0)
+        else:  # repli UTC documenté
+            self.assertTrue(res["timezone"].startswith("UTC"))
+            self.assertEqual(by_date["2026-10-31"]["pannes"], 1)
+
+    def test_empty_pool_yields_90_zero_days(self) -> None:
+        from app.agent_tools import build_calendar_heatmap
+        res = build_calendar_heatmap([], [])
+        self.assertEqual(len(res["days"]), 90)
+        self.assertEqual(res["total_pannes"], 0)
+        self.assertEqual(res["total_incidents"], 0)
+        for day in res["days"]:
+            self.assertEqual(day["pannes"], 0)
+            self.assertEqual(day["ecoles_touchees"], [])
+        self.assertIn("timezone", res)
+        self.assertEqual(res["window_days"], 90)
+
+
+class IncidentTimelineTest(unittest.TestCase):
+    """Nouveau payload timeline : ordre et fait/non-fait selon statut."""
+
+    def test_steps_order_and_shape(self) -> None:
+        from app.agent_tools import build_incident_timeline
+        steps = build_incident_timeline(
+            {"status": "reported", "reported_at": "2026-10-20T00:00:00Z"})
+        self.assertEqual([s["etape"] for s in steps],
+                         ["signale", "triage", "assigne", "en_cours", "resolu"])
+        for step in steps:
+            for key in ("etape", "step", "label", "date", "fait", "done"):
+                self.assertIn(key, step)
+        self.assertEqual(steps[0]["date"], "2026-10-20T00:00:00Z")
+        self.assertTrue(all(s["date"] is None for s in steps[1:]))
+
+    def test_done_flags_follow_status(self) -> None:
+        from app.agent_tools import build_incident_timeline
+        mid = build_incident_timeline({"status": "in_progress"})
+        self.assertEqual([s["fait"] for s in mid],
+                         [True, True, True, True, False])
+        self.assertEqual([s["done"] for s in mid],
+                         [True, True, True, True, False])
+        done = build_incident_timeline({"status": "resolved"})
+        self.assertTrue(all(s["fait"] for s in done))
+        closed = build_incident_timeline({"status": "closed"})
+        self.assertTrue(all(s["fait"] for s in closed))
+        early = build_incident_timeline({"status": "triaged"})
+        self.assertEqual([s["fait"] for s in early],
+                         [True, True, False, False, False])
+
+    def test_unknown_status_yields_only_reported(self) -> None:
+        from app.agent_tools import build_incident_timeline
+        steps = build_incident_timeline({"status": "bizarre"})
+        self.assertEqual([s["fait"] for s in steps],
+                         [True, False, False, False, False])
+
+    def test_explain_incident_carries_timeline(self) -> None:
+        res = TOOL_EXECUTORS["explain_incident"](
+            {"incident_id": 5},
+            {"incidents": [{"id": 5, "school_name": "E", "district": "W",
+                            "title": "Pompe cassée", "category": "water_point",
+                            "urgency": "critical", "status": "assigned",
+                            "priority_score": 80, "affected_students": 10,
+                            "summary": "x",
+                            "reported_at": "2026-10-20T00:00:00Z"}]})
+        self.assertNotIn("error", res)
+        self.assertEqual([s["etape"] for s in res["timeline"]],
+                         ["signale", "triage", "assigne", "en_cours", "resolu"])
+        self.assertEqual([s["fait"] for s in res["timeline"]],
+                         [True, True, True, False, False])
+
+
+class BudgetCompareTest(unittest.TestCase):
+    """Nouveau payload budget_compare : cumuls, top 5, parts."""
+
+    @staticmethod
+    def _ctx() -> dict:
+        schools = [{"school_id": i, "school_name": f"E{i}", "district": "Wouri"}
+                   for i in range(1, 8)]
+        return {
+            "schools": schools,
+            "incidents": [
+                {"id": 101, "school_id": 1, "school_name": "E1",
+                 "category": "water_point", "status": "resolved",
+                 "reported_at": "2026-09-01T00:00:00Z"},
+                {"id": 102, "school_id": 1, "school_name": "E1",
+                 "category": "toilets_latrines", "status": "resolved",
+                 "reported_at": "2026-09-02T00:00:00Z"},
+                {"id": 103, "school_id": 2, "school_name": "E2",
+                 "category": "water_point", "status": "reported",
+                 "reported_at": "2026-09-03T00:00:00Z"},
+            ],
+            "recent_incidents": [],
+            "maintenance_logs": [
+                {"school_id": 1, "incident_id": 101, "cost_amount": 60000,
+                 "repaired_at": "2026-09-05T00:00:00Z"},
+                {"school_id": 1, "incident_id": 102, "cost_amount": 15000,
+                 "repaired_at": "2026-09-06T00:00:00Z"},
+                {"school_id": 2, "incident_id": 103, "cost_amount": 5000,
+                 "repaired_at": "2026-09-07T00:00:00Z"},
+            ],
+        }
+
+    def test_cumuls_and_incident_counts(self) -> None:
+        from app.agent_tools import build_budget_compare
+        res = build_budget_compare(self._ctx())
+        e1 = next(e for e in res["ecoles"] if e["school_id"] == 1)
+        self.assertEqual(e1["nom"], "E1")
+        self.assertEqual(e1["cumul_reparations_XAF"], 75000)
+        self.assertEqual(e1["total_cost_XAF"], 75000)
+        self.assertEqual(e1["nb_pannes"], 2)
+        self.assertEqual(e1["incidents"], 2)
+        self.assertEqual(res["currency"], "XAF")
+        self.assertEqual(res["total_XAF"], 80000)
+
+    def test_top5_sorted_desc(self) -> None:
+        from app.agent_tools import build_budget_compare
+        ctx = self._ctx()
+        for i in range(3, 8):
+            ctx["maintenance_logs"].append(
+                {"school_id": i, "cost_amount": 1000 * i,
+                 "repaired_at": "2026-09-08T00:00:00Z"})
+        res = build_budget_compare(ctx)
+        self.assertLessEqual(len(res["ecoles"]), 5)
+        self.assertEqual(res["top"], 5)
+        cumuls = [e["cumul_reparations_XAF"] for e in res["ecoles"]]
+        self.assertEqual(cumuls, sorted(cumuls, reverse=True))
+        self.assertEqual(res["ecoles"][0]["school_id"], 1)
+
+    def test_category_shares(self) -> None:
+        from app.agent_tools import build_budget_compare
+        res = build_budget_compare(self._ctx())
+        by_cat = res["par_categorie_XAF"]
+        self.assertEqual(by_cat["water_point"], 65000)
+        self.assertEqual(by_cat["toilets_latrines"], 15000)
+        self.assertEqual(res["by_category_XAF"], by_cat)
+        self.assertAlmostEqual(res["parts_pct"]["water_point"], 81.2, places=1)
+        self.assertAlmostEqual(res["parts_pct"]["toilets_latrines"], 18.8, places=1)
+        self.assertEqual(res["shares_pct"], res["parts_pct"])
+        self.assertAlmostEqual(sum(res["parts_pct"].values()), 100.0, places=0)
+
+    def test_unlinked_costs_go_to_unknown(self) -> None:
+        from app.agent_tools import build_budget_compare
+        ctx = self._ctx()
+        ctx["maintenance_logs"].append(
+            {"school_id": 1, "cost_amount": 20000,
+             "repaired_at": "2026-09-09T00:00:00Z"})
+        res = build_budget_compare(ctx)
+        self.assertEqual(res["par_categorie_XAF"]["unknown"], 20000)
+
+
+class NewPayloadsNonRegressionTest(unittest.TestCase):
+    """Les payloads legacy restent intacts malgré les ajouts."""
+
+    def test_repair_trends_legacy_plus_new(self) -> None:
+        res = TOOL_EXECUTORS["repair_trends"](
+            {"school": 1, "months": 2}, RepairTrendsEnrichedTest._ctx())
+        for key in ("school_id", "school_name", "months", "insight",
+                    "labels", "datasets", "figures", "district",
+                    "per_school", "by_urgency", "totals"):
+            self.assertIn(key, res)
+        self.assertIn("calendar_heatmap", res)
+        self.assertIn("budget_compare", res)
+        self.assertEqual(len(res["calendar_heatmap"]["days"]), 90)
+        self.assertIn("ecoles", res["budget_compare"])
+
+    def test_summarize_and_explain_legacy_intact(self) -> None:
+        ctx = {"incidents": [
+            {"id": 5, "status": "reported", "urgency": "critical",
+             "category": "water_point", "affected_students": 10,
+             "school_name": "E1", "district": "W", "title": "Pompe cassée",
+             "priority_score": 90, "summary": "x",
+             "reported_at": "2026-10-20T00:00:00Z"},
+        ]}
+        district = TOOL_EXECUTORS["summarize_district"]({}, ctx)
+        for key in ("open_incidents", "by_urgency", "by_category",
+                    "total_affected_students", "schools_involved", "insight"):
+            self.assertIn(key, district)
+        incident = TOOL_EXECUTORS["explain_incident"]({"incident_id": 5}, ctx)
+        for key in ("insight", "id", "school_name", "title", "category",
+                    "urgency", "status", "reported_at"):
+            self.assertIn(key, incident)
+
+
+class RepairTrendsDistrictTest(unittest.TestCase):
+    """District seul (sans école) : agrégation, pas d'erreur."""
+
+    @staticmethod
+    def _ctx() -> dict:
+        from datetime import datetime, timezone
+        stamp = datetime.now(timezone.utc).replace(day=1).isoformat()
+        return {
+            "schools": [
+                {"school_id": 1, "school_name": "E1", "district": "Mvila"},
+                {"school_id": 2, "school_name": "E2", "district": "Mvila"},
+                {"school_id": 3, "school_name": "E3", "district": "Wouri"},
+            ],
+            "maintenance_logs": [
+                {"school_id": 1, "repaired_at": stamp, "cost_amount": 90000,
+                 "currency": "XAF", "days_without_service": 2},
+                {"school_id": 2, "repaired_at": stamp, "cost_amount": 10000,
+                 "currency": "XAF", "days_without_service": 1},
+            ],
+            "recent_incidents": [
+                {"school_id": 1, "reported_at": stamp, "urgency": "critical"},
+                {"school_id": 3, "reported_at": stamp, "urgency": "low"},
+            ],
+        }
+
+    def test_district_aggregates_without_school(self) -> None:
+        res = TOOL_EXECUTORS["repair_trends"](
+            {"district": "Mvila", "months": 2}, self._ctx())
+        self.assertNotIn("error", res)
+        self.assertIsNone(res["school_id"])
+        self.assertEqual(res["school_name"], "District Mvila")
+        self.assertEqual(res["figures"]["total_cost"], 100000)
+        self.assertEqual(res["figures"]["total_incidents"], 1)
+        self.assertIn("calendar_heatmap", res)
+        self.assertIn("budget_compare", res)
+
+    def test_unknown_district_still_errors(self) -> None:
+        res = TOOL_EXECUTORS["repair_trends"](
+            {"district": "Nowhere", "months": 2}, self._ctx())
+        self.assertIn("error", res)
+
+
+class ExplainIncidentRefTest(unittest.TestCase):
+    """explain_incident accepte référence et id (l'utilisateur donne la réf)."""
+
+    @staticmethod
+    def _ctx() -> dict:
+        return {"incidents": [
+            {"id": 7, "reference_code": "WASH-2026-QJHIPH", "title": "Latrines bouchées",
+             "school_name": "Bonanjo", "status": "triaged", "urgency": "medium",
+             "priority_score": 40, "affected_students": 0, "reported_at": None},
+            {"id": 5, "reference_code": "WASH-2026-ZQNU8W", "title": "Fuite robinet",
+             "school_name": "Nkol", "status": "reported", "urgency": "medium",
+             "priority_score": 30, "affected_students": 0, "reported_at": None},
+        ]}
+
+    def test_reference_code_resolves(self) -> None:
+        res = TOOL_EXECUTORS["explain_incident"](
+            {"incident_id": "WASH-2026-QJHIPH"}, self._ctx())
+        self.assertNotIn("error", res)
+        self.assertEqual(res["id"], 7)
+        self.assertIn("timeline", res)
+
+    def test_numeric_id_still_works(self) -> None:
+        res = TOOL_EXECUTORS["explain_incident"]({"incident_id": 5}, self._ctx())
+        self.assertNotIn("error", res)
+        self.assertEqual(res["reference_code"], "WASH-2026-ZQNU8W")
+
+    def test_unknown_lists_choices(self) -> None:
+        res = TOOL_EXECUTORS["explain_incident"]({"incident_id": "ZZZ"}, self._ctx())
+        self.assertIn("error", res)
+        self.assertIn("WASH-2026-QJHIPH", res["error"])

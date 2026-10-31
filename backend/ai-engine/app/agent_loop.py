@@ -60,6 +60,7 @@ LIST_INTENT_HINTS = (
     "réalisé", "realise", "aujourd'hui", "aujourd’hui", "aujourdhui",
     "hier", "semaine", "mois", "liste", "lister", "combien",
     "quels travaux", "historique", "passé", "passe", "affiche", "montre",
+    "voir", "date", "autre date", "quel jour",
 )
 
 CREATE_INTENT_HINTS = (
@@ -325,6 +326,41 @@ def _summarize_ranking(obs: dict[str, Any]) -> str:
     )
 
 
+def _compact_observation(name: str, obs: Any) -> Any:
+    """Version allégée d'une observation pour le LLM.
+
+    Les gros tableaux (90 jours heatmap, top écoles) vivent dans les cartes UI ;
+    le modèle ne reçoit que les totaux + le jour max, sinon les petits modèles
+    saturent et décrochent (réponse en anglais, mode 'description de JSON').
+    L'observation complète reste dans `executed` pour _build_cards.
+    """
+    if not isinstance(obs, dict):
+        return obs
+    slim = dict(obs)
+    hm = slim.get("calendar_heatmap")
+    if isinstance(hm, dict):
+        days = hm.get("days") or []
+        hot = max(days, key=lambda d: d.get("pannes", 0) or 0, default=None) or {}
+        slim["calendar_heatmap"] = {
+            "total_pannes": hm.get("total_pannes"),
+            "start": hm.get("start"),
+            "end": hm.get("end"),
+            "jour_max": hot.get("date"),
+            "pannes_jour_max": hot.get("pannes", 0),
+            "note": "Détail jour par jour dans la carte.",
+        }
+    bc = slim.get("budget_compare")
+    if isinstance(bc, dict):
+        top = (bc.get("ecoles") or [{}])[0] or {}
+        slim["budget_compare"] = {
+            "total_XAF": bc.get("total_XAF"),
+            "top_ecole": top.get("nom"),
+            "top_cout_XAF": top.get("cumul_reparations_XAF"),
+            "note": "Détail par école dans la carte.",
+        }
+    return slim
+
+
 def _summarize_analysis(obs: dict[str, Any]) -> str:
     verdict = {
         "REPLACE_EQUIPMENT": "remplacer l'équipement",
@@ -494,7 +530,7 @@ class AgentLoop:
                 fresh = True
                 observation = self._execute_tool(name, arguments, context)
                 executed.append((name, observation))
-                messages.append(self.llm.format_tool_result(name, observation, call.get("id")))
+                messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
             if not fresh:
                 if nudged:
                     break
@@ -572,7 +608,7 @@ class AgentLoop:
             arguments = call.get("arguments", {}) or {}
             observation = self._execute_tool(name, arguments, context)
             executed.append((name, observation))
-            messages.append(self.llm.format_tool_result(name, observation, call.get("id")))
+            messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not executed:
             return self._fallback_answer(executed)
         final = await self.llm.chat(messages, tools)
@@ -612,7 +648,7 @@ class AgentLoop:
             seen.add(key)
             observation = self._execute_tool(name, arguments, context)
             executed.append((name, observation))
-            messages.append(self.llm.format_tool_result(name, observation, call.get("id")))
+            messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not _has_read_tool(executed):
             return UNVERIFIED_HONEST_ANSWER
         final = await self.llm.chat(messages, tools)
@@ -683,6 +719,15 @@ class AgentLoop:
                     title=f"Incident {observation.get('reference_code') or observation.get('id', '?')}",
                     data=observation,
                 ))
+                if observation.get("timeline"):
+                    cards.append(AgentCard(
+                        type="incident_timeline",
+                        title=f"Suivi — {observation.get('reference_code') or observation.get('id', '?')}",
+                        data={"timeline": observation["timeline"],
+                              "incident_id": observation.get("id"),
+                              "reference_code": observation.get("reference_code"),
+                              "status": observation.get("status")},
+                    ))
             elif name in ("prepare_report", "prepare_incident", "prepare_maintenance_log"):
                 if observation.get("candidates"):
                     cards.append(AgentCard(
@@ -723,6 +768,18 @@ class AgentLoop:
                     title=f"Tendances — {observation.get('school_name', '?')} ({observation.get('months', 3)} mois)",
                     data=observation,
                 ))
+                if observation.get("calendar_heatmap"):
+                    cards.append(AgentCard(
+                        type="calendar_heatmap",
+                        title=f"Calendrier des pannes — {observation.get('school_name', '?')}",
+                        data=observation["calendar_heatmap"],
+                    ))
+                if observation.get("budget_compare"):
+                    cards.append(AgentCard(
+                        type="budget_compare",
+                        title="Comparaison des budgets réparations",
+                        data=observation["budget_compare"],
+                    ))
             elif name == "list_maintenance_logs":
                 cards.append(AgentCard(
                     type="maintenance_logs",

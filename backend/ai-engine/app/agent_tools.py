@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import difflib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+try:
+    from zoneinfo import ZoneInfo
+    _DOUALA_TZ = ZoneInfo("Africa/Douala")
+    _DOUALA_TZ_NAME = "Africa/Douala"
+except Exception:
+    # Repli documenté : journées civiles UTC (voir payload calendar_heatmap).
+    _DOUALA_TZ = timezone.utc
+    _DOUALA_TZ_NAME = "UTC (repli, base Afrique/Douala indisponible)"
 
 from .decision_agent import DecisionAgent
 from .schemas import SchoolMaintenanceHistory
@@ -62,6 +71,201 @@ def _month_buckets(months: int, now: datetime) -> list[tuple[int, int]]:
             month, year = 12, year - 1
     buckets.reverse()
     return buckets
+
+
+def _float_cost(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _dedup_incidents(*pools: Any) -> list[dict[str, Any]]:
+    """Fusion dédupliquée de pools d'incidents (incidents + recent_incidents).
+
+    Clé id exact quand présent, sinon (école, date, titre). Ordre stable.
+    """
+    seen: set[Any] = set()
+    merged: list[dict[str, Any]] = []
+    for pool in pools:
+        for incident in pool or []:
+            if not isinstance(incident, dict):
+                continue
+            if incident.get("id") is not None:
+                key = ("id", incident.get("id"))
+            else:
+                key = ("row", incident.get("school_id"),
+                       str(incident.get("reported_at")),
+                       str(incident.get("title") or incident.get("summary")))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(incident)
+    return merged
+
+
+HEATMAP_WINDOW_DAYS = 90
+
+
+def build_calendar_heatmap(pool: list[dict[str, Any]] | None,
+                           schools: list[dict[str, Any]] | None = None,
+                           now: datetime | None = None,
+                           days: int = HEATMAP_WINDOW_DAYS) -> dict[str, Any]:
+    """Calendrier des pannes sur les `days` derniers jours (déterministe, pur).
+
+    Journées civiles Afrique/Douala (UTC+1, sans heure d'été) ; repli UTC
+    documenté dans la clé "timezone" si la base tz est indisponible.
+    Chaque jour est présent même sans panne (pannes=0, liste vide).
+    """
+    tz = _DOUALA_TZ
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    today = moment.astimezone(tz).date()
+    start = today - timedelta(days=days - 1)
+    names = {s.get("school_id"): s.get("school_name") for s in (schools or [])
+             if isinstance(s, dict)}
+    buckets: dict[str, dict[str, Any]] = {}
+    for offset in range(days):
+        buckets[(start + timedelta(days=offset)).isoformat()] = {"pannes": 0, "ecoles": set()}
+    for incident in pool or []:
+        if not isinstance(incident, dict):
+            continue
+        dt = _parse_dt(incident.get("reported_at"))
+        if dt is None:
+            continue
+        day = dt.astimezone(tz).date().isoformat()
+        if day not in buckets:
+            continue
+        buckets[day]["pannes"] += 1
+        label = incident.get("school_name") or names.get(incident.get("school_id")) or "?"
+        buckets[day]["ecoles"].add(str(label))
+    day_rows = [
+        {"date": day, "pannes": cell["pannes"], "incidents": cell["pannes"],
+         "ecoles_touchees": sorted(cell["ecoles"]), "schools": sorted(cell["ecoles"])}
+        for day, cell in sorted(buckets.items())
+    ]
+    total = sum(cell["pannes"] for cell in buckets.values())
+    return {
+        "timezone": _DOUALA_TZ_NAME,
+        "window_days": days,
+        "start": start.isoformat(),
+        "end": today.isoformat(),
+        "days": day_rows,
+        "total_pannes": total,
+        "total_incidents": total,
+    }
+
+
+TIMELINE_STEPS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("signale", "Signalé", frozenset({"reported", "reporte", "signale", "new", "open", "ouvert"})),
+    ("triage", "Trié", frozenset({"triaged", "triage"})),
+    ("assigne", "Assigné", frozenset({"assigned", "assigne"})),
+    ("en_cours", "En cours", frozenset({"in_progress", "en_cours", "ongoing"})),
+    ("resolu", "Résolu", frozenset({"resolved", "closed", "resolu", "clos", "ferme"})),
+)
+
+
+def build_incident_timeline(incident: dict[str, Any]) -> list[dict[str, Any]]:
+    """Étapes ordonnées dérivées du statut (déterministe, pur).
+
+    Statut inconnu → niveau 0 (seul « signalé » fait). Seule l'étape
+    « signalé » porte une date (reported_at), les autres None (non fourni).
+    """
+    status = str((incident or {}).get("status") or "").strip().lower()
+    level = 0
+    for index, (_, _, aliases) in enumerate(TIMELINE_STEPS):
+        if status in aliases:
+            level = index
+            break
+    reported = (incident or {}).get("reported_at")
+    steps = []
+    for index, (code, label, _) in enumerate(TIMELINE_STEPS):
+        done = index <= level
+        steps.append({
+            "etape": code, "step": code, "label": label,
+            "date": reported if index == 0 else None,
+            "fait": done, "done": done,
+        })
+    return steps
+
+
+WASH_BUDGET_CATEGORIES = ("water_point", "toilets_latrines", "handwashing", "sewage_drainage")
+
+
+def build_budget_compare(context: dict[str, Any], district: Any = None,
+                         top: int = 5) -> dict[str, Any]:
+    """Comparaison budgétaire : top écoles par cumul réparations + parts WASH.
+
+    Cumuls = somme brute des cost_amount (XAF supposé) de maintenance_logs,
+    sans filtre de date. Catégorie d'un coût = catégorie de l'incident lié
+    (incident_id → incidents/recent_incidents, repli champ category du log),
+    sinon bucket "unknown". nb_pannes = incidents + recent_incidents dédupliqués.
+    """
+    dlow = str(district or "").strip().lower()
+    schools = [s for s in context.get("schools", [])
+               if not dlow or str(s.get("district", "")).lower() == dlow]
+    scope_sids = {s.get("school_id") for s in schools}
+    logs = [log for log in context.get("maintenance_logs", [])
+            if isinstance(log, dict) and log.get("school_id") in scope_sids]
+    pool = [i for i in _dedup_incidents(context.get("incidents"),
+                                        context.get("recent_incidents"))
+            if i.get("school_id") in scope_sids]
+    cat_by_id: dict[Any, str] = {}
+    for incident in pool:
+        if incident.get("id") is not None and incident.get("category"):
+            cat_by_id[incident["id"]] = str(incident["category"])
+    rows: dict[Any, dict[str, Any]] = {}
+    for school in schools:
+        sid = school.get("school_id")
+        rows[sid] = {
+            "school_id": sid,
+            "nom": school.get("school_name"),
+            "school_name": school.get("school_name"),
+            "cumul_reparations_XAF": 0.0,
+            "total_cost_XAF": 0.0,
+            "nb_pannes": 0,
+            "incidents": 0,
+        }
+    for log in logs:
+        row = rows.get(log.get("school_id"))
+        if row is not None:
+            cumul = round(row["cumul_reparations_XAF"] + _float_cost(log.get("cost_amount")), 2)
+            row["cumul_reparations_XAF"] = cumul
+            row["total_cost_XAF"] = cumul
+    for incident in pool:
+        row = rows.get(incident.get("school_id"))
+        if row is not None:
+            row["nb_pannes"] += 1
+            row["incidents"] += 1
+    ecoles = sorted(rows.values(),
+                    key=lambda r: r["cumul_reparations_XAF"], reverse=True)[:top]
+    by_category: dict[str, float] = {cat: 0.0 for cat in WASH_BUDGET_CATEGORIES}
+    unknown = 0.0
+    for log in logs:
+        category = cat_by_id.get(log.get("incident_id")) or log.get("category")
+        cost = _float_cost(log.get("cost_amount"))
+        if category in by_category:
+            by_category[category] = round(by_category[category] + cost, 2)
+        else:
+            unknown = round(unknown + cost, 2)
+    if unknown:
+        by_category["unknown"] = unknown
+    total = round(sum(by_category.values()), 2)
+    shares = {cat: (round(cost / total * 100, 1) if total > 0 else 0.0)
+              for cat, cost in by_category.items()}
+    return {
+        "ecoles": ecoles,
+        "top": top,
+        "district": district or None,
+        "par_categorie_XAF": dict(by_category),
+        "by_category_XAF": dict(by_category),
+        "parts_pct": dict(shares),
+        "shares_pct": dict(shares),
+        "total_XAF": total,
+        "total_cost_XAF": total,
+        "currency": "XAF",
+    }
 
 
 def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -177,7 +381,10 @@ def tool_explain_incident(args: dict[str, Any], context: dict[str, Any]) -> dict
     incident_id = args.get("incident_id")
     incident = next((i for i in context.get("incidents", []) if i.get("id") == incident_id), None)
     if not incident:
-        return {"error": f"Incident {incident_id} introuvable dans le contexte."}
+        # L'utilisateur donne une référence (WASH-2026-XXXX), pas un id numérique.
+        incident = _resolve_incident(context, incident_id)
+    if not incident:
+        return {"error": f"Incident {incident_id} introuvable. Choix : {_incident_choices(context.get('incidents', []))}"}
     dt = _parse_dt(incident.get("reported_at"))
     since = f", signalé le {dt.day} {FRENCH_MONTHS[dt.month]}" if dt else ""
     insight = (f"Priorité {_fmt_1(incident.get('priority_score', 0))}/100 : "
@@ -197,6 +404,7 @@ def tool_explain_incident(args: dict[str, Any], context: dict[str, Any]) -> dict
         "affected_students": incident.get("affected_students"),
         "summary": incident.get("summary"),
         "reported_at": incident.get("reported_at"),
+        "timeline": build_incident_timeline(incident),
     }
 
 
@@ -617,14 +825,23 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     district = str(args.get("district") or "").strip()
     dlow = district.lower()
     school = _resolve_school(context, args.get("school"))
-    if not school:
+    district_sids = {s.get("school_id") for s in context.get("schools", [])
+                     if dlow and str(s.get("district", "")).lower() == dlow}
+    if not school and not district_sids:
         return {"error": f"École '{args.get('school')}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."}
     months = min(max(int(args.get("months", 3) or 3), 1), 12)
-    school_id = school["school_id"]
+    if school:
+        school_id: Any = school["school_id"]
+        school_name = school.get("school_name")
+        logs = [l for l in context.get("maintenance_logs", []) if l.get("school_id") == school_id]
+        recent = [i for i in context.get("recent_incidents", []) if i.get("school_id") == school_id]
+    else:
+        # Mode district : agrégation de toutes les écoles du district.
+        school_id = None
+        school_name = f"District {district}"
+        logs = [l for l in context.get("maintenance_logs", []) if l.get("school_id") in district_sids]
+        recent = [i for i in context.get("recent_incidents", []) if i.get("school_id") in district_sids]
     now = datetime.now(timezone.utc)
-
-    logs = [l for l in context.get("maintenance_logs", []) if l.get("school_id") == school_id]
-    recent = [i for i in context.get("recent_incidents", []) if i.get("school_id") == school_id]
 
     def month_key(value: Any) -> tuple[int, int] | None:
         dt = _parse_dt(value)
@@ -723,7 +940,7 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     }
     return {
         "school_id": school_id,
-        "school_name": school.get("school_name"),
+        "school_name": school_name,
         "months": months,
         "insight": insight,
         "labels": labels,
@@ -744,6 +961,12 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         "per_school": per_school,
         "by_urgency": by_urgency,
         "totals": totals,
+        "calendar_heatmap": build_calendar_heatmap(
+            [i for i in _dedup_incidents(context.get("incidents"),
+                                         context.get("recent_incidents"))
+             if i.get("school_id") in scope_sids],
+            scope_schools),
+        "budget_compare": build_budget_compare(context, district or None),
     }
 
 
@@ -920,7 +1143,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "description": "Récupère le détail factuel d'un incident pour l'expliquer simplement.",
             "parameters": {
                 "type": "object",
-                "properties": {"incident_id": {"type": "integer", "description": "Identifiant de l'incident"}},
+                "properties": {"incident_id": {"description": "Id numérique OU référence (WASH-2026-XXXX) OU fragment du titre"}},
                 "required": ["incident_id"],
             },
         },
@@ -944,15 +1167,15 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "repair_trends",
-            "description": "Tendances mensuelles d'une école sur N mois : pannes, coûts de réparation, jours sans service. À utiliser pour tout historique, tendance ou graphique. Option district pour comparer les écoles (top 5, urgences, totaux).",
+            "description": "Tendances mensuelles sur N mois : pannes, coûts de réparation, jours sans service, heatmap 90 jours, comparatif budget. Avec school : une école. Avec district seul (ex: Mvila) : TOUT le district agrégé. À utiliser pour tout historique, tendance ou graphique.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"},
+                    "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école (optionnel si district)"},
                     "months": {"type": "integer", "description": "Nombre de mois d'historique (1 à 12, défaut 3)"},
-                    "district": {"type": "string", "description": "Filtrer la comparaison inter-écoles sur un district (optionnel)"},
+                    "district": {"type": "string", "description": "District à agréger quand aucune école n'est donnée (ex: Mvila, Wouri)"},
                 },
-                "required": ["school"],
+                "required": [],
             },
         },
     },

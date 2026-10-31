@@ -336,9 +336,9 @@ ROUTING_CASES = [
     {
         "id": "noregress_carte",
         "question": "Voir la carte du territoire",
-        "intent": "other",
-        "present": ["list_maintenance_logs", "prepare_incident"],
-        "absent": [],
+        "intent": "list",
+        "present": ["territory_overview", "list_maintenance_logs"],
+        "absent": ["prepare_incident", "prepare_report", "prepare_maintenance_log"],
     },
     {
         "id": "noregress_explique_incident",
