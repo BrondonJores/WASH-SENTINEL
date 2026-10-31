@@ -40,6 +40,16 @@ export interface MeshBundle {
   priority?: 'normal' | 'high' | 'alert';
   /** Réservé Phase 3 : signature Ed25519 du manifest. */
   signature?: string;
+  /** V2 E2E : enveloppe scellée (base64) ; `message` reste vide quand présent. */
+  sealed?: string;
+  sealed_alg?: 'nacl-sealed-box';
+  /** V2b médias : groupe du manifeste, morceau base64, métadonnées. */
+  bundle_group?: string;
+  chunk?: string;
+  media_mime?: string;
+  media_size?: number;
+  media_sha256?: string;
+  media_sealed_alg?: string;
 }
 
 const TTL_DAYS = 7;
@@ -84,7 +94,9 @@ export async function checksumOf(bundle: Omit<MeshBundle, 'checksum'>): Promise<
 export async function createBundle(opts: {
   schoolId: number;
   schoolCode?: string;
-  message: string;
+  message?: string;
+  sealed?: string;
+  sealedAlg?: MeshBundle['sealed_alg'];
   channel?: MeshBundle['channel'];
   ttlDays?: number;
   maxHops?: number;
@@ -103,6 +115,8 @@ export async function createBundle(opts: {
     school_code: opts.schoolCode,
     channel: opts.channel ?? 'text',
     message: opts.message,
+    sealed: opts.sealed,
+    sealed_alg: opts.sealedAlg,
     created_at: now.toISOString(),
     expires_at: expires.toISOString(),
     max_hops: opts.maxHops ?? DEFAULT_MAX_HOPS,
@@ -151,6 +165,91 @@ export function forwardBundle(bundle: MeshBundle, myNodeId: string = nodeId()): 
 export function serializeForQR(bundle: MeshBundle): string {
   const json = JSON.stringify(bundle);
   return btoa(unescape(encodeURIComponent(json))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export const MEDIA_CHUNK_SIZE = 32768;
+export const MEDIA_MAX_BYTES = 2097152;
+
+export function chunkBytes(b64: string, size: number = MEDIA_CHUNK_SIZE): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < b64.length; i += size) out.push(b64.slice(i, i + size));
+  return out;
+}
+
+export function assembleBytes(chunks: string[]): string {
+  return chunks.join('');
+}
+
+/** sha256 hex d'une chaîne base64 — même forme que PHP hash('sha256', $b64). */
+export async function sha256Text(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export interface MediaSplit {
+  manifest: MeshBundle;
+  fragments: MeshBundle[];
+}
+
+/**
+ * V2b : découpe un média (base64 en clair) en manifeste + fragments.
+ * Chiffre-puis-découpe : si `seal` est fourni, le payload est scellé avant
+ * découpage, et le sha256 couvre toujours le clair (vérifié après ouverture).
+ * Le manifeste porte le texte (triagé immédiatement) ; les fragments suivent
+ * et le serveur réassemble + attache quand le groupe est complet.
+ */
+export async function splitMedia(opts: {
+  schoolId: number;
+  schoolCode?: string;
+  message?: string;
+  sealed?: string;
+  sealedAlg?: MeshBundle['sealed_alg'];
+  channel: 'photo' | 'voice';
+  mime: string;
+  dataB64: string;
+  seal?: (plainB64: string) => Promise<{ sealed: string; alg: string }>;
+  chunkSize?: number;
+  ttlDays?: number;
+  copies?: number;
+  priority?: MeshBundle['priority'];
+}): Promise<MediaSplit> {
+  const sealedMedia = opts.seal ? await opts.seal(opts.dataB64) : null;
+  const payload = sealedMedia?.sealed ?? opts.dataB64;
+  const chunks = chunkBytes(payload, opts.chunkSize ?? MEDIA_CHUNK_SIZE);
+  const manifest = await createBundle({
+    schoolId: opts.schoolId,
+    schoolCode: opts.schoolCode,
+    message: opts.message,
+    sealed: opts.sealed,
+    sealedAlg: opts.sealedAlg,
+    channel: opts.channel,
+    ttlDays: opts.ttlDays,
+    copies: opts.copies,
+    priority: opts.priority,
+  });
+  manifest.media_mime = opts.mime;
+  manifest.media_size = Math.floor((opts.dataB64.length * 3) / 4);
+  manifest.media_sha256 = await sha256Text(opts.dataB64);
+  manifest.media_sealed_alg = sealedMedia?.alg;
+  manifest.fragment_total = chunks.length;
+  manifest.checksum = await checksumOf(manifest);
+  const fragments: MeshBundle[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const f = await createBundle({
+      schoolId: opts.schoolId,
+      schoolCode: opts.schoolCode,
+      channel: opts.channel,
+      ttlDays: opts.ttlDays,
+      copies: opts.copies,
+    });
+    f.bundle_group = manifest.bundle_id;
+    f.fragment_offset = i;
+    f.fragment_total = chunks.length;
+    f.chunk = chunks[i];
+    f.checksum = await checksumOf(f);
+    fragments.push(f);
+  }
+  return { manifest, fragments };
 }
 
 export function parseFromQR(payload: string): MeshBundle {
@@ -301,6 +400,14 @@ export async function uploadToLaravel(
         custody_requested: b.custody_requested ?? false,
         priority: b.priority ?? 'normal',
         signature: b.signature,
+        sealed: b.sealed,
+        sealed_alg: b.sealed_alg,
+        bundle_group: b.bundle_group,
+        chunk: b.chunk,
+        media_mime: b.media_mime,
+        media_size: b.media_size,
+        media_sha256: b.media_sha256,
+        media_sealed_alg: b.media_sealed_alg,
       })),
     }),
   });

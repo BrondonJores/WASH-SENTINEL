@@ -80,6 +80,7 @@ Route::prefix('v1/notifications')->middleware('auth:sanctum')->group(function ()
 Route::prefix('v1/mesh')->group(function () {
     Route::post('/bundles', [WashMeshController::class, 'store'])->middleware('throttle:60,1');
     Route::post('/sms', [WashSmsController::class, 'store'])->middleware('throttle:60,1');
+    Route::get('/key', [WashMeshController::class, 'publicKey']);
     Route::get('/bundles/pending', [WashMeshController::class, 'pending']);
     Route::get('/bundles/{bundleId}', [WashMeshController::class, 'show']);
     Route::get('/stats', [WashMeshController::class, 'stats']);

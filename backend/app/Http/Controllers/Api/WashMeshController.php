@@ -6,6 +6,8 @@ use App\Contracts\IncidentTriage;
 use App\Http\Controllers\Controller;
 use App\Models\MeshBundle;
 use App\Models\School;
+use App\Services\MeshMediaAssembler;
+use App\Services\MeshSeal;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -42,8 +44,9 @@ class WashMeshController extends Controller
             }
         }
 
-        $summary = ['accepted' => 0, 'duplicates' => 0, 'expired' => 0, 'rejected' => 0, 'quota_exceeded' => 0];
+        $summary = ['accepted' => 0, 'duplicates' => 0, 'expired' => 0, 'rejected' => 0, 'quota_exceeded' => 0, 'fragments' => 0];
         $incidents = [];
+        $assembler = app(MeshMediaAssembler::class);
 
         foreach ($incoming as $item) {
             // Déduplication globale : même bundle reçu via deux relais = un seul traitement.
@@ -70,6 +73,18 @@ class WashMeshController extends Controller
                 continue;
             }
 
+            // V2 E2E : enveloppe scellée → déchiffrement (le serveur est le
+            // destinataire ; les relais n'ont vu que les métadonnées).
+            if (! empty($item['sealed'])) {
+                $message = MeshSeal::open((string) $item['sealed'], $item['sealed_alg'] ?? null);
+                if ($message === null) {
+                    Log::warning('mesh.bundle.rejected', ['bundle_id' => $item['bundle_id'], 'cause' => 'unseal_failed']);
+                    $summary['rejected']++;
+                    continue;
+                }
+                $item['message'] = $message;
+            }
+
             // lifetime (durée) préféré à expires_at absolu : les horloges
             // villageoises ne sont pas fiables, le serveur dérive l'expiration.
             $lifetime = isset($item['lifetime_seconds']) ? (int) $item['lifetime_seconds'] : null;
@@ -82,7 +97,37 @@ class WashMeshController extends Controller
                 continue;
             }
 
+            // V2b médias : manifeste (triage immédiat, média différé) vs fragment
+            // (stocké, assemblé quand le groupe est complet).
+            $isFragment = ! empty($item['bundle_group']) && isset($item['fragment_offset'], $item['chunk']);
+            $isManifest = isset($item['fragment_total']) && empty($item['chunk']) && empty($item['bundle_group']);
+            $mixesMediaKeys = ! empty($item['bundle_group']) || isset($item['fragment_offset'], $item['chunk']) || isset($item['fragment_total']);
+            if ($mixesMediaKeys && ! $isFragment && ! $isManifest) {
+                Log::warning('mesh.bundle.rejected', ['bundle_id' => $item['bundle_id'], 'cause' => 'malformed_fragment']);
+                $summary['rejected']++;
+                continue;
+            }
+            if ($isManifest && empty($item['message'])) {
+                Log::warning('mesh.bundle.rejected', ['bundle_id' => $item['bundle_id'], 'cause' => 'manifest_without_message']);
+                $summary['rejected']++;
+                continue;
+            }
+
             $school = School::find($item['school_id']);
+
+            if ($isFragment) {
+                try {
+                    $record = MeshBundle::create(
+                        $this->attributes($item, $hops, $hopCount, $maxHops, $expiresAt, 'pending')
+                    );
+                } catch (UniqueConstraintViolationException) {
+                    $summary['duplicates']++;
+                    continue;
+                }
+                $summary['fragments']++;
+                $assembler->tryAssemble((string) $item['bundle_group']);
+                continue;
+            }
 
             try {
                 $bundle = DB::transaction(function () use ($item, $hops, $hopCount, $maxHops, $expiresAt, $school, $triage, $request) {
@@ -93,7 +138,7 @@ class WashMeshController extends Controller
                     // Triage IA standard : le mesh ne court-circuite jamais le pipeline.
                     $result = $triage->ingest(
                         $school,
-                        'text',
+                        $item['channel'] ?? 'text',
                         $item['message'] ?? null,
                         null,
                         null,
@@ -112,6 +157,11 @@ class WashMeshController extends Controller
                 // Course entre le test d'existence et l'insert : c'est un doublon.
                 $summary['duplicates']++;
                 continue;
+            }
+
+            if ($isManifest) {
+                // Les fragments ont pu arriver avant le manifeste.
+                $assembler->tryAssemble($bundle['bundle']->bundle_id);
             }
 
             Log::info('mesh.bundle.accepted', [
@@ -162,7 +212,24 @@ class WashMeshController extends Controller
                 ? round(MeshBundle::where('hop_count', '>', 0)->count() / MeshBundle::count(), 3)
                 : 0,
             'origins' => MeshBundle::distinct('origin_node_id')->count('origin_node_id'),
+            'sealed_share' => MeshBundle::count() > 0
+                ? round(MeshBundle::whereNotNull('sealed_payload')->count() / MeshBundle::count(), 3)
+                : 0,
         ]);
+    }
+
+    /**
+     * Clé publique E2E du serveur (libsodium sealed box).
+     * 503 si non configurée : les clients retombent en clair (avertis).
+     */
+    public function publicKey()
+    {
+        $public = MeshSeal::publicKeyB64();
+        if ($public === null) {
+            return response()->json(['message' => 'Chiffrement mesh non configuré.'], 503);
+        }
+
+        return response()->json(['algorithm' => MeshSeal::ALG, 'public_key' => $public]);
     }
 
     /** @return array<string, mixed> */
@@ -188,11 +255,20 @@ class WashMeshController extends Controller
             'lifetime_seconds' => ['nullable', 'integer', 'min:60', 'max:2592000'],
             'previous_node_id' => ['nullable', 'string', 'max:64'],
             'copies_remaining' => ['nullable', 'integer', 'min:1', 'max:64'],
-            'fragment_offset' => ['nullable', 'integer', 'min:0'],
-            'fragment_total' => ['nullable', 'integer', 'min:1'],
+            'fragment_offset' => ['nullable', 'integer', 'min:0', 'max:199'],
+            'fragment_total' => ['nullable', 'integer', 'min:1', 'max:200'],
             'custody_requested' => ['nullable', 'boolean'],
             'priority' => ['nullable', 'in:normal,high,alert'],
             'signature' => ['nullable', 'string', 'max:128'],
+            'sealed' => ['nullable', 'string', 'max:20000'],
+            'sealed_alg' => ['nullable', 'string', 'max:32'],
+            // V2b médias différés.
+            'bundle_group' => ['nullable', 'string', 'max:64'],
+            'chunk' => ['nullable', 'string', 'max:65536'],
+            'media_mime' => ['nullable', 'in:image/jpeg,image/png,image/webp,audio/webm,audio/mp4,audio/ogg,audio/mpeg'],
+            'media_size' => ['nullable', 'integer', 'min:1', 'max:2097152'],
+            'media_sha256' => ['nullable', 'string', 'max:128'],
+            'media_sealed_alg' => ['nullable', 'string', 'max:32'],
         ];
     }
 
@@ -201,6 +277,7 @@ class WashMeshController extends Controller
     {
         return [
             'bundle_id' => $item['bundle_id'],
+            'bundle_group' => $item['bundle_group'] ?? null,
             'origin_node_id' => $item['origin_node_id'],
             'school_id' => $item['school_id'],
             'school_code' => $item['school_code'] ?? null,
@@ -223,6 +300,8 @@ class WashMeshController extends Controller
             'custody_requested' => (bool) ($item['custody_requested'] ?? false),
             'priority' => $item['priority'] ?? 'normal',
             'signature' => $item['signature'] ?? null,
+            'sealed_payload' => $item['sealed'] ?? null,
+            'sealed_alg' => $item['sealed_alg'] ?? null,
         ];
     }
 }

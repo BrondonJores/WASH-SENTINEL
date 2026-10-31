@@ -137,6 +137,63 @@ class WashMeshTest extends TestCase
             ->assertJsonValidationErrors(['origin_node_id', 'school_id']);
     }
 
+    private function sealKeypair(): string
+    {
+        $keypair = sodium_crypto_box_keypair();
+        config(['services.mesh.seal_secret' => base64_encode(sodium_crypto_box_secretkey($keypair))]);
+
+        return sodium_crypto_box_publickey($keypair);
+    }
+
+    public function test_sealed_bundle_is_decrypted_on_ingest(): void
+    {
+        $school = School::create(['name' => 'EP Yokadouma', 'code' => 'CM-EST-42', 'district' => 'Boumba-et-Ngoko']);
+        $serverPub = $this->sealKeypair();
+        $plaintext = 'Pompe brisée, les relais ne doivent pas lire ceci.';
+
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$this->bundlePayload($school, [
+            'message' => null,
+            'sealed' => base64_encode(sodium_crypto_box_seal($plaintext, $serverPub)),
+            'sealed_alg' => 'nacl-sealed-box',
+        ])]])
+            ->assertCreated()
+            ->assertJsonPath('summary.accepted', 1);
+
+        $this->assertDatabaseHas('reports', ['source' => 'mesh', 'raw_content' => $plaintext]);
+        $this->assertDatabaseHas('mesh_bundles', ['sealed_alg' => 'nacl-sealed-box']);
+        $this->assertEquals(1.0, $this->getJson('/api/v1/mesh/stats')->json('sealed_share'));
+    }
+
+    public function test_sealed_bundle_with_bad_box_is_rejected(): void
+    {
+        $school = School::create(['name' => 'EP Yokadouma', 'code' => 'CM-EST-42', 'district' => 'Boumba-et-Ngoko']);
+        $this->sealKeypair();
+
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$this->bundlePayload($school, [
+            'message' => null,
+            'sealed' => base64_encode('faux-coffre'),
+            'sealed_alg' => 'nacl-sealed-box',
+        ])]])
+            ->assertCreated()
+            ->assertJsonPath('summary.rejected', 1);
+
+        $this->assertEquals(0, MeshBundle::count());
+    }
+
+    public function test_public_key_endpoint(): void
+    {
+        $serverPub = $this->sealKeypair();
+
+        $this->getJson('/api/v1/mesh/key')
+            ->assertOk()
+            ->assertJsonPath('algorithm', 'nacl-sealed-box')
+            ->assertJsonPath('public_key', base64_encode($serverPub));
+
+        config(['services.mesh.seal_secret' => '']);
+
+        $this->getJson('/api/v1/mesh/key')->assertStatus(503);
+    }
+
     public function test_daily_cap_per_origin_is_enforced(): void
     {
         config(['services.mesh.daily_cap_per_origin' => 1]);

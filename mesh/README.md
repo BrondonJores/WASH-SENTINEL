@@ -104,16 +104,38 @@ Canal SMS : `WASH <CODE_ECOLE> <TYPE> [détail]` (`P`/`L`/`E`/`H`) via
 `POST /api/v1/mesh/sms` (secret partagé SMSSync, allowlist, quota/expéditeur).
 Le SMS devient un bundle `sms:<numéro>` puis suit le triage standard.
 
-## Sécurité (v1 pragmatique)
+## Médias différés (V2b)
 
-- Intégrité par `checksum`, rejets si corrompu.
+Photos compressées (JPEG ≤1280px q0.7) et vocaux courts (≤30 s, ≤2 Mo) :
+chiffre-puis-découpe (même sealed box que le texte si E2E), découpage en
+fragments base64 (~32 Ko), manifeste + `N` fragments (`bundle_group`,
+`fragment_offset`/`fragment_total`, `media_*`).
+
+- Le manifeste crée l'incident **immédiatement** (texte trié, `photo_path`
+  vide) ; le média s'attache quand le groupe est complet — dans le désordre,
+  même si le manifeste arrive en dernier.
+- Serveur : concatène → ouvre l'enveloppe si scellée → vérifie `sha256` →
+  stocke (`reports/photos|audio/mesh-<groupe>.<ext>`) → attache au signalement.
+- Fragments = bundles ordinaires : dédup, spray, ACK et relai inchangés.
+  Seul le QR en est exclu (trop gros) — Nearby/WiFi/HTTP les transportent.
+
+## Sécurité (v2 : E2E en place)
+
+- Intégrité par `checksum` (immuables seuls), rejets si corrompu.
 - `throttle` sur l'ingestion Laravel (60/min), validation stricte (`school_id` existe).
-- Pas de PII dans le bundle (pas de nom/téléphone en v1).
-- ⚠️ V1 = **non chiffré** (payload lisible par les relais, comme un SMS).
-  V2 prévue : chiffrement E2E X25519 vers la clé publique du serveur.
+- Pas de PII dans le bundle (pas de nom/téléphone).
+- **E2E** : enveloppe `sealed` (libsodium sealed box, anonyme — pas de PKI
+  nœuds requise) vers la clé publique serveur (`GET /api/v1/mesh/key`).
+  Les relais voient les métadonnées de routage, jamais le contenu.
+  Menace couverte = relais curieux/compromis ; le serveur (destinataire
+  légitime) déchiffre. Serveur compromis et métadonnées = hors modèle.
+- Dégradation assumée : clé absente → 503 → clients en clair avec avertissement.
+- SMS : toujours en clair (feature phones) — allowlist + quotas + secret partagé.
 
 ## Roadmap
 
-- [ ] v1 : texte multi-sauts + QR + relai + ingestion Laravel (ce PR).
-- [ ] v2 : chiffrement E2E + photos compressées différées + vocal court.
-- [ ] v3 : transport Bluetooth LE / WiFi Direct natif (app mobile), SMS fallback via gateway.
+- [x] v1 : texte multi-sauts + QR + relai + ingestion Laravel.
+- [x] v1.1 : alignement BPv7, spray binaire, quotas, ACK, canal SMS.
+- [x] v2a : chiffrement E2E (sealed boxes NaCl, zéro crypto maison).
+- [x] v2b : photos compressées + vocal court (fragments différés, E2E préservé).
+- [~] v3 : appli Android Nearby ✅, passerelle SMS ✅ ; reste BLE GATT brut de secours.

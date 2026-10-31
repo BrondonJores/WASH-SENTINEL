@@ -1,16 +1,26 @@
 // Pont PWA <-> protocole mesh : réexporte le SDK + helpers terrain (iOS, SMS, cache écoles).
 import {
+  MEDIA_MAX_BYTES,
   createBundle as sdkCreateBundle,
   MeshOutbox,
   nodeId,
   parseFromQR,
   serializeForQR,
+  splitMedia,
   uploadToLaravel,
 } from './mesh-sdk';
 import type { MeshBundle } from './mesh-sdk';
 import type { School } from './api';
 
-export { MeshOutbox, nodeId, parseFromQR, serializeForQR, uploadToLaravel };
+export {
+  MEDIA_MAX_BYTES,
+  MeshOutbox,
+  nodeId,
+  parseFromQR,
+  serializeForQR,
+  splitMedia,
+  uploadToLaravel,
+};
 export type { MeshBundle };
 export const createBundle = sdkCreateBundle;
 

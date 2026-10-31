@@ -100,6 +100,16 @@ class Bundle(BaseModel):
     custody_requested: bool = False
     priority: str = "normal"
     signature: str | None = Field(default=None, max_length=128)
+    # V2 E2E : enveloppe opaque — le relai transporte sans lire.
+    sealed: str | None = Field(default=None, max_length=20000)
+    sealed_alg: str | None = Field(default=None, max_length=32)
+    # V2b médias différés : fragments opaques + métadonnées du manifeste.
+    bundle_group: str | None = Field(default=None, max_length=64)
+    chunk: str | None = Field(default=None, max_length=65536)
+    media_mime: str | None = Field(default=None, max_length=64)
+    media_size: int | None = Field(default=None, ge=1, le=2097152)
+    media_sha256: str | None = Field(default=None, max_length=128)
+    media_sealed_alg: str | None = Field(default=None, max_length=32)
 
 
 class StoreRequest(BaseModel):
@@ -303,6 +313,10 @@ def uplink(dry_run: bool = False) -> dict[str, Any]:
          "fragment_offset": b.get("fragment_offset"), "fragment_total": b.get("fragment_total"),
          "custody_requested": b.get("custody_requested", False),
          "priority": b.get("priority", "normal"), "signature": b.get("signature"),
+         "sealed": b.get("sealed"), "sealed_alg": b.get("sealed_alg"),
+         "bundle_group": b.get("bundle_group"), "chunk": b.get("chunk"),
+         "media_mime": b.get("media_mime"), "media_size": b.get("media_size"),
+         "media_sha256": b.get("media_sha256"), "media_sealed_alg": b.get("media_sealed_alg"),
          "checksum": b.get("checksum")}
         for b in bundles
     ]}

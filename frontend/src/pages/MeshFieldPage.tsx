@@ -5,6 +5,7 @@ import { api, ApiError } from '../lib/api';
 import type { School } from '../lib/api';
 import { Badge, Button, Card } from '../components/ui';
 import {
+  MEDIA_MAX_BYTES,
   MeshOutbox,
   apiBase,
   cachedSchools,
@@ -17,9 +18,12 @@ import {
   smsGateway,
   smsHref,
   smsText,
+  splitMedia,
   uploadToLaravel,
 } from '../lib/mesh';
 import type { MeshBundle } from '../lib/mesh';
+import { SEAL_ALG, fetchSealKey, sealMessage } from '../lib/mesh-crypto';
+import type { SealKey } from '../lib/mesh-crypto';
 
 const outbox = new MeshOutbox();
 const SCANNER_ID = 'mesh-field-qr-reader';
@@ -31,6 +35,62 @@ const SMS_TYPES = [
 ] as const;
 
 const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
+
+function blobToB64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(new Error('Lecture fichier impossible.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** Photo → JPEG ≤1280px q0.7 (~100-200 Ko) pour le mesh. */
+function compressPhoto(file: File): Promise<{ b64: string; mime: string }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error('Compression photo impossible.'));
+            return;
+          }
+          blobToB64(blob).then(
+            (b64) => resolve({ b64, mime: 'image/jpeg' }),
+            reject,
+          );
+        },
+        'image/jpeg',
+        0.7,
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Photo illisible.'));
+    };
+    img.src = url;
+  });
+}
+
+function pickAudioMime(): string {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+  for (const mime of candidates) {
+    if (MediaRecorder.isTypeSupported(mime)) return mime.split(';')[0];
+  }
+  return '';
+}
 
 export default function MeshFieldPage() {
   const [schools, setSchools] = useState<School[]>(() => cachedSchools());
@@ -47,6 +107,13 @@ export default function MeshFieldPage() {
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [qrLabel, setQrLabel] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [sealOn, setSealOn] = useState(true);
+  const [sealKey, setSealKey] = useState<SealKey | null>(null);
+  const [photo, setPhoto] = useState<{ b64: string; mime: string } | null>(null);
+  const [audio, setAudio] = useState<{ b64: string; mime: string } | null>(null);
+  const [recording, setRecording] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const scannerRef = useRef<Html5Qrcode | null>(null);
 
   const refresh = useCallback(() => setItems(outbox.all()), []);
@@ -72,6 +139,11 @@ export default function MeshFieldPage() {
         setSchools(cachedSchools());
       });
   }, []);
+
+  useEffect(() => {
+    if (!online) return;
+    fetchSealKey(apiBase()).then(setSealKey);
+  }, [online]);
 
   // Upload auto à la reconnexion.
   useEffect(() => {
@@ -128,6 +200,62 @@ export default function MeshFieldPage() {
   const effectiveId = selectedSchool ? selectedSchool.id : Number(manualId) || 0;
   const effectiveCode = selectedSchool?.code ?? manualCode.trim().toUpperCase();
 
+  const onPhotoPicked = async (file: File | undefined) => {
+    setError(null);
+    if (!file) return;
+    try {
+      const compressed = await compressPhoto(file);
+      if ((compressed.b64.length * 3) / 4 > MEDIA_MAX_BYTES) {
+        setError('Photo trop lourde même compressée.');
+        return;
+      }
+      setPhoto(compressed);
+      setAudio(null);
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+
+  const startRecording = () => {
+    setError(null);
+    const mime = pickAudioMime();
+    if (!mime) {
+      setError('Enregistrement vocal non supporté par ce navigateur.');
+      return;
+    }
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        const rec = new MediaRecorder(stream, { mimeType: mime });
+        chunksRef.current = [];
+        rec.ondataavailable = (ev: BlobEvent) => {
+          if (ev.data.size > 0) chunksRef.current.push(ev.data);
+        };
+        rec.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          const blob = new Blob(chunksRef.current, { type: mime });
+          blobToB64(blob)
+            .then((b64) => {
+              if ((b64.length * 3) / 4 > MEDIA_MAX_BYTES) {
+                setError('Vocal trop long (30 s max).');
+                return;
+              }
+              setAudio({ b64, mime });
+              setPhoto(null);
+            })
+            .catch((e: unknown) => setError(errMsg(e)));
+          setRecording(false);
+        };
+        recorderRef.current = rec;
+        rec.start();
+        setRecording(true);
+        window.setTimeout(() => {
+          if (recorderRef.current === rec && rec.state === 'recording') rec.stop();
+        }, 30000);
+      })
+      .catch(() => setError('Micro inaccessible (autorisation + HTTPS requis).'));
+  };
+
   const saveOffline = async () => {
     setError(null);
     setNotice(null);
@@ -135,18 +263,55 @@ export default function MeshFieldPage() {
       setError('Choisissez une école (ou son ID) et écrivez le signalement.');
       return;
     }
+    const media = photo
+      ? { ...photo, channel: 'photo' as const }
+      : audio
+        ? { ...audio, channel: 'voice' as const }
+        : null;
     setBusy(true);
     try {
-      const bundle = await createBundle({
-        schoolId: effectiveId,
-        schoolCode: effectiveCode || undefined,
-        message: message.trim(),
-      });
-      outbox.add(bundle);
+      const key = sealOn ? sealKey : null;
+      if (media) {
+        const sealedMsg = key ? await sealMessage(message.trim(), key.public_key) : undefined;
+        const split = await splitMedia({
+          schoolId: effectiveId,
+          schoolCode: effectiveCode || undefined,
+          message: key ? undefined : message.trim(),
+          sealed: sealedMsg,
+          sealedAlg: key ? SEAL_ALG : undefined,
+          channel: media.channel,
+          mime: media.mime,
+          dataB64: media.b64,
+          seal: key
+            ? (plain) => sealMessage(plain, key.public_key).then((sealed) => ({ sealed, alg: SEAL_ALG }))
+            : undefined,
+        });
+        outbox.add(split.manifest);
+        split.fragments.forEach((f) => outbox.add(f));
+        setNotice(
+          `Signalement + média enregistré offline (${split.fragments.length} fragments${key ? ', chiffrés' : ''}).`,
+        );
+      } else {
+        const sealed = key ? await sealMessage(message.trim(), key.public_key) : undefined;
+        const bundle = await createBundle({
+          schoolId: effectiveId,
+          schoolCode: effectiveCode || undefined,
+          message: key ? undefined : message.trim(),
+          sealed,
+          sealedAlg: key ? SEAL_ALG : undefined,
+        });
+        outbox.add(bundle);
+        setNotice(
+          key
+            ? 'Signalement chiffré enregistré offline. Montrez son QR ou uploadez.'
+            : 'Signalement enregistré offline (non chiffré). Montrez son QR ou uploadez.',
+        );
+      }
       setMessage('');
+      setPhoto(null);
+      setAudio(null);
       setQrUrl(null);
       refresh();
-      setNotice('Signalement enregistré offline. Montrez son QR ou uploadez.');
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -185,7 +350,9 @@ export default function MeshFieldPage() {
   };
 
   const removeItem = (id: string) => {
-    outbox.remove([id]);
+    // Retirer un manifeste retire aussi ses fragments.
+    const grouped = outbox.all().filter((b) => b.bundle_group === id).map((b) => b.bundle_id);
+    outbox.remove([id, ...grouped]);
     refresh();
   };
 
@@ -252,6 +419,52 @@ export default function MeshFieldPage() {
           placeholder="Décrivez la panne : pompe brisée, latrines pleines, eau trouble…"
           className="w-full rounded-md border border-line bg-card px-2 py-2 text-sm"
         />
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="cursor-pointer rounded-md border border-line px-2 py-1.5 text-sm">
+            Photo
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                void onPhotoPicked(e.target.files?.[0]);
+                e.target.value = '';
+              }}
+            />
+          </label>
+          {!recording ? (
+            <Button size="sm" onClick={startRecording}>Vocal 30 s</Button>
+          ) : (
+            <Button size="sm" variant="primary" onClick={() => recorderRef.current?.stop()}>
+              Stop ({'•'} en cours)
+            </Button>
+          )}
+          {photo && <Badge tone="info">Photo prête</Badge>}
+          {audio && <Badge tone="info">Vocal prêt</Badge>}
+          {(photo || audio) && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setPhoto(null);
+                setAudio(null);
+              }}
+            >
+              Retirer
+            </Button>
+          )}
+        </div>
+        <label className="flex items-center gap-2 text-xs text-ink-soft">
+          <input
+            type="checkbox"
+            checked={sealOn && sealKey !== null}
+            disabled={sealKey === null}
+            onChange={(e) => setSealOn(e.target.checked)}
+          />
+          {sealKey
+            ? 'Chiffrer vers le serveur (les relais ne liront pas le contenu)'
+            : 'Chiffrement indisponible (clé serveur injoignable) — envoi en clair'}
+        </label>
         <Button variant="primary" disabled={busy} onClick={saveOffline} className="w-full">
           {busy ? 'Enregistrement…' : 'Enregistrer dans la file'}
         </Button>
@@ -259,18 +472,22 @@ export default function MeshFieldPage() {
 
       <Card className="space-y-3 p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">File d&apos;envoi ({items.length})</h2>
+          <h2 className="text-sm font-semibold">
+            File d&apos;envoi ({items.filter((b) => !b.chunk).length}
+            {items.some((b) => b.chunk) ? ` + ${items.filter((b) => b.chunk).length} fragments` : ''})
+          </h2>
           <Button size="sm" variant="primary" disabled={busy || items.length === 0} onClick={uploadAll}>
             {busy ? 'Envoi…' : 'Tout uploader'}
           </Button>
         </div>
         {items.length === 0 && <p className="text-xs text-ink-soft">File vide. Les signalements en attente de réseau apparaissent ici.</p>}
         <ul className="space-y-2">
-          {items.map((b) => (
+          {items.filter((b) => !b.chunk).map((b) => (
             <li key={b.bundle_id} className="flex items-center justify-between gap-2 rounded-md border border-line px-2 py-1.5 text-xs">
               <span className="min-w-0 flex-1 truncate">
                 <span className="font-mono">{b.bundle_id.slice(0, 8)}</span>
-                {' · '}{b.message?.slice(0, 60) ?? '(sans texte)'}
+                {' · '}{b.sealed ? '(chiffré)' : (b.message?.slice(0, 60) ?? '(sans texte)')}
+                {b.fragment_total ? ` · média (${b.fragment_total} frag.)` : ''}
               </span>
               <Button size="sm" onClick={() => showQr(b)}>QR</Button>
               <Button size="sm" variant="ghost" onClick={() => removeItem(b.bundle_id)}>Retirer</Button>

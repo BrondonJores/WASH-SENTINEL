@@ -52,6 +52,10 @@ return [
         'daily_cap_per_origin' => (int) env('MESH_DAILY_CAP_PER_ORIGIN', 500),
         // Plafond journalier de SMS par expéditeur.
         'sms_quota_per_sender' => (int) env('MESH_SMS_QUOTA_PER_SENDER', 10),
+        // V2 E2E : clé secrète box du serveur (base64, 32 octets).
+        // Générer avec : php artisan mesh:key-generate. Vide = E2E désactivé,
+        // les clients retombent en clair avec un avertissement.
+        'seal_secret' => env('MESH_SEAL_SECRET', ''),
     ],
 
     'whatsapp' => [

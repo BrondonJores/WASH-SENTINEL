@@ -169,6 +169,18 @@ def test_checksum_zulu_variant_verifies():
     assert r.json()["stored"] == 1
 
 
+def test_checksum_survives_forward_mutations():
+    """Le checksum couvre les immuables : hops/copies mutés par les relais ne l'invalident pas."""
+    b = make_bundle()
+    b["checksum"] = _ts_style_checksum(b)
+    # Simulation d'un forward A -> B -> C (comme simulate_hops.py).
+    b["hops"] = ["node-A", "node-B", "node-C"]
+    b["previous_node"] = "node-B"
+    b["copies_remaining"] = 2
+    r = client.post("/v1/store", json={"node_id": "node-C", "bundles": [b]})
+    assert r.json()["stored"] == 1
+
+
 def test_tampered_checksum_rejected():
     b = make_bundle()
     b["checksum"] = "0" * 64
@@ -188,6 +200,17 @@ def test_ack_advertised_only_to_nodes_holding_the_bundle():
     # D, qui ne le connaît pas, ne reçoit rien (pas de fuite).
     r = client.post("/v1/sync", json={"node_id": "node-D", "bundles": [], "known_ids": []})
     assert r.json()["acked_ids"] == []
+
+
+def test_media_fields_pass_through_opaque():
+    manifest_id = make_bundle()["bundle_id"]
+    frag = make_bundle(bundle_group=manifest_id, chunk="QUJDRA==", fragment_offset=0,
+                       fragment_total=2, channel="photo")
+    client.post("/v1/store", json={"node_id": "node-A", "bundles": [frag]})
+    fetched = client.post("/v1/fetch", json={"node_id": "node-B", "known_ids": []}).json()["bundles"][0]
+    assert fetched["bundle_group"] == manifest_id
+    assert fetched["chunk"] == "QUJDRA=="
+    assert fetched["fragment_offset"] == 0
 
 
 def test_uplink_flush_records_tombstones(monkeypatch):
