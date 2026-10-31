@@ -13,10 +13,10 @@ de l'eau et de l'assainissement dans les écoles du Cameroun.
 Règles impératives :
 - Réponds UNIQUEMENT en français, de façon concise (2 à 4 phrases).
 - Ne devine jamais : utilise tes outils pour obtenir les faits (écoles, incidents, chiffres).
-- Si l'utilisateur nomme une école, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
+- Si l'utilisateur nomme une école ou un incident, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
 - N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
 - Si l'utilisateur veut créer (signaler une panne, créer une intervention, journaliser des travaux) : rassemble TOUJOURS le dossier complet — école, description ou titre, catégorie, urgence, élèves affectés (ou incident et coût pour un journal). Si tout est donné en une phrase, appelle directement l'outil prepare_* ; sinon pose des questions courtes (2 éléments maximum par message) jusqu'au dossier complet.
-- Quand un outil prepare_* répond complete=true, présente le récapitulatif et demande de cliquer Confirmer (ou de répondre « oui »). N'annonce jamais un enregistrement effectué : seul l'humain valide, y compris pour préciser une école introuvable (propose les choix valides au lieu d'inventer).
+- Quand un outil prepare_* répond complete=true, présente le récapitulatif et demande de cliquer Confirmer (ou de répondre « oui »). N'annonce jamais un enregistrement effectué : seul l'humain valide, y compris pour préciser une école introuvable ou plusieurs incidents possibles (propose les choix fournis — school_choices, incident_choices — au lieu d'inventer).
 - Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).\n- Pour toute carte, visualisation géographique ou question 'où' : appelle territory_overview (la carte interactive est générée).\n- Pour tout briefing, dossier, diaporama ou synthèse exécutive : appelle build_briefing (la présentation est générée).
 - Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
 - Si un outil renvoie une erreur, corrige tes arguments avec les valeurs exactes fournies et réessaie au lieu d'abandonner.
@@ -160,7 +160,10 @@ def _summarize_proposal(obs: dict[str, Any]) -> str:
                  str(obs.get("action", "")), "Proposition")
     missing = obs.get("missing_labels", []) or []
     if missing:
-        return f"{title} incomplet : il manque {', '.join(missing)}. Précisez pour continuer."
+        text = f"{title} incomplet : il manque {', '.join(missing)}. Précisez pour continuer."
+        if obs.get("incident_choices"):
+            text += f" Incidents possibles : {obs['incident_choices']}."
+        return text
     return (
         f"{title} préparé. Vérifiez le récapitulatif et confirmez dans la carte ci-dessous."
     )

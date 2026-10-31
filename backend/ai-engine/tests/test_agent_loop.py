@@ -117,6 +117,16 @@ class FallbackSummaryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("1 critique", text)
         self.assertIn("carte", text)
 
+    def test_ambiguous_incident_lists_choices(self) -> None:
+        text = self.loop._fallback_answer([("prepare_maintenance_log", {
+            "action": "create_maintenance_log", "complete": False,
+            "missing": ["incident"], "missing_labels": ["l'incident concerné"],
+            "incident_choices": "WASH-2026-ZQNU8W — Fuite sur le robinet (id 8), "
+                                "WASH-2026-AAAAAA — Fuite au château d'eau (id 9)",
+        })])
+        self.assertIn("ZQNU8W", text)
+        self.assertIn("AAAAAA", text)
+
     def test_trends(self) -> None:
         text = self.loop._fallback_answer([("repair_trends", {
             "school_name": "École Publique de Bonanjo", "months": 3,

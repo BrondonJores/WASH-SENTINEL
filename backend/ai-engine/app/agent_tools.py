@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -224,7 +225,7 @@ SLOT_LABELS = {
     "category": "la catégorie (point d'eau, latrines, lavage des mains, évacuation)",
     "urgency": "le niveau d'urgence (basse, moyenne, haute, critique)",
     "affected_students": "le nombre d'élèves affectés",
-    "incident": "l'incident concerné (numéro ou référence)",
+    "incident": "l'incident concerné (titre, numéro ou référence)",
     "cost_amount": "le coût de l'intervention en XAF",
 }
 
@@ -263,25 +264,57 @@ def _norm_cost(value: Any) -> float | None:
     return n if n >= 0 else None
 
 
-def _resolve_incident(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
+def _match_incidents(context: dict[str, Any], ref: Any) -> list[dict[str, Any]]:
+    """Candidats par force décroissante : id exact, référence exacte, puis flou (réf/titre)."""
     incidents = context.get("incidents", [])
     if ref is None or str(ref).strip() == "":
-        return None
+        return []
     try:
         wanted = int(ref)
-        for incident in incidents:
-            if incident.get("id") == wanted:
-                return incident
+        return [i for i in incidents if i.get("id") == wanted][:1]
     except (TypeError, ValueError):
         pass
     hint = str(ref).strip().lower()
     for incident in incidents:
         if str(incident.get("reference_code", "")).lower() == hint:
-            return incident
+            return [incident]
+    scored: list[tuple[int, dict[str, Any]]] = []
+    tokens = [t for t in hint.split() if len(t) >= 3]
     for incident in incidents:
-        if hint in str(incident.get("reference_code", "")).lower():
-            return incident
-    return None
+        code = str(incident.get("reference_code", "")).lower()
+        title = str(incident.get("title", "")).lower()
+        if hint in code or hint in title:
+            scored.append((3, incident))
+        elif tokens and all(t in title for t in tokens):
+            scored.append((2, incident))
+    if not scored and len(hint) >= 4:
+        for incident in incidents:
+            title = str(incident.get("title", "")).lower()
+            if difflib.SequenceMatcher(None, hint, title).ratio() >= 0.6:
+                scored.append((1, incident))
+    scored.sort(key=lambda s: -s[0])
+    seen: set[Any] = set()
+    ordered: list[dict[str, Any]] = []
+    for _, incident in scored:
+        key = incident.get("id", id(incident))
+        if key not in seen:
+            seen.add(key)
+            ordered.append(incident)
+    return ordered
+
+
+def _resolve_incident(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
+    """Un seul candidat → résolu ; zéro ou ambigu → None (l'appelant fait choisir)."""
+    matches = _match_incidents(context, ref)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _incident_choices(incidents: list[dict[str, Any]], limit: int = 5) -> str:
+    """Références + titres valides, pour faire choisir l'utilisateur en cas d'ambiguïté."""
+    choices = []
+    for incident in incidents[:limit]:
+        choices.append(f"{incident.get('reference_code', '?')} — {incident.get('title', '?')} (id {incident.get('id')})")
+    return ", ".join(choices) if choices else "aucun incident dans le contexte"
 
 
 def _recap(action: str, slots: dict[str, Any], missing_labels: list[str]) -> str:
@@ -376,28 +409,34 @@ def tool_prepare_incident(args: dict[str, Any], context: dict[str, Any]) -> dict
 
 def tool_prepare_maintenance_log(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Prépare un journal d'intervention COMPLET (sans rien écrire) : incident, coût, notes."""
-    incident = _resolve_incident(context, args.get("incident"))
+    raw = args.get("incident")
+    hint = str(raw or "").strip()
+    candidates = _match_incidents(context, raw)
+    incident = candidates[0] if len(candidates) == 1 else None
     cost = _norm_cost(args.get("cost_amount"))
     notes = str(args.get("notes") or "").strip() or None
     days = _norm_int(args.get("days_without_service"))
     missing = []
-    if args.get("incident") in (None, ""):
+    if not incident:
         missing.append("incident")
     if cost is None:
         missing.append("cost_amount")
     label = None
     if incident:
         label = f"{incident.get('reference_code') or incident.get('id')} — {incident.get('title', '?')}"
-    elif args.get("incident") not in (None, ""):
-        label = str(args.get("incident"))
-    return _proposal("create_maintenance_log", {
+    obs = _proposal("create_maintenance_log", {
         "incident_id": incident.get("id") if incident else None,
-        "incident_ref": args.get("incident") if not incident else None,
+        "incident_ref": None if incident else (raw if hint else None),
         "incident_label": label,
         "cost_amount": cost,
         "notes": notes,
         "days_without_service": days,
     }, missing)
+    if hint and not incident:
+        obs["hint_unmatched"] = hint
+        pool = candidates if candidates else _open_incidents(context)
+        obs["incident_choices"] = _incident_choices(pool)
+    return obs
 
 
 URGENCY_FR = {"critical": "critique", "high": "haute", "medium": "moyenne", "low": "basse"}
@@ -746,11 +785,11 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_maintenance_log",
-            "description": "Prépare un journal d'intervention COMPLET sans rien écrire : incident (id ou référence), coût XAF, notes. Réservé aux responsables habilités.",
+            "description": "Prépare un journal d'intervention COMPLET sans rien écrire : incident (titre, id ou référence), coût XAF, notes. Réservé aux responsables habilités.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "incident": {"type": "string", "description": "Identifiant ou référence (WASH-...) de l'incident"},
+                    "incident": {"type": "string", "description": "Titre même approximatif, identifiant ou référence (WASH-...) de l'incident"},
                     "cost_amount": {"type": "number", "description": "Coût de l'intervention en XAF"},
                     "notes": {"type": "string", "description": "Notes sur les travaux effectués"},
                     "days_without_service": {"type": "integer", "description": "Jours sans service comptabilisés"},

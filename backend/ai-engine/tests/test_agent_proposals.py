@@ -75,6 +75,19 @@ class PrepareIncidentTest(unittest.TestCase):
         self.assertEqual(obs["slots"]["school_id"], 6)
 
 
+def _context_multi() -> dict:
+    ctx = _context()
+    ctx["incidents"] = [
+        {"id": 7, "reference_code": "WASH-2026-QJHIPH", "title": "Latrines bouchées",
+         "status": "triaged", "school_id": 3},
+        {"id": 8, "reference_code": "WASH-2026-ZQNU8W",
+         "title": "Fuite sur le robinet du préau", "status": "triaged", "school_id": 7},
+        {"id": 9, "reference_code": "WASH-2026-AAAAAA", "title": "Fuite au château d'eau",
+         "status": "open", "school_id": 3},
+    ]
+    return ctx
+
+
 class PrepareLogTest(unittest.TestCase):
     def test_complete_by_reference(self) -> None:
         obs = tool_prepare_maintenance_log({
@@ -87,6 +100,44 @@ class PrepareLogTest(unittest.TestCase):
     def test_negative_cost_missing(self) -> None:
         obs = tool_prepare_maintenance_log({"incident": 7, "cost_amount": -5}, _context())
         self.assertIn("cost_amount", obs["missing"])
+
+    def test_resolves_by_title_substring(self) -> None:
+        obs = tool_prepare_maintenance_log({
+            "incident": "robinet du préau", "cost_amount": 150000,
+        }, _context_multi())
+        self.assertTrue(obs["complete"])
+        self.assertEqual(obs["slots"]["incident_id"], 8)
+
+    def test_resolves_by_title_tokens(self) -> None:
+        obs = tool_prepare_maintenance_log({
+            "incident": "fuite préau", "cost_amount": 150000,
+        }, _context_multi())
+        self.assertTrue(obs["complete"])
+        self.assertEqual(obs["slots"]["incident_id"], 8)
+
+    def test_ambiguous_title_gives_choices(self) -> None:
+        obs = tool_prepare_maintenance_log({
+            "incident": "fuite", "cost_amount": 150000,
+        }, _context_multi())
+        self.assertFalse(obs["complete"])
+        self.assertIn("incident", obs["missing"])
+        self.assertIsNone(obs["slots"]["incident_id"])
+        self.assertIn("ZQNU8W", obs["incident_choices"])
+        self.assertIn("AAAAAA", obs["incident_choices"])
+
+    def test_unknown_title_keeps_raw_ref(self) -> None:
+        obs = tool_prepare_maintenance_log({
+            "incident": "ZzzTop", "cost_amount": 150000,
+        }, _context_multi())
+        self.assertIsNone(obs["slots"]["incident_id"])
+        self.assertEqual(obs["slots"]["incident_ref"], "ZzzTop")
+
+    def test_exact_id_skips_ambiguity(self) -> None:
+        obs = tool_prepare_maintenance_log({
+            "incident": 8, "cost_amount": 150000,
+        }, _context_multi())
+        self.assertTrue(obs["complete"])
+        self.assertEqual(obs["slots"]["incident_id"], 8)
 
 
 class ProposalCardsTest(unittest.TestCase):
