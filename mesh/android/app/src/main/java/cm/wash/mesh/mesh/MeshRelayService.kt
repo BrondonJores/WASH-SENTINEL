@@ -9,11 +9,18 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.work.BackoffPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import cm.wash.mesh.MeshProtocol
 import cm.wash.mesh.R
 import cm.wash.mesh.data.BundleEntity
 import cm.wash.mesh.data.MeshDatabase
+import cm.wash.mesh.relay.RelayPrefs
+import cm.wash.mesh.relay.RelayRestartWorker
+import cm.wash.mesh.relay.RestartPolicy
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.AdvertisingOptions
 import com.google.android.gms.nearby.connection.ConnectionInfo
@@ -34,6 +41,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.util.Collections
+import java.util.concurrent.TimeUnit
 
 /**
  * Relai ambiant : foreground service permanent qui annonce et découvre
@@ -62,6 +70,7 @@ class MeshRelayService : Service() {
                 // J'ajoute mon hop (spray) avant stockage : ce que je relaierai ensuite.
                 val fwd = MeshProtocol.forward(bundle, nodeId) ?: return@launch
                 store(fwd.give)
+                Log.i(TAG, "bundle Nearby reçu et stocké")
             }
         }
 
@@ -74,7 +83,13 @@ class MeshRelayService : Service() {
         }
 
         override fun onConnectionResult(endpointId: String, resolution: ConnectionResolution) {
-            if (resolution.status.isSuccess) scope.launch { sendOutbox(endpointId) }
+            if (resolution.status.isSuccess) {
+                Log.i(TAG, "voisin Nearby connecté, envoi outbox")
+                scope.launch { sendOutbox(endpointId) }
+            } else {
+                requested.remove(endpointId)
+                Log.i(TAG, "connexion Nearby refusée, voisin suivant")
+            }
         }
 
         override fun onDisconnected(endpointId: String) {
@@ -85,8 +100,12 @@ class MeshRelayService : Service() {
     private val discoveryCallback = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
             if (!requested.add(endpointId)) return
+            Log.i(TAG, "voisin Nearby trouvé, connexion…")
             client.requestConnection(nodeId, endpointId, connectionCallback)
-                .addOnFailureListener { requested.remove(endpointId) }
+                .addOnFailureListener {
+                    requested.remove(endpointId)
+                    Log.i(TAG, "connexion Nearby impossible, voisin suivant")
+                }
         }
 
         override fun onEndpointLost(endpointId: String) {
@@ -96,11 +115,7 @@ class MeshRelayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        nodeId = getSharedPreferences("wash_mesh", Context.MODE_PRIVATE)
-            .getString("node_id", null)
-            ?: MeshProtocol.newNodeId().also {
-                getSharedPreferences("wash_mesh", Context.MODE_PRIVATE).edit().putString("node_id", it).apply()
-            }
+        nodeId = RelayPrefs.getOrCreateNodeId(this)
         client = Nearby.getConnectionsClient(this)
         startForegrounded()
         client.startAdvertising(
@@ -113,7 +128,35 @@ class MeshRelayService : Service() {
         )
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "relai Nearby démarré (nœud $nodeId)")
+        return START_STICKY
+    }
+
+    /**
+     * Balayage dans les récents : relance immédiate si le relai reste activé,
+     * sinon WorkManager réessaiera (filet de sécurité après kill système).
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (!RelayPrefs.isRelayEnabled(this)) return
+        try {
+            start(this)
+        } catch (e: Exception) {
+            Log.w(TAG, "relance directe refusée, bascule WorkManager", e)
+            runCatching {
+                WorkManager.getInstance(this).enqueue(
+                    OneTimeWorkRequestBuilder<RelayRestartWorker>()
+                        .setBackoffCriteria(
+                            BackoffPolicy.EXPONENTIAL,
+                            RestartPolicy.BASE_DELAY_MS,
+                            TimeUnit.MILLISECONDS,
+                        )
+                        .build(),
+                )
+            }
+        }
+    }
 
     override fun onDestroy() {
         runCatching { client.stopAllEndpoints() }
@@ -171,16 +214,19 @@ class MeshRelayService : Service() {
     }
 
     companion object {
+        private const val TAG = "WashRelay"
         private const val CHANNEL = "wash_mesh_relay"
         private const val NOTIF_ID = 42
 
         fun start(context: Context) {
+            RelayPrefs.setRelayEnabled(context, true)
             val intent = Intent(context, MeshRelayService::class.java)
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent)
             else context.startService(intent)
         }
 
         fun stop(context: Context) {
+            RelayPrefs.setRelayEnabled(context, false)
             context.stopService(Intent(context, MeshRelayService::class.java))
         }
     }

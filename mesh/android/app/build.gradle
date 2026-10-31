@@ -18,6 +18,8 @@ android {
         buildConfigField("String", "RELAY_URL", "\"" + (findProperty("RELAY_URL") ?: "http://10.0.2.2:8001") + "\"")
         buildConfigField("String", "MESH_KEY", "\"" + (findProperty("MESH_RELAY_KEY") ?: "") + "\"")
         buildConfigField("String", "SMS_SECRET", "\"" + (findProperty("MESH_SMS_SECRET") ?: "") + "\"")
+        buildConfigField("String", "SMS_ALLOWLIST", "\"" + (findProperty("MESH_SMS_ALLOWLIST") ?: "") + "\"")
+        buildConfigField("int", "SMS_QUOTA", (findProperty("MESH_SMS_QUOTA_PER_SENDER") ?: "10").toString())
     }
 
     buildTypes {
@@ -48,4 +50,6 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("com.google.zxing:core:3.5.3")
+
+    testImplementation("junit:junit:4.13.2")
 }

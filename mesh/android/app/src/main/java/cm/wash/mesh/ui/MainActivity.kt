@@ -1,10 +1,10 @@
 package cm.wash.mesh.ui
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
@@ -23,8 +23,13 @@ import cm.wash.mesh.MeshProtocol
 import cm.wash.mesh.R
 import cm.wash.mesh.data.BundleEntity
 import cm.wash.mesh.data.MeshDatabase
+import cm.wash.mesh.ble.BleMeshService
 import cm.wash.mesh.mesh.MeshRelayService
+import cm.wash.mesh.mesh.TransportSelector
 import cm.wash.mesh.mesh.UploadWorker
+import cm.wash.mesh.relay.RelayPrefs
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import cm.wash.mesh.net.Api
 import cm.wash.mesh.qr.Qr
 import com.google.android.gms.common.moduleinstall.ModuleInstall
@@ -55,11 +60,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        nodeId = getSharedPreferences("wash_mesh", Context.MODE_PRIVATE)
-            .getString("node_id", null)
-            ?: MeshProtocol.newNodeId().also {
-                getSharedPreferences("wash_mesh", Context.MODE_PRIVATE).edit().putString("node_id", it).apply()
-            }
+        nodeId = RelayPrefs.getOrCreateNodeId(this)
+        relayOn = RelayPrefs.isRelayEnabled(this)
 
         requestPermissions()
         // Pré-chauffe le module Code Scanner (1er usage = téléchargement Play Services).
@@ -167,11 +169,23 @@ class MainActivity : AppCompatActivity() {
             toast("Upload planifié (dès que connecté).")
         }
 
+        // Transport auto : Nearby si Play Services, sinon BLE GATT brut (secours V3).
+        val useNearby = GoogleApiAvailability.getInstance()
+            .isGooglePlayServicesAvailable(this) == ConnectionResult.SUCCESS
+        val transport = if (useNearby) "Nearby" else "BLE"
         val btnRelay = findViewById<Button>(R.id.btnRelay)
+        btnRelay.text = if (relayOn) "Stopper le relai ($transport)" else "Démarrer le relai ($transport)"
         btnRelay.setOnClickListener {
             relayOn = !relayOn
-            if (relayOn) MeshRelayService.start(this) else MeshRelayService.stop(this)
-            btnRelay.text = if (relayOn) "Stopper le relai" else "Démarrer le relai"
+            if (relayOn) {
+                if (useNearby) MeshRelayService.start(this) else BleMeshService.start(this)
+            } else {
+                MeshRelayService.stop(this)
+                BleMeshService.stop(this)
+            }
+            val sel = TransportSelector.select(useNearby && relayOn, relayOn && BleMeshService.isSupported(this), 0)
+            Log.i(TAG, "transport : ${sel.primary} (${sel.reason}), secours ${sel.fallbacks}")
+            btnRelay.text = if (relayOn) "Stopper le relai ($transport)" else "Démarrer le relai ($transport)"
         }
     }
 
@@ -201,4 +215,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    companion object {
+        private const val TAG = "WashUi"
+    }
 }
