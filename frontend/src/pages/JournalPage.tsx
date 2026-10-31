@@ -177,6 +177,7 @@ const buildSummary = (a: AiAnalysis): Summary => {
 export default function JournalPage() {
   const [items, setItems] = useState<AiAnalysis[]>([]);
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -198,6 +199,7 @@ export default function JournalPage() {
     try {
       const res = await api.aiAnalyses({
         page,
+        per_page: perPage,
         analysis_type: typeF || undefined,
         incident_id: incidentF,
       });
@@ -209,7 +211,7 @@ export default function JournalPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, typeF, incidentF]);
+  }, [page, perPage, typeF, incidentF]);
 
   useEffect(() => {
     void load();
@@ -351,7 +353,17 @@ export default function JournalPage() {
               </button>
             );
           })}
-          <Pager page={page} lastPage={lastPage} onPage={setPage} />
+          <Pager
+            page={page}
+            lastPage={lastPage}
+            onPage={setPage}
+            total={total}
+            perPage={perPage}
+            onPerPage={(n) => {
+              setPerPage(n);
+              setPage(1);
+            }}
+          />
         </div>
 
         <div className="lg:col-span-3">

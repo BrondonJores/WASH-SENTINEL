@@ -36,6 +36,7 @@ export default function IncidentsPage() {
 
   const [items, setItems] = useState<Incident[]>([]);
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -105,6 +106,7 @@ export default function IncidentsPage() {
     try {
       const res = await api.incidents({
         page,
+        per_page: perPage,
         status: statusF || undefined,
         urgency: urgencyF || undefined,
         category: categoryF || undefined,
@@ -119,7 +121,7 @@ export default function IncidentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, statusF, urgencyF, categoryF, searchQ, sortV]);
+  }, [page, perPage, statusF, urgencyF, categoryF, searchQ, sortV]);
 
   useEffect(() => {
     void load();
@@ -761,7 +763,17 @@ export default function IncidentsPage() {
           </li>
         ))}
       </ul>
-      <Pager page={page} lastPage={lastPage} onPage={setPage} />
+      <Pager
+        page={page}
+        lastPage={lastPage}
+        onPage={setPage}
+        total={total}
+        perPage={perPage}
+        onPerPage={(n) => {
+          setPerPage(n);
+          setPage(1);
+        }}
+      />
 
       <DetailDrawer
         detail={drawer}

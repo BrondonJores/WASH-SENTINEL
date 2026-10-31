@@ -20,7 +20,7 @@ class WashReportController extends Controller
             ->when($request->query('is_duplicate') === '0', fn ($q) => $q->where('is_duplicate', false))
             ->latest();
 
-        return response()->json($query->paginate(20));
+        return response()->json($query->paginate(min(100, max(5, (int) $request->query('per_page', 20)))));
     }
 
     public function store(Request $request, IncidentTriage $triage)

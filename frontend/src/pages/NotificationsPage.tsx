@@ -47,6 +47,7 @@ export default function NotificationsPage() {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
   const [lastPage, setLastPage] = useState(1);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -59,7 +60,11 @@ export default function NotificationsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.notifications({ unread: unreadOnly ? 1 : undefined, page });
+      const res = await api.notifications({
+        unread: unreadOnly ? 1 : undefined,
+        page,
+        per_page: perPage,
+      });
       // Écarts backend (WashNotificationController::index, non modifié) :
       // - aucun tri garanti → tri client par date décroissante sur la page chargée ;
       // - ?unread ignoré → repli client sur read_at quand le toggle est actif.
@@ -72,7 +77,7 @@ export default function NotificationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, unreadOnly]);
+  }, [page, perPage, unreadOnly]);
 
   useEffect(() => {
     void load();
@@ -260,7 +265,17 @@ export default function NotificationsPage() {
           );
         })}
       </div>
-      <Pager page={page} lastPage={lastPage} onPage={setPage} />
+      <Pager
+        page={page}
+        lastPage={lastPage}
+        onPage={setPage}
+        total={total}
+        perPage={perPage}
+        onPerPage={(n) => {
+          setPerPage(n);
+          setPage(1);
+        }}
+      />
 
       <DetailDrawer
         detail={detail}

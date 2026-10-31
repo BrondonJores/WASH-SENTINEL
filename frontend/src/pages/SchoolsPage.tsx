@@ -19,6 +19,7 @@ export default function SchoolsPage() {
 
   const [items, setItems] = useState<School[]>([]);
   const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -87,6 +88,7 @@ export default function SchoolsPage() {
     try {
       const res = await api.schools({
         page,
+        per_page: perPage,
         search: search || undefined,
         district: district || undefined,
       });
@@ -98,7 +100,7 @@ export default function SchoolsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, district]);
+  }, [page, perPage, search, district]);
 
   useEffect(() => {
     void load();
@@ -443,7 +445,17 @@ export default function SchoolsPage() {
             </button>
           );
         })}
-        <Pager page={page} lastPage={lastPage} onPage={setPage} />
+        <Pager
+          page={page}
+          lastPage={lastPage}
+          onPage={setPage}
+          total={total}
+          perPage={perPage}
+          onPerPage={(n) => {
+            setPerPage(n);
+            setPage(1);
+          }}
+        />
       </div>
 
       <DetailDrawer detail={detail} onClose={closeDetail} onDetail={(kind, id) => setDetail({ kind, id })} />

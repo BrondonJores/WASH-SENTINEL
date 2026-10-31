@@ -276,7 +276,7 @@ export const api = {
     if (language) form.append('language', language);
     return reqMultipart<SttTestResult>(`/v1/admin/stt-profiles/${id}/test`, form);
   },
-  schools: (params?: { district?: string; search?: string; page?: number }) =>
+  schools: (params?: { district?: string; search?: string; page?: number; per_page?: number }) =>
     req<Paginated<School>>(`/v1/wash/schools${qs(params ?? {})}`),
   school: (id: number) => req<School>(`/v1/wash/schools/${id}`),
   createSchool: (payload: SchoolPayload) =>
@@ -293,6 +293,7 @@ export const api = {
     search?: string;
     sort?: string;
     page?: number;
+    per_page?: number;
   }) => req<Paginated<Incident>>(`/v1/wash/incidents${qs(params ?? {})}`),
   incident: (id: number) => req<{ incident: Incident }>(`/v1/wash/incidents/${id}`),
   updateIncidentStatus: (id: number, status: string) =>
@@ -316,7 +317,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   assignableUsers: () => req<AssignableUser[]>('/v1/wash/assignable-users'),
-  reports: (params?: { school_id?: number; incident_id?: number; channel?: string; is_duplicate?: number; page?: number }) =>
+  reports: (params?: { school_id?: number; incident_id?: number; channel?: string; is_duplicate?: number; page?: number; per_page?: number }) =>
     req<Paginated<Report>>(`/v1/wash/reports${qs(params ?? {})}`),
   report: (id: number) => req<Report>(`/v1/wash/reports/${id}`),
   createReport: (payload: { school_id: number; message: string }) =>
@@ -324,13 +325,13 @@ export const api = {
       '/v1/wash/reports',
       { method: 'POST', body: JSON.stringify({ ...payload, channel: 'text' }) },
     ),
-  notifications: (params?: { unread?: number; page?: number }) =>
+  notifications: (params?: { unread?: number; page?: number; per_page?: number }) =>
     req<Paginated<AppNotification>>(`/v1/notifications${qs(params ?? {})}`),
   readNotification: (id: string) =>
     req<{ message: string }>(`/v1/notifications/${id}/read`, { method: 'POST' }),
   readAllNotifications: () =>
     req<{ message: string }>('/v1/notifications/read-all', { method: 'POST' }),
-  aiAnalyses: (params?: { analysis_type?: string; incident_id?: number; page?: number }) =>
+  aiAnalyses: (params?: { analysis_type?: string; incident_id?: number; page?: number; per_page?: number }) =>
     req<Paginated<AiAnalysis>>(`/v1/admin/ai-analyses${qs(params ?? {})}`),
   confirmProposal: (id: number) =>
     req<{ message: string; result: ProposalResult }>(`/v1/wash/agent/proposals/${id}/confirm`, {

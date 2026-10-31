@@ -222,4 +222,60 @@ class WashCrudFiltersTest extends TestCase
         // Sans filtre : les 3 notifications de l'utilisateur, pas celle d'autrui.
         $this->getJson('/api/v1/notifications')->assertOk()->assertJsonCount(3, 'data');
     }
+
+    public function test_incidents_per_page_paginates(): void
+    {
+        [$high] = $this->seedIncidents();
+        foreach (range(3, 6) as $i) {
+            Incident::create([
+                'school_id' => $high->school_id,
+                'reference_code' => "WASH-PAGE-00{$i}",
+                'title' => "Incident pagine {$i}",
+                'category' => 'handwashing',
+                'status' => 'reported',
+                'urgency' => 'medium',
+                'priority_score' => (float) $i,
+                'affected_students' => 10 * $i,
+            ]);
+        }
+
+        // per_page minimal effectif = 5 (clamp bas du contrat) : 6 lignes → 2 pages.
+        $page1 = $this->getJson('/api/v1/wash/incidents?per_page=5&sort=-priority_score')->assertOk();
+        $page1->assertJsonCount(5, 'data');
+        $page1->assertJsonPath('per_page', 5);
+        $page1->assertJsonPath('total', 6);
+        $page1->assertJsonPath('last_page', 2);
+        $page1->assertJsonPath('current_page', 1);
+
+        $page2 = $this->getJson('/api/v1/wash/incidents?per_page=5&sort=-priority_score&page=2')->assertOk();
+        $page2->assertJsonCount(1, 'data');
+        $page2->assertJsonPath('current_page', 2);
+    }
+
+    public function test_incidents_per_page_is_clamped_to_100(): void
+    {
+        $this->seedIncidents();
+
+        $res = $this->getJson('/api/v1/wash/incidents?per_page=999')->assertOk();
+        $res->assertJsonPath('per_page', 100);
+        $res->assertJsonPath('total', 2);
+        $res->assertJsonCount(2, 'data');
+        $res->assertJsonPath('last_page', 1);
+    }
+
+    public function test_incidents_per_page_small_or_invalid_values_clamp_to_minimum(): void
+    {
+        $this->seedIncidents();
+
+        // Sous le minimum de 5 : clampé à 5 (per_page=2 ne donne donc jamais 2 par page).
+        $this->getJson('/api/v1/wash/incidents?per_page=2')
+            ->assertOk()
+            ->assertJsonPath('per_page', 5);
+
+        // Valeur non numérique : (int) 'abc' = 0 → clampé à 5, sans erreur.
+        $res = $this->getJson('/api/v1/wash/incidents?per_page=abc')->assertOk();
+        $res->assertJsonPath('per_page', 5);
+        $res->assertJsonPath('total', 2);
+        $res->assertJsonCount(2, 'data');
+    }
 }

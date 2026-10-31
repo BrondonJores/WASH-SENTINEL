@@ -16,7 +16,7 @@ class WashSchoolController extends Controller
             ->when($request->search, fn ($q, $v) => $q->where('name', 'ilike', "%{$v}%"))
             ->orderBy('name');
 
-        return response()->json($query->paginate(20));
+        return response()->json($query->paginate(min(100, max(5, (int) $request->query('per_page', 20)))));
     }
 
     public function store(Request $request)

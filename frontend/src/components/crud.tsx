@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Button } from './ui';
+import { INPUT_CLS, fmtNum } from '../lib/wash';
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -10,30 +11,127 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   );
 }
 
+const PER_PAGE_OPTIONS = [10, 20, 50] as const;
+
+type PageItem = number | '…';
+
+/** Fenêtre de pages : 1 … 4 5 6 … 12 (page courante ± 1, bords élargis). */
+function pageItems(page: number, lastPage: number): PageItem[] {
+  if (lastPage <= 7) {
+    return Array.from({ length: lastPage }, (_, i) => i + 1);
+  }
+  const keep = new Set<number>([1, lastPage, page - 1, page, page + 1]);
+  if (page <= 3) {
+    keep.add(2);
+    keep.add(3);
+    keep.add(4);
+  }
+  if (page >= lastPage - 2) {
+    keep.add(lastPage - 3);
+    keep.add(lastPage - 2);
+    keep.add(lastPage - 1);
+  }
+  const sorted = [...keep].filter((p) => p >= 1 && p <= lastPage).sort((a, b) => a - b);
+  const out: PageItem[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) out.push('…');
+    out.push(p);
+    prev = p;
+  }
+  return out;
+}
+
 export function Pager({
   page,
   lastPage,
   onPage,
+  total,
+  perPage,
+  onPerPage,
 }: {
   page: number;
   lastPage: number;
   onPage: (p: number) => void;
+  total?: number;
+  perPage?: number;
+  onPerPage?: (n: number) => void;
 }) {
-  if (lastPage <= 1) return null;
+  const effectivePerPage = perPage ?? 20;
+  if (lastPage <= 1 && (total === undefined || total <= effectivePerPage)) return null;
+
+  const from = total === undefined || total === 0 ? 0 : (page - 1) * effectivePerPage + 1;
+  const to = total === undefined ? 0 : Math.min(page * effectivePerPage, total);
+  const showPerPage = onPerPage !== undefined && perPage !== undefined;
+
   return (
-    <div className="mt-4 flex items-center justify-between">
-      <p className="font-mono text-xs text-ink-faint">
-        Page {page} / {lastPage}
+    <nav aria-label="Pagination" className="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <p aria-live="polite" className="font-mono text-xs tabular-nums text-ink-faint">
+        {total === undefined ? (
+          <>
+            Page {page} / {lastPage}
+          </>
+        ) : (
+          <>
+            {fmtNum(from)}–{fmtNum(to)} sur {fmtNum(total)}
+          </>
+        )}
       </p>
-      <div className="flex gap-2">
-        <Button size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button
+          size="sm"
+          disabled={page <= 1}
+          onClick={() => onPage(page - 1)}
+          aria-label="Page précédente"
+        >
           ← Précédent
         </Button>
-        <Button size="sm" disabled={page >= lastPage} onClick={() => onPage(page + 1)}>
+        {pageItems(page, lastPage).map((item, idx) =>
+          item === '…' ? (
+            <span key={`gap-${idx}`} aria-hidden="true" className="px-1 text-sm text-ink-faint">
+              …
+            </span>
+          ) : (
+            <Button
+              key={item}
+              size="sm"
+              variant={item === page ? 'primary' : 'secondary'}
+              disabled={item === page}
+              onClick={() => onPage(item)}
+              aria-label={`Aller à la page ${item}`}
+              aria-current={item === page ? 'page' : undefined}
+            >
+              {item}
+            </Button>
+          ),
+        )}
+        <Button
+          size="sm"
+          disabled={page >= lastPage}
+          onClick={() => onPage(page + 1)}
+          aria-label="Page suivante"
+        >
           Suivant →
         </Button>
       </div>
-    </div>
+      {showPerPage && (
+        <label className="flex items-center gap-2 text-sm text-ink-soft">
+          <span aria-hidden="true">Afficher</span>
+          <select
+            value={perPage}
+            onChange={(e) => onPerPage(Number(e.target.value))}
+            aria-label="Nombre d'éléments par page"
+            className={`${INPUT_CLS} w-auto`}
+          >
+            {PER_PAGE_OPTIONS.map((n) => (
+              <option key={n} value={n}>
+                {n} / page
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </nav>
   );
 }
 

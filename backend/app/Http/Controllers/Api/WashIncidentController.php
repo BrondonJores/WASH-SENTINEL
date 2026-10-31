@@ -43,7 +43,7 @@ class WashIncidentController extends Controller
             ->when($sort, fn ($q) => $q->orderBy($sort[0], $sort[1]))
             ->when(! $sort, fn ($q) => $q->orderByDesc('priority_score')->latest());
 
-        return response()->json($query->paginate(20));
+        return response()->json($query->paginate(min(100, max(5, (int) $request->query('per_page', 20)))));
     }
 
     public function overview()
