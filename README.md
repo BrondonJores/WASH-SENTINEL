@@ -8,7 +8,7 @@
 [![Status](https://img.shields.io/badge/status-working%20MVP-success)]()
 [![CI](https://github.com/BrondonJores/WASH-SENTINEL/actions/workflows/ci.yml/badge.svg)](https://github.com/BrondonJores/WASH-SENTINEL/actions/workflows/ci.yml)
 
-> 🎬 **Demo video:** _coming soon_ (`docs/demo.mp4`) · **Live jury URL:** _on request_ · **Runbook démo :** [`docs/DEMO.md`](docs/DEMO.md)
+> 🎬 **Demo video:** _coming soon_ (`docs/demo.mp4`) · **Live jury URL:** _on request_ · **Runbooks :** [démo jury 5 min](docs/DEMO_JURY.md) · [WhatsApp live](docs/WHATSAPP_LIVE.md) · [mesh](docs/DEMO.md)
 
 > **One omnipresent AI agent instead of dashboards.** School directors report a broken pump by text, voice note, photo or WhatsApp — in French or a local language like Douala. Sentinel triages, deduplicates, prioritizes, dispatches fairly across the territory, and advises: *repair or replace?*
 
@@ -33,18 +33,20 @@ WASH Sentinel turns every chaotic field report into **one triaged, deduplicated,
 | "Which schools should we replace instead of repair?" | Capex/Opex decision copilot over maintenance history | Replace-vs-repair verdict + savings plan |
 | "Who do we serve first this week?" | Territorial equity index + route optimizer | Fair ranking + grouped tours + official justification note |
 | 3 schools, same district, yellow water | Epidemic cluster detector | ⚠️ Contamination / cholera-risk alert |
+| “Log this repair: pump fixed, 150,000 XAF” | Locked `prepare_*` + recap + human confirm | Validated write, journaled, expiring draft |
 
 **No dashboard to learn.** An omnipresent agent answers in natural language and generates **cards, lists and charts on demand** (incident cards, repair-trend charts, dispatch plans).
 
 ## 3. Why it wins 🏆
 
-1. **Dashboardless by design** — a real agent loop with native function-calling and 6 tools (`analyze_school`, `rank_schools_by_need`, `summarize_district`, `explain_incident`, `repair_trends`, `prepare_report`), not a chatbot wrapper.
+1. **Dashboardless by design** — a real agent loop with native function-calling and 10 tools (`analyze_school`, `rank_schools_by_need`, `summarize_district`, `explain_incident`, `repair_trends`, `territory_overview`, `build_briefing`, `prepare_report`, `prepare_incident`, `prepare_maintenance_log`), not a chatbot wrapper. It answers with generated cards, charts, maps, mini-decks and clickable pickers — plus verification-first admin CRUD behind it.
 2. **Meta-native, end to end** — Llama for reasoning, Omnilingual ASR for 1,600 languages (Douala included), WhatsApp for the last mile.
 3. **Equity is the algorithm** — a transparent fairness score (days without water × health risk × girls' impact × isolation bonus) kills favoritism and produces an auditable public justification.
 4. **Repair-vs-repair economics** — the copilot computes cumulative repair cost vs. new-equipment cost (MTBF, school-days lost) and says *stop patching, replace with solar pumping*.
 5. **Model independence** — switch local ↔ cloud LLM/STT **at runtime from the admin Settings page**. No redeploy, no code change. API keys encrypted at rest.
 6. **Runs where it's needed** — full local stack on a CPU-only i5 (Llama 3.2 3B, ONNX int8 ASR). Cloud profiles available for zero-GPU demo day.
 7. **Reports without internet** — an offline mesh (store-and-forward bundles over QR/Bluetooth/WiFi, SMS fallback, Android relay app) carries remote schools' reports hop by hop to the first connected phone. See [`mesh/`](mesh/) and the field page `/m`.
+8. **The agent creates, but never writes alone** — reports, interventions and maintenance logs go through `prepare_*` drafts: complete slots required, recap card, explicit human **Confirmer / « oui »**, 30-minute expiry, owner + permission checks. Fuzzy titles accepted, ambiguity resolved with a clickable picker card.
 
 ## 4. Not a CRUD: the engineering under the hood 🛠️
 
@@ -80,7 +82,7 @@ _Golden path with example outputs — run it live after `./start.sh`._
 
 1. **Report** — *« Ici école Saint-Paul, la pompe d'eau potable est brisée depuis ce matin, 400 élèves sans eau… »* (text or voice note) → incident created, **CRITICAL**, priority 95/100, reference `WASH-2026-0042`, voice confirmation generated.
 2. **Duplicate** — send *« Problème d'eau à Saint-Paul »* → `is_duplicate: true`, attached to the parent, severity bumped. No ticket spam.
-3. **Photo** — upload a burst pipe photo → vision check (WASH-related ✓), visual severity score fused into priority.
+3. **Photo** — upload a burst pipe photo → vision check (WASH-related ✓) + visual severity score (priority fusion landing next).
 4. **Copilot** — *« Which schools in Douala got the most interventions this year — repair or replace? »* → ranked answer + savings plan + trend chart card.
 5. **Equity** — *« Plan this week's tours »* → forgotten rural school ranked #1 over the downtown drip, grouped route saving 100+ km of fuel, official transparency note generated.
 6. **WhatsApp** — same report via the WhatsApp simulator → identical pipeline, confirmation reply.
@@ -117,7 +119,7 @@ WASH-SENTINEL/
 │   ├── ai-engine/           # FastAPI: providers, agents, tools, STT
 │   ├── app/Models|Services|Jobs|Notifications
 │   └── database/migrations|seeders
-├── frontend/                # React admin (login + AI Settings; public agent widget next)
+├── frontend/                # React: Sentinel console + admin CRUD + public /signaler
 └── models/                  # local voice models (git-ignored)
 ```
 
@@ -134,6 +136,7 @@ The script creates missing `.env` files, builds and starts all containers, runs 
 | Service      | URL                        |
 |--------------|----------------------------|
 | Admin console| http://localhost:5173      |
+| Public form  | http://localhost:5173/signaler |
 | Laravel API  | http://localhost/api       |
 | AI engine    | http://localhost:8000/docs |
 
@@ -158,7 +161,7 @@ Same flow for speech: `API cloud (OpenAI / Groq)` STT profile with `whisper-1`. 
 
 ## 9. API overview
 
-**Laravel** (`/api/v1`): `POST /auth/token` · `GET /wash/schools|reports|incidents` · `POST /wash/reports` · `POST /wash/agent/chat|converse|dispatch-plan|epidemic-scan` · `GET|POST /admin/model-profiles|stt-profiles` (+ `/activate`, `/test`) · `POST /whatsapp/webhook` (+ `GET` verify).
+**Laravel** (`/api/v1`): `POST /auth/token` · `GET /wash/schools|reports|incidents` (+ `search|category|sort|channel|is_duplicate|unread|per_page`) · `POST /wash/reports` · `POST /wash/agent/chat|converse|dispatch-plan|epidemic-scan` · `POST /wash/agent/proposals/{id}/confirm|cancel` · `GET|POST /admin/model-profiles|stt-profiles` (+ `/activate`, `/test`) · `POST /whatsapp/webhook` (+ `GET` verify).
 
 **AI engine** (`:8000`): `/health` · `/v1/wash/extract|check-duplicates|triage|analyze-image|generate-repair-plan|detect-epidemic-risk` · `/v1/wash/copilot/chat|replace-vs-repair` · `/v1/wash/equity/dispatch-plan` · `/v1/agent/chat` · `/v1/voice/transcribe|synthesize` · `/v1/admin/provider-types|test-provider|stt-types|test-stt`.
 
@@ -184,16 +187,20 @@ To enable Omnilingual, drop the [~700 MB model + tokens](https://huggingface.co/
 - **SOLID, concretely**: controllers depend on contracts bound once in `AppServiceProvider` (`AiEngineClient → WashAiEngineService`, `IncidentTriage → IncidentTriageService`, `WhatsAppClient → MetaWhatsAppService`); Python agents take `BaseLLMProvider`, never a concrete driver (`AgentLoop(llm: BaseLLMProvider)`).
 - **Security**: Sanctum tokens, Spatie RBAC (reporter / technician / admin), API keys encrypted in DB (masked in UI), strict request validation, rate limiting on auth/report/webhook endpoints, every AI decision journaled in `ai_analyses`.
 - **Resilience**: three fallback layers (extraction → `fallback-rules`, vision, duplicates) keep reporting alive if the AI engine is down.
-- **Tests**: PHPUnit suite (triage, duplicates, RBAC, WhatsApp, agent loop, notifications) green; Python probes cover LLM/STT/agent wiring.
+- **Tests**: PHPUnit 84 passing (triage, duplicates, RBAC, WhatsApp, agent loop, proposals, CRUD filters, notifications); Python unittest 76 passing (extraction, tools, loop, proposals, providers).
 - **Traceability**: 100% fresh code, committed step by step — no copy-paste from previous projects.
 
 ## 13. Roadmap
 
-- [ ] Public agent widget (chat + cards/charts, express report, tracking by reference, FR/Douala toggle)
-- [ ] Admin pilot console (incidents, schools, notifications UI)
-- [ ] Live WhatsApp credentials + Meta app review
+- [x] Public report widget (`/signaler`, no login)
+- [x] Admin CRUD (incidents, schools, reports, AI journal, notifications) + locked agent-created writes
+- [ ] Live WhatsApp credentials + Meta app review (code + runbook ready)
 - [ ] True Douala field-audio validation of Omnilingual
-- [ ] Final end-to-end demo rehearsal 🎤
+- [ ] Vision severity fused into triage priority + lightweight vision model
+- [ ] RAG over pump manuals / WHO protocols with cited answers
+- [ ] Failure prediction + proactive relances on dormant incidents
+- [ ] AI observability (latency/tokens) + prompt eval suite
+- [ ] Demo video + screenshots + final end-to-end rehearsal 🎤
 
 ---
 
