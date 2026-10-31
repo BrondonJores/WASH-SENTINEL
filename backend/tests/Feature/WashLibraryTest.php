@@ -99,6 +99,33 @@ class WashLibraryTest extends TestCase
         $this->assertDatabaseHas('messages', ['conversation_id' => $id, 'content' => 'Nouveau']);
     }
 
+    public function test_replace_preserves_said_at_follow_ups_and_order(): void
+    {
+        $this->login();
+        $id = $this->postJson('/api/v1/wash/conversations', [
+            'title' => 'T', 'messages' => $this->payload(),
+        ])->json('id');
+
+        // Horodatages clients distincts mais created_at identiques en base
+        // (recréation en bloc) : l'ordre et les heures doivent survivre.
+        $messages = [
+            ['role' => 'user', 'content' => 'Q1', 'said_at' => 1000],
+            ['role' => 'assistant', 'content' => 'R1', 'said_at' => 2000,
+             'tools' => ['district_alerts'], 'follow_ups' => ['Et demain ?']],
+            ['role' => 'user', 'content' => 'Q2', 'said_at' => 3000],
+        ];
+        $this->putJson("/api/v1/wash/conversations/{$id}/messages", [
+            'messages' => $messages,
+        ])->assertOk();
+
+        $res = $this->getJson('/api/v1/wash/library')->assertOk();
+        $conv = collect($res->json('conversations'))->firstWhere('id', $id);
+        $this->assertSame(['Q1', 'R1', 'Q2'], array_column($conv['messages'], 'content'));
+        $this->assertSame([1000, 2000, 3000], array_column($conv['messages'], 'said_at'));
+        $this->assertSame(['Et demain ?'], $conv['messages'][1]['follow_ups']);
+        $this->assertSame(['district_alerts'], $conv['messages'][1]['tools']);
+    }
+
     public function test_move_conversation_between_projects(): void
     {
         $this->login();

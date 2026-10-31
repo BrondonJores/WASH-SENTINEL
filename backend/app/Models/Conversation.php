@@ -22,6 +22,9 @@ class Conversation extends Model
 
     public function messages(): HasMany
     {
-        return $this->hasMany(Message::class)->oldest();
+        // Ordre d'insertion stable : le replace-all recrée les lignes dans
+        // l'ordre du tableau front, mais avec des created_at identiques —
+        // trier par created_at rend l'ordre indéfini après un refresh.
+        return $this->hasMany(Message::class)->orderBy('id');
     }
 }

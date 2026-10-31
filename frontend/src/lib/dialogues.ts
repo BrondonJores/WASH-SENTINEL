@@ -45,5 +45,7 @@ export function toMessagePayload(messages: DialogueMessage[]): MessagePayload[] 
     tools: m.tools,
     cards: m.cards,
     model: m.model,
+    said_at: m.at,
+    follow_ups: m.follow_ups,
   }));
 }

@@ -99,6 +99,9 @@ class WashConversationController extends Controller
             'messages.*.cards.*.title' => ['nullable', 'string', 'max:180'],
             'messages.*.cards.*.data' => ['nullable', 'array'],
             'messages.*.model' => ['nullable', 'string', 'max:120'],
+            'messages.*.said_at' => ['nullable', 'integer', 'min:0', 'max:9999999999999'],
+            'messages.*.follow_ups' => ['nullable', 'array', 'max:10'],
+            'messages.*.follow_ups.*' => ['string', 'max:200'],
         ];
     }
 
@@ -111,6 +114,8 @@ class WashConversationController extends Controller
                 'tools' => $message['tools'] ?? [],
                 'cards' => $message['cards'] ?? [],
                 'model' => $message['model'] ?? null,
+                'said_at' => $message['said_at'] ?? null,
+                'follow_ups' => $message['follow_ups'] ?? [],
             ]);
         }
     }

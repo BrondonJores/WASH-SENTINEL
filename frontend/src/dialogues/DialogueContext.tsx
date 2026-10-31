@@ -38,8 +38,8 @@ function toClient(c: LibraryConversation): ChatItem {
       tools: m.tools ?? [],
       cards: m.cards ?? [],
       model: m.model ?? '',
-      at: Date.parse(m.created_at) || 0,
-      follow_ups: [],
+      at: typeof m.said_at === 'number' && m.said_at > 0 ? m.said_at : Date.parse(m.created_at) || 0,
+      follow_ups: m.follow_ups ?? [],
     })),
   };
 }

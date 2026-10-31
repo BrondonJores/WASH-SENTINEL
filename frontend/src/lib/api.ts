@@ -130,6 +130,8 @@ export interface LibraryMessage {
   tools: string[];
   cards: AgentCard[];
   model: string | null;
+  said_at: number | null;
+  follow_ups: string[] | null;
   created_at: string;
 }
 
@@ -152,6 +154,8 @@ export interface MessagePayload {
   tools: string[];
   cards: AgentCard[];
   model: string;
+  said_at: number;
+  follow_ups: string[];
 }
 
 const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost/api';

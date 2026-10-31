@@ -49,9 +49,50 @@ const TOOL_FR: Record<string, string> = {
   repair_trends: 'Tendances réparations',
   explain_incident: 'Détail incident',
   prepare_report: 'Signalement',
+  prepare_incident: 'Création incident',
+  prepare_maintenance_log: 'Journal intervention',
+  list_maintenance_logs: 'Interventions',
   territory_overview: 'Carte du territoire',
   build_briefing: 'Briefing',
+  capabilities: 'Capacités',
+  district_alerts: 'Alertes district',
+  epidemic_alerts: 'Veille épidémique',
+  maintenance_team: 'Équipe maintenance',
+  compare_schools: 'Comparaison écoles',
+  copilot_answer: 'Conseil',
+  mission_timeline: 'Missions terrain',
+  document_briefing: 'Document',
+  prepare_chantier_update: 'Suivi chantier',
+  saisie_assistee: 'Saisie guidée',
+  offline_queue: 'File hors-ligne',
+  relances_proactives: 'Relances',
+  observatoire: 'Observatoire',
 };
+
+function prettyTool(t: string): string {
+  return TOOL_FR[t] ?? t.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function draftKey(chatId: number | null): string {
+  return `wash_draft_${chatId ?? 'pending'}`;
+}
+
+function readDraft(chatId: number | null): string {
+  try {
+    return localStorage.getItem(draftKey(chatId)) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeDraft(chatId: number | null, value: string): void {
+  try {
+    if (value === '') localStorage.removeItem(draftKey(chatId));
+    else localStorage.setItem(draftKey(chatId), value);
+  } catch {
+    /* navigation privée : brouillon non persisté */
+  }
+}
 
 function fmtTime(at: number): string {
   return new Date(at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
@@ -104,7 +145,7 @@ function CopyAnswer({ text }: { text: string }) {
 
 export default function ConsolePage() {
   const { user } = useAuth();
-  const { activeChat, syncMessages, newChat, registerLoader } = useDialogues();
+  const { activeChat, activeChatId, syncMessages, newChat, registerLoader } = useDialogues();
   const [messages, setMessages] = useState<Msg[]>(() => activeChat?.messages ?? []);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -179,10 +220,14 @@ export default function ConsolePage() {
       setError(null);
       setStreamId(null);
       setVisible(0);
-      setInput('');
+      setInput(readDraft(chat?.id ?? null));
       setHeaderHidden(false);
     });
   }, [registerLoader]);
+
+  useEffect(() => {
+    writeDraft(activeChatId, input);
+  }, [input, activeChatId]);
 
   useEffect(() => {
     if (messages.length === 0) return;
@@ -323,6 +368,7 @@ export default function ConsolePage() {
           placeholder={placeholder}
           aria-label="Message à Sentinel"
           disabled={busy || streaming}
+          autoFocus
           onFocus={() => setComposerFocus(true)}
           onBlur={() => setComposerFocus(false)}
           className="h-12 w-full bg-transparent text-[16px] caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
@@ -352,6 +398,7 @@ export default function ConsolePage() {
           placeholder={placeholder}
           aria-label="Message à Sentinel"
           disabled={busy || streaming}
+          autoFocus
           className="h-10 w-full bg-transparent text-sm caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
         />
         <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} />
@@ -552,29 +599,22 @@ export default function ConsolePage() {
                         }}
                       />
                     </div>
-                    {m.tools.length > 0 &&
-                      ((m.cards ?? []).length > 0 ? (
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="inline-flex items-center gap-1 text-[12px] text-ink-faint">
-                            <Icon name="check" className="h-3.5 w-3.5 text-teal-600 dark:text-teal-300" />
-                            Vérifié :
+                    {m.tools.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 text-[12px] text-ink-faint">
+                          <Icon name="check" className="h-3.5 w-3.5 text-teal-600 dark:text-teal-300" />
+                          Vérifié :
+                        </span>
+                        {m.tools.map((t, j) => (
+                          <span
+                            key={`${t}-${j}`}
+                            className="msg-in rounded-full bg-teal-700/10 px-2.5 py-0.5 text-[12px] font-medium text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
+                          >
+                            {prettyTool(t)}
                           </span>
-                          {m.tools.map((t, j) => (
-                            <span
-                              key={`${t}-${j}`}
-                              className="msg-in rounded-full bg-teal-700/10 px-2.5 py-0.5 text-[12px] font-medium text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
-                            >
-                              {TOOL_FR[t] ?? t}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[12px] text-ink-faint">
-                            Sources : {m.tools.length} outil{m.tools.length > 1 ? 's' : ''}
-                          </span>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
+                    )}
                     <div className="cards-in">
                       <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} onDetail={openDetail} />
                     </div>
