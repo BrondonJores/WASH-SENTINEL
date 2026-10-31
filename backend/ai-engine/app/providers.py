@@ -1,11 +1,37 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 from typing import Any
 
 import httpx
+
+
+# --- Robustesse réseau (terrain : Ollama froid, timeouts, 5xx/429 transitoires) ---
+RETRY_MAX_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+WARMUP_TIMEOUT_SECONDS_DEFAULT = 15.0
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    """True si le statut HTTP est transitoire (timeout/rate-limit/serveur)."""
+    return status_code in RETRYABLE_STATUS_CODES
+
+
+def _is_retryable_exception(exc: BaseException) -> bool:
+    """True si l'exception réseau est transitoire (timeout/connexion)."""
+    return isinstance(exc, (httpx.TimeoutException, httpx.ConnectError))
+
+
+def _warmup_timeout_seconds() -> float:
+    """Timeout du warmup : explicite, configurable via LLM_WARMUP_TIMEOUT."""
+    try:
+        return float(os.getenv("LLM_WARMUP_TIMEOUT", str(WARMUP_TIMEOUT_SECONDS_DEFAULT)))
+    except ValueError:
+        return WARMUP_TIMEOUT_SECONDS_DEFAULT
 
 
 def parse_json_response(raw: str) -> dict[str, Any]:
@@ -139,6 +165,89 @@ class BaseLLMProvider:
         self.embed_model = embed_model or model
         self.api_key = api_key
         self.timeout = timeout
+        # Hook de test : transport httpx injectable (MockTransport), None en prod.
+        self._transport: httpx.AsyncBaseTransport | None = None
+
+    def _async_client(self, timeout: float | None = None) -> httpx.AsyncClient:
+        """Client HTTP du provider : timeout explicite + transport injectable (tests)."""
+        kwargs: dict[str, Any] = {"timeout": self.timeout if timeout is None else timeout}
+        if self._transport is not None:
+            kwargs["transport"] = self._transport
+        return httpx.AsyncClient(**kwargs)
+
+    def _retry_delay(self, failed_attempt: int) -> float:
+        """Délai exponentiel avant réessai (1s, 2s, 4s...). failed_attempt est 1-based."""
+        idx = max(0, min(failed_attempt - 1, len(RETRY_BACKOFF_SECONDS) - 1))
+        return RETRY_BACKOFF_SECONDS[idx]
+
+    def _final_transient_message(
+        self, *, last_status: int | None, last_exc: Exception | None
+    ) -> str:
+        """Message final FR actionnable après épuisement des réessais."""
+        base = (
+            f"LLM '{self.model}' ({self.provider_name}, {self.base_url}) "
+            f"injoignable après {RETRY_MAX_ATTEMPTS} tentatives"
+        )
+        if isinstance(last_exc, httpx.TimeoutException):
+            return (
+                f"{base} : délai dépassé (timeout {self.timeout}s). "
+                "Le modèle est peut-être froid (premier chargement) ou le serveur surchargé. "
+                "Vérifiez que le serveur répond, réveillez-le via POST /v1/admin/warmup, puis réessayez."
+            )
+        if isinstance(last_exc, httpx.ConnectError):
+            return (
+                f"{base} : connexion impossible. "
+                f"Vérifiez que le serveur LLM est démarré et que l'URL {self.base_url} est correcte "
+                "(ex. 'ollama serve', 'ollama list'), puis réessayez."
+            )
+        if last_status == 429:
+            return (
+                f"{base} : quota / limite de débit dépassée (429). "
+                "Patientez quelques secondes, réduisez la fréquence des appels ou vérifiez "
+                "votre quota côté fournisseur, puis réessayez."
+            )
+        if last_status == 408:
+            return (
+                f"{base} : délai côté serveur (408). "
+                "Le modèle met trop longtemps à répondre (froid/surchargé) ; "
+                "réveillez-le via POST /v1/admin/warmup puis réessayez."
+            )
+        if last_status is not None and last_status >= 500:
+            return (
+                f"{base} : erreur serveur distante ({last_status}). "
+                "Le fournisseur est surchargé ou en panne ; patientez puis réessayez, "
+                "et vérifiez l'état du serveur et vos logs."
+            )
+        detail = last_exc if last_exc is not None else last_status
+        return f"{base} : échec transitoire ({detail}). Patientez puis réessayez."
+
+    async def _post_with_retry(
+        self, url: str, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> httpx.Response:
+        """POST JSON avec retry exponentiel borné sur erreurs transitoires uniquement.
+
+        Réessaie (max RETRY_MAX_ATTEMPTS, pauses RETRY_BACKOFF_SECONDS) sur :
+        timeouts, erreurs de connexion, 408/429/5xx. Ne réessaie JAMAIS sur les
+        autres 4xx (erreurs métier : réponse retournée telle quelle à l'appelant).
+        En cas d'épuisement, lève RuntimeError avec un message FR actionnable.
+        """
+        last_status: int | None = None
+        last_exc: Exception | None = None
+        async with self._async_client() as client:
+            for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+                try:
+                    response = await client.post(url, json=payload, headers=headers)
+                except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                    last_status, last_exc = None, exc
+                else:
+                    if not _is_retryable_status(response.status_code):
+                        return response
+                    last_status, last_exc = response.status_code, None
+                if attempt < RETRY_MAX_ATTEMPTS:
+                    await asyncio.sleep(self._retry_delay(attempt))
+        raise RuntimeError(
+            self._final_transient_message(last_status=last_status, last_exc=last_exc)
+        )
 
     async def generate_json(self, prompt: str, system: str = "") -> dict[str, Any]:
         raise NotImplementedError
@@ -168,6 +277,14 @@ class BaseLLMProvider:
                 "sample": "",
                 "error": f"{type(exc).__name__}: {str(exc)[:300]}",
             }
+
+    async def warmup(self) -> dict[str, Any]:
+        """Pré-chauffe le provider (Ollama froid) par un appel léger, sans générer.
+
+        Retourne {"ok", "latency_ms", "error", "provider", "model"} : ne lève
+        jamais, pour un usage direct depuis POST /v1/admin/warmup.
+        """
+        raise NotImplementedError
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -217,20 +334,19 @@ class OllamaProvider(BaseLLMProvider):
         )
 
     async def generate_json(self, prompt: str, system: str = "") -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "system": system,
-                    "format": "json",
-                    "stream": False,
-                    "options": {"temperature": 0.1},
-                },
-            )
-            raise_for_ollama(response, self.model)
-            return parse_json_response(response.json().get("response", "{}"))
+        response = await self._post_with_retry(
+            f"{self.base_url}/api/generate",
+            {
+                "model": self.model,
+                "prompt": prompt,
+                "system": system,
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0.1},
+            },
+        )
+        raise_for_ollama(response, self.model)
+        return parse_json_response(response.json().get("response", "{}"))
 
     async def generate_vision_json(self, prompt: str, image_base64: str, system: str = "") -> dict[str, Any]:
         try:
@@ -279,20 +395,19 @@ class OllamaProvider(BaseLLMProvider):
         }
         if tools:
             payload["tools"] = tools
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                response = await client.post(f"{self.base_url}/api/chat", json=payload)
-                raise_for_ollama(response, self.model)
-            except httpx.HTTPStatusError as exc:
-                if not tools or exc.response.status_code != 400:
-                    raise
-                # Petit modèle sans function-calling (ex. gemma 1B/2B) :
-                # on rejoue sans outils plutôt que d'échouer.
-                print(f"[ollama] {self.model} refuse les outils (400), repli sans tools.")
-                payload = {k: v for k, v in payload.items() if k != "tools"}
-                response = await client.post(f"{self.base_url}/api/chat", json=payload)
-                raise_for_ollama(response, self.model)
-            msg = response.json().get("message", {})
+        try:
+            response = await self._post_with_retry(f"{self.base_url}/api/chat", payload)
+            raise_for_ollama(response, self.model)
+        except httpx.HTTPStatusError as exc:
+            if not tools or exc.response.status_code != 400:
+                raise
+            # Petit modèle sans function-calling (ex. gemma 1B/2B) :
+            # on rejoue sans outils plutôt que d'échouer.
+            print(f"[ollama] {self.model} refuse les outils (400), repli sans tools.")
+            payload = {k: v for k, v in payload.items() if k != "tools"}
+            response = await self._post_with_retry(f"{self.base_url}/api/chat", payload)
+            raise_for_ollama(response, self.model)
+        msg = response.json().get("message", {})
         calls: list[dict[str, Any]] = []
         for tc in msg.get("tool_calls", []) or []:
             fn = tc.get("function", {})
@@ -313,6 +428,69 @@ class OllamaProvider(BaseLLMProvider):
     def format_tool_result(self, name: str, result: Any, call_id: str | None = None) -> dict[str, Any]:
         content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
         return {"role": "tool", "content": content}
+
+    async def warmup(self) -> dict[str, Any]:
+        """Réveille un serveur Ollama froid via GET /api/tags (léger, sans génération).
+
+        Ne charge aucun modèle : un simple appel liste suffit à sortir le
+        serveur de veille et à valider l'URL. Ne lève jamais : retourne
+        {"ok", "latency_ms", "error", "provider", "model"} avec un message
+        FR actionnable en cas d'échec.
+        """
+        started = time.perf_counter()
+        timeout = min(self.timeout, _warmup_timeout_seconds())
+        try:
+            async with self._async_client(timeout=timeout) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+        except httpx.TimeoutException:
+            return {
+                "ok": False,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "error": (
+                    f"Délai dépassé (timeout {timeout}s) au réveil de '{self.model}'. "
+                    "Le serveur est froid ou surchargé ; réessayez dans quelques secondes."
+                ),
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        except httpx.ConnectError:
+            return {
+                "ok": False,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "error": (
+                    f"Connexion impossible à {self.base_url}. "
+                    "Vérifiez 'ollama serve', 'ollama list' et l'URL configurée, puis réessayez."
+                ),
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if response.status_code == 200:
+            return {
+                "ok": True,
+                "latency_ms": latency_ms,
+                "error": None,
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        return {
+            "ok": False,
+            "latency_ms": latency_ms,
+            "error": (
+                f"Ollama {response.status_code} sur /api/tags pour '{self.model}'. "
+                f"Vérifiez 'ollama serve' et l'URL {self.base_url}."
+            ),
+            "provider": self.provider_name,
+            "model": self.model,
+        }
 
 class OpenAICompatibleProvider(BaseLLMProvider):
     """Driver API externes au format OpenAI (OpenAI, Groq, Together, Mistral, Ollama /v1...)."""
@@ -350,20 +528,19 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": 0.1,
-                    "response_format": {"type": "json_object"},
-                },
-            )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            return parse_json_response(content)
+        response = await self._post_with_retry(
+            f"{self.base_url}/chat/completions",
+            {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"},
+            },
+            headers=self._headers(),
+        )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        return parse_json_response(content)
 
     async def generate_vision_json(self, prompt: str, image_base64: str, system: str = "") -> dict[str, Any]:
         messages: list[dict[str, Any]] = []
@@ -418,12 +595,11 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions", headers=self._headers(), json=payload
-            )
-            response.raise_for_status()
-            msg = response.json()["choices"][0]["message"]
+        response = await self._post_with_retry(
+            f"{self.base_url}/chat/completions", payload, headers=self._headers()
+        )
+        response.raise_for_status()
+        msg = response.json()["choices"][0]["message"]
         calls: list[dict[str, Any]] = []
         for tc in msg.get("tool_calls", []) or []:
             fn = tc.get("function", {})
@@ -440,6 +616,82 @@ class OpenAICompatibleProvider(BaseLLMProvider):
     def format_tool_result(self, name: str, result: Any, call_id: str | None = None) -> dict[str, Any]:
         content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
         return {"role": "tool", "tool_call_id": call_id, "content": content}
+
+    async def warmup(self) -> dict[str, Any]:
+        """Valide une API compatible-OpenAI via GET /models (léger, sans génération).
+
+        Un simple appel liste suffit à valider l'URL, la clé API et la
+        connectivité, sans consommer de quota de génération. Ne lève jamais :
+        retourne {"ok", "latency_ms", "error", "provider", "model"} avec un
+        message FR actionnable en cas d'échec.
+        """
+        started = time.perf_counter()
+        timeout = min(self.timeout, _warmup_timeout_seconds())
+        try:
+            async with self._async_client(timeout=timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/models", headers=self._headers()
+                )
+        except httpx.TimeoutException:
+            return {
+                "ok": False,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "error": (
+                    f"Délai dépassé (timeout {timeout}s) au réveil de '{self.model}'. "
+                    "Le fournisseur est lent ou surchargé ; réessayez dans quelques secondes."
+                ),
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        except httpx.ConnectError:
+            return {
+                "ok": False,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "error": (
+                    f"Connexion impossible à {self.base_url}. "
+                    "Vérifiez l'URL de base, votre réseau et la clé API, puis réessayez."
+                ),
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        if response.status_code == 200:
+            return {
+                "ok": True,
+                "latency_ms": latency_ms,
+                "error": None,
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        if response.status_code in (401, 403):
+            return {
+                "ok": False,
+                "latency_ms": latency_ms,
+                "error": (
+                    f"Authentification refusée ({response.status_code}) pour '{self.model}'. "
+                    "Vérifiez la clé API configurée, puis réessayez."
+                ),
+                "provider": self.provider_name,
+                "model": self.model,
+            }
+        return {
+            "ok": False,
+            "latency_ms": latency_ms,
+            "error": (
+                f"Fournisseur {response.status_code} sur /models pour '{self.model}'. "
+                f"Vérifiez l'URL {self.base_url} et l'état du fournisseur."
+            ),
+            "provider": self.provider_name,
+            "model": self.model,
+        }
 
 PROVIDER_REGISTRY: dict[str, type[BaseLLMProvider]] = {
     "ollama": OllamaProvider,

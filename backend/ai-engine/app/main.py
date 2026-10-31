@@ -350,6 +350,18 @@ async def test_provider(payload: ProviderTestRequest) -> ProviderTestResponse:
         )
     except Exception as exc:
         return ProviderTestResponse(ok=False, error=f"{type(exc).__name__}: {str(exc)[:300]}")
+
+
+@app.post("/v1/admin/warmup")
+async def warmup_provider(request: Request) -> dict[str, Any]:
+    """Pré-chauffe le provider LLM actif (Ollama froid) via un appel léger."""
+    try:
+        return await _llm(request).warmup()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur au réchauffement du provider : {str(exc)}"
+        ) from exc
 # ==========================================
 # 11. Administration des Providers STT (page Settings)
 # ==========================================
