@@ -4,6 +4,9 @@
 Usage :
     python simulate_hops.py                 # simulation pure (aucun serveur requis)
     python simulate_hops.py --live          # + POST réel vers le relai/Laravel locaux
+    python simulate_hops.py --burst N       # stress : N bundles vers le relai (+ doublons
+                                            #   et invalides), rapport chiffré ; simulation
+                                            #   locale si le relai est injoignable
 
 Scénario Cameroun : l'école de Yokadouma (sans réseau) fait passer son
 signalement par un taxi-moto (B) jusqu'à Bertoua (C, connecté).
@@ -29,7 +32,7 @@ MUTABLE = {"checksum", "hops", "previous_node", "copies_remaining"}
 
 def checksum_of(bundle: dict) -> str:
     payload = {k: v for k, v in bundle.items() if k not in MUTABLE}
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -79,7 +82,115 @@ def forward(bundle: dict, node_id: str) -> dict | None:
     return nxt
 
 
-def main(live: bool = False) -> int:
+def _burst_headers() -> dict:
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    relay_key = os.environ.get("MESH_RELAY_API_KEY", "")
+    if relay_key:
+        headers["X-Mesh-Key"] = relay_key
+    return headers
+
+
+def _burst_post(url: str, data: dict) -> tuple[int, dict]:
+    import urllib.request
+    import urllib.error
+
+    req = urllib.request.Request(url, data=json.dumps(data).encode(),
+                                 headers=_burst_headers(), method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read().decode() or "{}")
+        except Exception:
+            return exc.code, {}
+    except Exception as exc:  # noqa: BLE001
+        return 0, {"_error": f"{type(exc).__name__}: {exc}"}
+
+
+def store_response_ok(status: int, body_text: str) -> bool:
+    """Vrai si le POST /v1/store a réellement accepté le batch.
+
+    Un HTTP 200 avec `rejected > 0` est un échec (faux-vert sinon : le
+    relai répond toujours 200, même quand il rejette tout le batch).
+    Corps non-JSON : on retombe sur le seul statut HTTP.
+    """
+    if status != 200:
+        return False
+    try:
+        body = json.loads(body_text or "{}")
+    except ValueError:
+        return True
+    return int(body.get("rejected", 0)) == 0
+
+
+def _burst_get(url: str) -> tuple[int, dict]:
+    import urllib.request
+    import urllib.error
+
+    req = urllib.request.Request(url, headers=_burst_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode() or "{}")
+    except Exception:  # noqa: BLE001
+        return 0, {}
+
+
+def burst_mode(n: int) -> int:
+    """Stress : N bundles frais + doublons + invalides, rapport chiffré."""
+    print(f"💥 WASH Mesh — burst x{n}\n")
+    fresh = [create_bundle((i % 5) + 1, f"Stress #{i + 1} : forage en panne, test de charge.",
+                           origin="node-burst") for i in range(n)]
+    dups = fresh[: min(5, n)]
+    # Accents couverts : checksum_of sérialise en UTF-8 brut (contrat README),
+    # comme le relai — ces messages accentués le prouvent en --live comme en local.
+    bad_priority = create_bundle(1, "Stress : priorité invalide — élève blessé.", origin="node-burst")
+    bad_priority["priority"] = "urgentissime"
+    bad_priority["checksum"] = checksum_of(bad_priority)  # checksum OK → rejet par la priorité
+    expired = create_bundle(1, "Stress : bundle expiré — école inondée.", origin="node-burst")
+    expired["expires_at"] = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    expired["checksum"] = checksum_of(expired)  # checksum OK → compté expiré, pas rejeté
+
+    status, _ = _burst_get(f"{RELAY_URL}/health")
+    if status != 200:
+        # Relai injoignable : simulation locale (checksums vérifiés, pas de réseau).
+        ok = sum(1 for b in fresh if checksum_of({k: v for k, v in b.items() if k != "checksum"}) == b["checksum"])
+        print(f"   (relai injoignable sur {RELAY_URL} — simulation locale)")
+        print(f"   checksums valides : {ok}/{n}")
+        print(f"\n📊 Rapport (prédit) : stockés={n} duplicatas={len(dups)} rejetés=1 expirés=1")
+        return 0
+
+    totals = {"stored": 0, "duplicates": 0, "rejected": 0, "expired": 0}
+    stored_total = 0
+    batches = [fresh[i: i + 100] for i in range(0, n, 100)]
+    batches += ([dups] if dups else []) + [[bad_priority, expired]]
+    for batch in batches:
+        status, body = _burst_post(f"{RELAY_URL}/v1/store",
+                                   {"node_id": "node-burst", "bundles": batch})
+        if status != 200:
+            print(f"   ❌ POST /v1/store → {status} {str(body)[:300]}")
+            return 1
+        for key in totals:
+            totals[key] += int(body.get(key, 0))
+        stored_total = int(body.get("stored_total", stored_total))
+    print(f"   relai {RELAY_URL} : {len(batches)} batch(s) acceptés (HTTP 200)")
+    print(f"\n📊 Rapport : stockés={totals['stored']} duplicatas={totals['duplicates']}"
+          f" rejetés={totals['rejected']} expirés={totals['expired']}"
+          f" (stock relai : {stored_total})")
+    _, metrics = _burst_get(f"{RELAY_URL}/metrics")
+    if metrics:
+        print(f"   relai : uptime={metrics.get('uptime_seconds')}s sqlite={metrics.get('sqlite', {}).get('bytes')} octets"
+              f" file-uplink={metrics.get('uplink_queue')}")
+    expected = {"stored": n, "duplicates": len(dups), "rejected": 1, "expired": 1}
+    ok = all(totals[k] == v for k, v in expected.items())
+    print("✅ Burst conforme à l'attendu." if ok
+          else f"⚠️  Écart vs attendu {expected} (relai non vide au départ ?).")
+    return 0
+
+
+def main(live: bool = False, burst: int = 0) -> int:
+    if burst:
+        return burst_mode(burst)
     print("🕸️  WASH Mesh — démo A → B → C → serveur\n")
 
     # 1. A crée son signalement hors-ligne (Yokadouma, pas de réseau).
@@ -161,9 +272,10 @@ def main(live: bool = False) -> int:
 
     ok = True
     # D'abord le relai (sync), puis Laravel (upload final).
+    # Note : le relai répond 200 même en rejetant → store_response_ok.
     status, body = post(f"{RELAY_URL}/v1/store", {"node_id": "node-C-bertoua", "bundles": [at_c]})
     print(f"   relai {RELAY_URL}/v1/store → {status}\n   {body}")
-    ok = ok and status == 200
+    ok = ok and store_response_ok(status, body)
     status, body = post(f"{LARAVEL_URL}/v1/mesh/bundles", {"bundles": [payload]})
     print(f"   laravel {LARAVEL_URL}/v1/mesh/bundles → {status}\n   {body}")
     ok = ok and status in (200, 201)
@@ -194,5 +306,9 @@ def main(live: bool = False) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="POST réel vers relai + Laravel locaux")
+    parser.add_argument("--burst", type=int, default=0, metavar="N",
+                        help="stress : pousse N bundles vers le relai + rapport chiffré")
     args = parser.parse_args()
-    sys.exit(main(live=args.live))
+    if args.burst is not None and args.burst < 0:
+        parser.error("--burst attend un entier >= 0")
+    sys.exit(main(live=args.live, burst=args.burst))

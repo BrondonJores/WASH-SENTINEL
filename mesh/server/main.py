@@ -4,8 +4,10 @@ Rôle : quand deux nœuds se croisent avec un peu de réseau (WiFi village, 2G
 intermittente), ils synchronisent leurs outbox ici. Le premier nœud avec un
 vrai accès internet (ou le relai lui-même) fait l'uplink vers Laravel.
 
-Persistance volontairement simple (mémoire + purge TTL) : Laravel reste la
-source de vérité, le relai n'est qu'un sac à dos opportuniste.
+Persistance : SQLite en WAL (bundles + accusés survivent au redémarrage,
+chemin via MESH_DB_PATH, défaut ./relay.db) + cache chaud mémoire
+(dédup, purge TTL, éviction LRU). Laravel reste la source de vérité,
+le relai n'est qu'un sac à dos opportuniste.
 """
 
 from __future__ import annotations
@@ -13,7 +15,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
+import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -23,10 +28,25 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import storage
+import mesh_verify
+
 LARAVEL_URL = os.environ.get("LARAVEL_URL", "http://laravel:8080")
 LARAVEL_KEY = os.environ.get("MESH_INGEST_KEY", "")
 MAX_STORE = int(os.environ.get("MESH_MAX_STORE", "5000"))
 RELAY_KEY = os.environ.get("MESH_RELAY_API_KEY", "")
+# Uplink résilient : retry exponentiel + jitter + disjoncteur.
+UPLINK_RETRIES = int(os.environ.get("MESH_UPLINK_RETRIES", "3"))
+UPLINK_BACKOFF_BASE = float(os.environ.get("MESH_UPLINK_BACKOFF", "0.5"))
+BREAKER_THRESHOLD = int(os.environ.get("MESH_UPLINK_BREAKER_THRESHOLD", "5"))
+BREAKER_COOLDOWN = float(os.environ.get("MESH_UPLINK_BREAKER_COOLDOWN", "60"))
+
+BOOT_TIME = datetime.now(timezone.utc)
+# Télémétrie uplink (mémoire, depuis boot) + état du disjoncteur.
+UPLINK: dict[str, Any] = {
+    "attempts": 0, "retries": 0, "failures": 0, "breaker_opens": 0,
+    "last_error": None, "breaker_open_until": None,
+}
 
 app = FastAPI(title="WASH Mesh Relay", version="1.0.0")
 app.add_middleware(
@@ -41,19 +61,32 @@ STORE: dict[str, dict[str, Any]] = {}
 # node_id -> websocket live
 PEERS: dict[str, WebSocket] = {}
 # compteurs cumulés par cause (observabilité Phase 0)
-COUNTERS: dict[str, int] = {"stored": 0, "duplicates": 0, "expired": 0, "rejected": 0, "evicted_lru": 0}
+COUNTERS: dict[str, int] = {"stored": 0, "duplicates": 0, "expired": 0, "rejected": 0, "evicted_lru": 0,
+                             "sig_bypassed_no_backend": 0}
 # tombstones : bundle_id -> acked_at (purge des outbox distantes). Capés + expirés.
 ACKED: dict[str, datetime] = {}
 ACK_TTL_DAYS = 7
 ACK_MAX = 20000
 
 
+def _persist(fn, *args: Any) -> None:
+    """Write-through SQLite : ne doit jamais casser le flux sur erreur disque."""
+    try:
+        fn(*args)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[relay] sqlite {fn.__name__} a échoué : {exc}", file=sys.stderr)
+
+
 def prune_acked() -> None:
     cutoff = _utcnow() - timedelta(days=ACK_TTL_DAYS)
-    for bid in [k for k, v in ACKED.items() if v <= cutoff]:
+    removed = [k for k, v in ACKED.items() if v <= cutoff]
+    for bid in removed:
         ACKED.pop(bid, None)
     while len(ACKED) > ACK_MAX:
-        ACKED.pop(min(ACKED.items(), key=lambda kv: kv[1])[0], None)
+        removed.append(min(ACKED.items(), key=lambda kv: kv[1])[0])
+        ACKED.pop(removed[-1], None)
+    if removed:
+        _persist(storage.delete_acked, removed)
 
 
 def record_acked(ids: list[str]) -> int:
@@ -64,6 +97,7 @@ def record_acked(ids: list[str]) -> int:
         if bid not in ACKED:
             n += 1
         ACKED[bid] = now
+    _persist(storage.save_acked, ids[:5000], now.isoformat())
     prune_acked()
     return n
 
@@ -100,6 +134,7 @@ class Bundle(BaseModel):
     custody_requested: bool = False
     priority: str = "normal"
     signature: str | None = Field(default=None, max_length=128)
+    node_pubkey: str | None = Field(default=None, max_length=64)
     # V2 E2E : enveloppe opaque — le relai transporte sans lire.
     sealed: str | None = Field(default=None, max_length=20000)
     sealed_alg: str | None = Field(default=None, max_length=32)
@@ -164,6 +199,7 @@ def purge_expired() -> int:
     expired = [bid for bid, b in STORE.items() if _expired(b["expires_at"])]
     for bid in expired:
         STORE.pop(bid, None)
+    _persist(storage.purge_expired_db, _utcnow().isoformat())
     return len(expired)
 
 
@@ -177,6 +213,7 @@ def store_one(node_id: str, bundle: Bundle) -> str:
             if hop not in known:
                 STORE[bid]["hops"].append(hop)
                 known.add(hop)
+        _persist(storage.save_bundle, bid, STORE[bid])
         COUNTERS["duplicates"] += 1
         return "duplicate"
     data = bundle.model_dump(mode="json")
@@ -185,7 +222,7 @@ def store_one(node_id: str, bundle: Bundle) -> str:
     if bundle.checksum:
         # Même instant, deux écritures ISO (...Z vs +00:00) selon l'émetteur :
         # on accepte les deux formes (le checksum détecte la corruption,
-        # pas la malice — la signature Ed25519 viendra en Phase 3).
+        # pas la malice — la signature Ed25519 est vérifiée ci-dessous).
         # exclude_unset : on vérifie exactement les champs envoyés par le client,
         # pas les défauts ajoutés par Pydantic.
         raw = canonical_string(bundle.model_dump(mode="json", exclude_unset=True))
@@ -193,6 +230,17 @@ def store_one(node_id: str, bundle: Bundle) -> str:
         offset = re.sub(r'(\d{2}:\d{2}:\d{2}(?:\.\d+)?)Z"', r'\1+00:00"', raw)
         candidates = {raw, zulu, offset}
         if not any(bundle.checksum == hashlib.sha256(c.encode()).hexdigest() for c in candidates):
+            COUNTERS["rejected"] += 1
+            return "rejected"
+    if bundle.signature:
+        # V2 signatures : non-signés acceptés, signés-invalides rejetés.
+        if not mesh_verify.is_available():
+            # Sans backend Ed25519 on ne peut pas vérifier : le bundle est
+            # accepté avec traçabilité (compteur + log), jamais en silence.
+            COUNTERS["sig_bypassed_no_backend"] += 1
+            print(f"[relay] signature NON vérifiée (ni pynacl ni cryptography) : {bid}",
+                  file=sys.stderr)
+        elif not mesh_verify.verify(bundle.model_dump(mode="python", exclude_unset=True)):
             COUNTERS["rejected"] += 1
             return "rejected"
     if _expired(bundle.expires_at):
@@ -207,17 +255,36 @@ def store_one(node_id: str, bundle: Bundle) -> str:
         return "rejected"
     if len(STORE) >= MAX_STORE:
         purge_expired()
+    evicted: list[str] = []
     while len(STORE) >= MAX_STORE:
         # Éviction LRU : le plus ancien stocké sort (jamais de rejet par manque
         # de place quand tout est frais — le rejet ne concerne que le contenu).
         oldest = min(STORE.items(), key=lambda kv: kv[1]["stored_at"])[0]
         STORE.pop(oldest, None)
+        evicted.append(oldest)
         COUNTERS["evicted_lru"] += 1
+    if evicted:
+        _persist(storage.delete_bundles, evicted)
     data["received_via"] = node_id
     data["stored_at"] = _utcnow()
     STORE[bid] = data
+    _persist(storage.save_bundle, bid, data)
     COUNTERS["stored"] += 1
     return "stored"
+
+
+def _wire_date(value: Any) -> str:
+    """Date telle qu'émise vers les pairs / Laravel : forme canonique Z-millis.
+
+    Le relai stocke des datetimes parsés (Pydantic/SQLite) : les réémettre
+    en `.isoformat()` produirait `+00:00` et invaliderait les signatures
+    Ed25519 calculées sur la forme `…sssZ` (TS `toISOString`, doré partagé).
+    Les chaînes sont transmises VERBATIM (jamais re-sérialisées).
+    """
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return value if isinstance(value, str) else str(value)
 
 
 def missing_for(known_ids: set[str], limit: int) -> list[dict[str, Any]]:
@@ -228,11 +295,113 @@ def missing_for(known_ids: set[str], limit: int) -> list[dict[str, Any]]:
             continue
         if _expired(b["expires_at"]):
             continue
-        out.append({**b, "expires_at": b["expires_at"].isoformat(), "created_at": b["created_at"].isoformat(),
+        out.append({**b, "expires_at": _wire_date(b["expires_at"]), "created_at": _wire_date(b["created_at"]),
                     "stored_at": b["stored_at"].isoformat()})
         if len(out) >= limit:
             break
     return out
+
+
+def restore_from_db() -> dict[str, int]:
+    """Recharge le cache chaud depuis SQLite (redémarrage).
+
+    Les expirés sont jetés, et si la base dépasse MAX_STORE on ne garde
+    que les plus récents (sémantique LRU, les autres sont supprimés).
+    """
+    stats = {"bundles": 0, "acked": 0, "dropped_expired": 0, "dropped_lru": 0}
+    try:
+        bundles, acked = storage.load_all()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[relay] restore sqlite impossible : {exc}", file=sys.stderr)
+        return stats
+    now = _utcnow()
+    cutoff = now - timedelta(days=ACK_TTL_DAYS)
+    stale = [bid for bid, ts in acked.items() if ts <= cutoff]
+    if stale:
+        _persist(storage.delete_acked, stale)
+    for bid, ts in acked.items():
+        if ts <= cutoff:
+            continue
+        ACKED[bid] = ts
+        stats["acked"] += 1
+    prune_acked()
+    # Les plus récents d'abord : le cache chaud garde les MAX_STORE premiers.
+    ordered = sorted(bundles.items(),
+                     key=lambda kv: kv[1].get("stored_at") or now, reverse=True)
+    for bid, data in ordered:
+        try:
+            expired = _expired(data["expires_at"])
+        except Exception:  # noqa: BLE001
+            expired = True
+        if expired:
+            _persist(storage.delete_bundle, bid)
+            stats["dropped_expired"] += 1
+            continue
+        if len(STORE) >= MAX_STORE:
+            _persist(storage.delete_bundle, bid)
+            COUNTERS["evicted_lru"] += 1
+            stats["dropped_lru"] += 1
+            continue
+        STORE[bid] = data
+        stats["bundles"] += 1
+    return stats
+
+
+try:
+    storage.init_db()
+    _restored = restore_from_db()
+    if _restored["bundles"] or _restored["acked"]:
+        print(f"[relay] restore sqlite : {_restored['bundles']} bundles,"
+              f" {_restored['acked']} accusés ({storage.db_path()})")
+except Exception as exc:  # noqa: BLE001
+    print(f"[relay] sqlite désactivée (mémoire seule) : {exc}", file=sys.stderr)
+
+
+# ---------- Uplink résilient (retry + disjoncteur) ----------
+
+def _breaker_open() -> bool:
+    until = UPLINK["breaker_open_until"]
+    if until is None:
+        return False
+    if _utcnow() >= until:
+        UPLINK["breaker_open_until"] = None
+        return False
+    return True
+
+
+def _uplink_post(payload: dict[str, Any], headers: dict[str, str]):
+    """POST vers Laravel avec retry exponentiel + jitter.
+
+    Retryable : exceptions réseau, 429, 5xx. Les autres 4xx sont
+    définitives (requête à corriger, pas à répéter).
+    Retourne (response | None, erreur | None).
+    """
+    last_err: str | None = None
+    for attempt in range(UPLINK_RETRIES + 1):
+        UPLINK["attempts"] += 1
+        try:
+            resp = httpx.post(f"{LARAVEL_URL}/api/v1/mesh/bundles",
+                              json=payload, headers=headers, timeout=30)
+        except Exception as exc:  # noqa: BLE001
+            last_err = f"{type(exc).__name__}: {exc}"
+            resp = None
+        else:
+            if resp.status_code < 500 and resp.status_code != 429:
+                return resp, None  # 2xx ou 4xx définitive
+            last_err = f"HTTP {resp.status_code}"
+        if attempt < UPLINK_RETRIES:
+            UPLINK["retries"] += 1
+            delay = UPLINK_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, UPLINK_BACKOFF_BASE)
+            time.sleep(delay)
+    return None, last_err
+
+
+def _breaker_note_failure(error: str | None) -> None:
+    UPLINK["failures"] += 1
+    UPLINK["last_error"] = error
+    if UPLINK["failures"] >= BREAKER_THRESHOLD and UPLINK["breaker_open_until"] is None:
+        UPLINK["breaker_open_until"] = _utcnow() + timedelta(seconds=BREAKER_COOLDOWN)
+        UPLINK["breaker_opens"] += 1
 
 
 # ---------- REST ----------
@@ -241,6 +410,22 @@ def missing_for(known_ids: set[str], limit: int) -> list[dict[str, Any]]:
 def health() -> dict[str, Any]:
     return {"status": "healthy", "service": "WASH Mesh Relay",
             "stored": len(STORE), "peers_live": len(PEERS)}
+
+
+@app.get("/metrics")
+def metrics() -> dict[str, Any]:
+    """Télémétrie ops (ouverte, comme /health) : compteurs, tailles, uptime."""
+    purge_expired()
+    uplink_state = {k: (v.isoformat() if isinstance(v, datetime) else v)
+                    for k, v in UPLINK.items()}
+    return {"uptime_seconds": round((_utcnow() - BOOT_TIME).total_seconds(), 1),
+            "stored": len(STORE),
+            "uplink_queue": len(STORE),  # après purge : tout le stock est à pousser
+            "acked": len(ACKED),
+            "peers_live": len(PEERS),
+            "counters": dict(COUNTERS),
+            "uplink": uplink_state,
+            "sqlite": {"path": storage.db_path(), "bytes": storage.db_size_bytes()}}
 
 
 @app.post("/v1/store", dependencies=[Depends(require_key)])
@@ -300,10 +485,16 @@ def uplink(dry_run: bool = False) -> dict[str, Any]:
     bundles = missing_for(set(), MAX_STORE)
     if dry_run or not bundles:
         return {"dry_run": dry_run, "pending": len(bundles), "laravel": None}
+    # Fidélité signature : le SDK TS signe created_at/v et omet
+    # custody_requested sauf demande explicite — l'uplink fait pareil
+    # (dates déjà en Z-millis via missing_for/_wire_date). Un champ signé
+    # manquant ou un `false` ajouté = bad_signature côté Laravel.
     payload = {"bundles": [
         {"bundle_id": b["bundle_id"], "origin_node_id": b["origin_node_id"],
+         "v": b.get("v", 1),
          "school_id": b["school_id"], "school_code": b.get("school_code"),
          "message": b.get("message"), "channel": b.get("channel", "text"),
+         "created_at": b.get("created_at"),
          "hops": b.get("hops", []), "max_hops": b.get("max_hops", 10),
          "expires_at": b["expires_at"], "received_via_node_id": b.get("received_via"),
          "destination_eid": b.get("destination"), "report_to_eid": b.get("report_to"),
@@ -311,8 +502,9 @@ def uplink(dry_run: bool = False) -> dict[str, Any]:
          "previous_node_id": b.get("previous_node"),
          "copies_remaining": b.get("copies_remaining", 8),
          "fragment_offset": b.get("fragment_offset"), "fragment_total": b.get("fragment_total"),
-         "custody_requested": b.get("custody_requested", False),
+         "custody_requested": b.get("custody_requested") or None,
          "priority": b.get("priority", "normal"), "signature": b.get("signature"),
+         "node_pubkey": b.get("node_pubkey"),
          "sealed": b.get("sealed"), "sealed_alg": b.get("sealed_alg"),
          "bundle_group": b.get("bundle_group"), "chunk": b.get("chunk"),
          "media_mime": b.get("media_mime"), "media_size": b.get("media_size"),
@@ -323,22 +515,32 @@ def uplink(dry_run: bool = False) -> dict[str, Any]:
     headers = {"Accept": "application/json"}
     if LARAVEL_KEY:
         headers["X-Mesh-Key"] = LARAVEL_KEY
-    try:
-        resp = httpx.post(f"{LARAVEL_URL}/api/v1/mesh/bundles", json=payload, headers=headers, timeout=30)
-        result = {"status_code": resp.status_code, "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:500]}
-        confirmed: set[str] = set()
-        if resp.status_code in (200, 201) and isinstance(result.get("body"), dict):
-            for inc in result["body"].get("incidents", []):
-                if isinstance(inc, dict) and inc.get("bundle_id"):
-                    confirmed.add(inc["bundle_id"])
-        if confirmed:
-            # Tombstones : les relais qui transportent ces bundles les purgeront.
-            record_acked(sorted(confirmed))
-            for bid in confirmed:
-                STORE.pop(bid, None)
-        return {"pending": len(bundles), "laravel": result, "flushed": sorted(confirmed)}
-    except Exception as exc:
-        return {"pending": len(bundles), "laravel": {"error": f"{type(exc).__name__}: {exc}"}, "flushed": False}
+    if _breaker_open():
+        until = UPLINK["breaker_open_until"]
+        return {"pending": len(bundles),
+                "laravel": {"error": "breaker_open",
+                            "retry_after": max(0.0, (until - _utcnow()).total_seconds()) if until else 0,
+                            "last_error": UPLINK["last_error"]},
+                "flushed": False}
+    resp, error = _uplink_post(payload, headers)
+    if resp is None:
+        _breaker_note_failure(error)
+        return {"pending": len(bundles), "laravel": {"error": error}, "flushed": False}
+    UPLINK["failures"] = 0
+    UPLINK["last_error"] = None
+    result = {"status_code": resp.status_code, "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:500]}
+    confirmed: set[str] = set()
+    if resp.status_code in (200, 201) and isinstance(result.get("body"), dict):
+        for inc in result["body"].get("incidents", []):
+            if isinstance(inc, dict) and inc.get("bundle_id"):
+                confirmed.add(inc["bundle_id"])
+    if confirmed:
+        # Tombstones : les relais qui transportent ces bundles les purgeront.
+        record_acked(sorted(confirmed))
+        for bid in confirmed:
+            STORE.pop(bid, None)
+        _persist(storage.delete_bundles, sorted(confirmed))
+    return {"pending": len(bundles), "laravel": result, "flushed": sorted(confirmed)}
 
 
 # ---------- WebSocket temps réel ----------
