@@ -1,8 +1,50 @@
 from __future__ import annotations
 
+"""Inspection visuelle WASH : chaine vision configurable + repli gracieux.
+
+Chaine configurable (machines faibles, 2 Go VRAM)
+-------------------------------------------------
+Le modele vision se regle via la variable d'environnement ``OLLAMA_VISION_MODEL``
+(meme pattern ``OLLAMA_*`` que :class:`app.providers.OllamaProvider`, qui lit deja
+cette variable). Priorite : parametre explicite > variable d'env > defaut.
+
+Deploiement cible 2 Go VRAM :
+  export OLLAMA_VISION_MODEL=moondream
+  ollama pull moondream
+
+Alternatives (tailles approximatives vues dans ``ollama list``) :
+  - ``moondream`` (~1,7 Go) — RECOMMANDE pour 2 Go VRAM ; suivi d'instructions
+    correct en vision legere, JSON generalement propre.
+  - ``llava:7b`` (~4,7 Go) — qualite superieure mais ne tient pas en 2 Go VRAM.
+  - ``llama3.2-vision:11b`` (~7,9 Go) — defaut historique du provider ; ne passe
+    PAS sur 2 Go VRAM (conserve cote provider pour les grosses machines).
+
+Repli gracieux
+--------------
+``analyze()`` ne leve jamais pour une panne vision (modele absent, 404, timeout,
+reponse invalide) : il renvoie un diagnostic explicite marque
+``"vision indisponible"``. Le schema ``ImageAnalysisResponse`` imposant un float
+pour ``visual_severity_score``, ce champ vaut 0.0 en repli MAIS ne doit jamais
+etre interprete comme un vrai score : l'appelant (triage) doit passer par
+``visual_severity()`` qui renvoie ``None`` dans ce cas, puis
+``visual_boost(None)`` qui vaut 0.0. Aucun score n'est invente : sans vision,
+le triage continue sur le texte seul.
+"""
+
 import base64
+import os
+
 from .providers import BaseLLMProvider
 from .schemas import ImageAnalysisResponse
+
+try:
+    from .providers import VISION_FALLBACK as _PROVIDER_VISION_FALLBACK
+except ImportError:  # garde-fou si providers.py evolue (lecture seule ici)
+    _PROVIDER_VISION_FALLBACK = {}
+
+VISION_MODEL_ENV_VAR = "OLLAMA_VISION_MODEL"
+DEFAULT_VISION_MODEL = "moondream"
+VISION_UNAVAILABLE_MARKER = "vision indisponible"
 
 WASH_VISION_SYSTEM = """
 Tu es l'expert en inspection visuelle de WASH Sentinel.
@@ -23,23 +65,129 @@ Règles :
 """
 
 
+def resolve_vision_model(explicit: str | None = None) -> str:
+    """Resout le modele vision : explicite > ``OLLAMA_VISION_MODEL`` > defaut leger."""
+    if explicit:
+        return explicit
+    return os.getenv(VISION_MODEL_ENV_VAR, DEFAULT_VISION_MODEL) or DEFAULT_VISION_MODEL
+
+
+def vision_unavailable_response(reason: str) -> ImageAnalysisResponse:
+    """Diagnostic explicite de panne vision (jamais de score invente).
+
+    ``visual_severity_score`` vaut 0.0 uniquement parce que le schema l'impose ;
+    les appelants doivent utiliser ``visual_severity()`` (qui renvoie ``None``)
+    et non ce champ.
+    """
+    message = f"{VISION_UNAVAILABLE_MARKER} : {reason}"
+    return ImageAnalysisResponse(
+        is_wash_related=False,
+        infrastructure_detected=VISION_UNAVAILABLE_MARKER,
+        visible_damage=message[:300],
+        visual_severity_score=0.0,
+        health_hazard_detected=False,
+        technician_notes=f"{message} — continuer sans la vision (severity None, boost 0).",
+    )
+
+
+def is_vision_unavailable(response: ImageAnalysisResponse) -> bool:
+    """Vrai si le diagnostic est un repli « vision indisponible » (pas un 0 legitime)."""
+    haystack = " ".join((
+        response.infrastructure_detected,
+        response.visible_damage,
+        response.technician_notes,
+    ))
+    return VISION_UNAVAILABLE_MARKER in haystack
+
+
+def visual_severity(response: ImageAnalysisResponse) -> int | None:
+    """Severite visuelle entiere 0..100, ou ``None`` si la vision est indisponible.
+
+    Seule lecture legitime du score pour le triage : distingue le 0 honnete
+    (photo hors-sujet confirmee par le modele) du repli (panne vision).
+    """
+    if is_vision_unavailable(response):
+        return None
+    return int(round(max(0.0, min(100.0, response.visual_severity_score))))
+
+
+def visual_boost(severity: int | None) -> float:
+    """Bonus de priorite apporte par la vision, entre 0.0 et 15.0.
+
+    - ``None`` (vision indisponible) -> 0.0 : le triage texte est inchange.
+    - 0 -> 0.0, 100 -> 15.0, lineaire entre les deux (``round(s * 0.15, 1)``).
+    - Monotone (croissante au sens large) : une severite plus haute ne donne
+      jamais un bonus plus faible. La severite est bornee a 0..100.
+    - N'est qu'un bonus additif ; le calcul de priorite existant est inchange
+      (le triage borne le total a 100).
+    """
+    if severity is None:
+        return 0.0
+    clamped = max(0, min(100, round(severity)))
+    return round(clamped * 0.15, 1)
+
+
 class ImageAnalyzer:
-    def __init__(self, llm: BaseLLMProvider):
+    """Analyse une photo via le provider vision ; repli gracieux en cas de panne.
+
+    :param llm: provider LLM (``OllamaProvider`` lit deja ``OLLAMA_VISION_MODEL``).
+    :param vision_model: surcharge explicite ; ecrit aussi ``llm.vision_model``
+        pour que l'appel effectif utilise vraiment ce modele.
+    """
+
+    def __init__(self, llm: BaseLLMProvider, vision_model: str | None = None):
         self.llm = llm
+        if vision_model:
+            self.vision_model = vision_model
+            try:
+                self.llm.vision_model = vision_model
+            except (AttributeError, TypeError):
+                pass
+        else:
+            self.vision_model = getattr(llm, "vision_model", None) or resolve_vision_model()
 
     async def analyze(self, image_bytes: bytes) -> ImageAnalysisResponse:
+        """Analyse la photo ; en cas de panne vision, repli explicite (sans lever)."""
+        if not image_bytes:
+            return vision_unavailable_response("image vide fournie")
         b64_img = base64.b64encode(image_bytes).decode("utf-8")
-        raw = await self.llm.generate_vision_json(
-            prompt="Analyse cette photo de panne sanitaire/hydraulique d'école.",
-            image_base64=b64_img,
-            system=WASH_VISION_SYSTEM,
-        )
+        try:
+            raw = await self.llm.generate_vision_json(
+                prompt="Analyse cette photo de panne sanitaire/hydraulique d'école.",
+                image_base64=b64_img,
+                system=WASH_VISION_SYSTEM,
+            )
+        except Exception as exc:
+            return vision_unavailable_response(f"{type(exc).__name__}: {str(exc)[:200]}")
+        if not isinstance(raw, dict) or not raw:
+            return vision_unavailable_response("réponse vision vide ou invalide")
+        if _PROVIDER_VISION_FALLBACK and raw == _PROVIDER_VISION_FALLBACK:
+            # OllamaProvider/OpenAICompatibleProvider avalent les erreurs (404, timeout)
+            # et renvoient un dict factice à 75.0 : on le requalifie en panne explicite
+            # plutôt que d'inventer un score (providers.py est hors périmètre ici).
+            return vision_unavailable_response(
+                f"modèle '{self.vision_model}' indisponible (repli provider silencieux détecté)"
+            )
+
+        is_wash = bool(raw.get("is_wash_related", True))
+        if not is_wash:
+            # Anti-spam : photo hors-sujet confirmée par le modèle -> 0 honnête.
+            score = 0.0
+        else:
+            try:
+                score_raw = raw.get("visual_severity_score")
+                score = float(score_raw) if score_raw is not None else None
+            except (TypeError, ValueError):
+                score = None
+            if score is None or score != score:  # None ou NaN : pas de score inventé
+                return vision_unavailable_response("score de sévérité visuelle absent de la réponse modèle")
+            score = max(0.0, min(100.0, score))
 
         return ImageAnalysisResponse(
-            is_wash_related=bool(raw.get("is_wash_related", True)),
+            is_wash_related=is_wash,
             infrastructure_detected=str(raw.get("infrastructure_detected", "Infrastructure WASH")),
             visible_damage=str(raw.get("visible_damage", "Dégât constaté")),
-            visual_severity_score=float(raw.get("visual_severity_score", 60.0)),
+            visual_severity_score=score,
             health_hazard_detected=bool(raw.get("health_hazard_detected", False)),
             technician_notes=str(raw.get("technician_notes", "Inspecter les raccordements et sécuriser la zone")),
         )
