@@ -78,5 +78,31 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Démarrer le relai" />
+
+        <Button
+            android:id="@+id/btnSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Paramètres" />
+
+        <TextView
+            android:id="@+id/tvOutboxTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="File d'envoi"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvOutboxCounts"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="En attente : …" />
+
+        <LinearLayout
+            android:id="@+id/llOutbox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
     </LinearLayout>
 </ScrollView>

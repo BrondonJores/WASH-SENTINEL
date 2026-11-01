@@ -8,6 +8,7 @@ import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,7 +19,6 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import cm.wash.mesh.BuildConfig
 import cm.wash.mesh.MeshProtocol
 import cm.wash.mesh.R
 import cm.wash.mesh.data.BundleEntity
@@ -27,6 +27,7 @@ import cm.wash.mesh.ble.BleMeshService
 import cm.wash.mesh.mesh.MeshRelayService
 import cm.wash.mesh.mesh.TransportSelector
 import cm.wash.mesh.mesh.UploadWorker
+import cm.wash.mesh.relay.FieldSettings
 import cm.wash.mesh.relay.RelayPrefs
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
@@ -52,6 +53,8 @@ class MainActivity : AppCompatActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var nodeId: String
     private var relayOn = false
+    private lateinit var llOutbox: LinearLayout
+    private lateinit var tvOutboxCounts: TextView
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ -> }
@@ -77,6 +80,12 @@ class MainActivity : AppCompatActivity() {
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
         val ivQr = findViewById<ImageView>(R.id.ivQr)
         tvStatus.text = "Nœud $nodeId"
+        llOutbox = findViewById(R.id.llOutbox)
+        tvOutboxCounts = findViewById(R.id.tvOutboxCounts)
+
+        findViewById<Button>(R.id.btnSettings).setOnClickListener {
+            SettingsActivity.start(this)
+        }
 
         findViewById<Button>(R.id.btnSave).setOnClickListener {
             val schoolId = etSchoolId.text.toString().toIntOrNull()
@@ -92,7 +101,10 @@ class MainActivity : AppCompatActivity() {
                 MeshDatabase.get(this@MainActivity).dao().insert(
                     BundleEntity(bundle.getString("bundle_id"), nodeId, schoolId, bundle.toString()),
                 )
-                withContext(Dispatchers.Main) { toast("Bundle offline enregistré.") }
+                withContext(Dispatchers.Main) {
+                    toast("Bundle offline enregistré.")
+                    refreshOutbox()
+                }
             }
         }
 
@@ -123,21 +135,26 @@ class MainActivity : AppCompatActivity() {
                                 ),
                             )
                         }
-                        withContext(Dispatchers.Main) { toast(if (ok) "Bundle reçu." else "QR invalide.") }
+                        withContext(Dispatchers.Main) {
+                            toast(if (ok) "Bundle reçu." else "QR invalide.")
+                            if (ok) refreshOutbox()
+                        }
                     }
                 }
                 .addOnFailureListener { toast("Scan annulé.") }
         }
 
         findViewById<Button>(R.id.btnSync).setOnClickListener {
+            val relayUrl = FieldSettings.getRelayUrl(this)
+            val meshKey = FieldSettings.getMeshKey(this)
             scope.launch(Dispatchers.IO) {
                 try {
                     val dao = MeshDatabase.get(this@MainActivity).dao()
                     val pending = dao.pending()
                     val res = Api.relaySync(
-                        BuildConfig.RELAY_URL, nodeId,
+                        relayUrl, nodeId,
                         pending.map { JSONObject(it.json) }, pending.map { it.id },
-                        BuildConfig.MESH_KEY,
+                        meshKey,
                     )
                     var received = 0
                     for (raw in res.received) {
@@ -153,7 +170,10 @@ class MainActivity : AppCompatActivity() {
                         )
                         received++
                     }
-                    withContext(Dispatchers.Main) { toast("Sync: +$received reçu(s).") }
+                    withContext(Dispatchers.Main) {
+                        toast("Sync: +$received reçu(s).")
+                        refreshOutbox()
+                    }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) { toast("Relai injoignable.") }
                 }
@@ -163,10 +183,16 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnUpload).setOnClickListener {
             val req = OneTimeWorkRequestBuilder<UploadWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .setInputData(workDataOf("api_url" to BuildConfig.LARAVEL_API_URL, "mesh_key" to BuildConfig.MESH_KEY))
+                .setInputData(
+                    workDataOf(
+                        "api_url" to FieldSettings.getLaravelApiUrl(this),
+                        "mesh_key" to FieldSettings.getMeshKey(this),
+                    ),
+                )
                 .build()
             WorkManager.getInstance(this).enqueue(req)
             toast("Upload planifié (dès que connecté).")
+            refreshOutbox()
         }
 
         // Transport auto : Nearby si Play Services, sinon BLE GATT brut (secours V3).
@@ -189,9 +215,74 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        refreshOutbox()
+    }
+
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
+    }
+
+    /** Recharge la file d'envoi visible (Room sur IO, rendu sur Main). */
+    private fun refreshOutbox() {
+        scope.launch(Dispatchers.IO) {
+            val dao = MeshDatabase.get(this@MainActivity).dao()
+            val items = dao.outbox(OUTBOX_LIMIT)
+            val pending = dao.pendingCount()
+            val done = dao.doneCount()
+            val rows = items.map { toRow(it) }
+            withContext(Dispatchers.Main) { renderOutbox(rows, pending, done) }
+        }
+    }
+
+    private fun toRow(e: BundleEntity): OutboxRow {
+        val json = runCatching { JSONObject(e.json) }.getOrNull()
+        val schoolCode = json?.optString("school_code").orEmpty()
+        val school = if (schoolCode.isNotBlank()) "École ${e.schoolId} ($schoolCode)" else "École ${e.schoolId}"
+        val date = json?.optString("created_at").orEmpty().take(16).replace("T", " ")
+        val message = json?.optString("message").orEmpty()
+            .replace(Regex("\\s+"), " ").trim().take(80)
+        val title = e.id.take(8) + " • " + school + if (date.isNotBlank()) " • $date" else ""
+        return OutboxRow(e.id, title, message)
+    }
+
+    private fun renderOutbox(rows: List<OutboxRow>, pending: Int, done: Int) {
+        tvOutboxCounts.text = "En attente : $pending • Envoyés : $done"
+        llOutbox.removeAllViews()
+        val pad = (8 * resources.displayMetrics.density).toInt()
+        if (rows.isEmpty()) {
+            val tv = TextView(this)
+            tv.text = "File vide — rien en attente."
+            tv.setPadding(pad, pad, pad, pad)
+            llOutbox.addView(tv)
+            return
+        }
+        for (row in rows) {
+            val line = LinearLayout(this)
+            line.orientation = LinearLayout.HORIZONTAL
+            line.setPadding(0, pad / 2, 0, pad / 2)
+            val tv = TextView(this)
+            tv.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            tv.text = if (row.excerpt.isNotBlank()) row.title + "\n" + row.excerpt else row.title
+            val btn = Button(this)
+            btn.text = "Retirer"
+            btn.setOnClickListener { removeBundle(row.id) }
+            line.addView(tv)
+            line.addView(btn)
+            llOutbox.addView(line)
+        }
+    }
+
+    private fun removeBundle(id: String) {
+        scope.launch(Dispatchers.IO) {
+            MeshDatabase.get(this@MainActivity).dao().deleteById(id)
+            withContext(Dispatchers.Main) {
+                toast("Bundle retiré.")
+                refreshOutbox()
+            }
+        }
     }
 
     private fun requestPermissions() {
@@ -216,7 +307,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
+    private data class OutboxRow(val id: String, val title: String, val excerpt: String)
+
     companion object {
         private const val TAG = "WashUi"
+        private const val OUTBOX_LIMIT = 50
     }
 }

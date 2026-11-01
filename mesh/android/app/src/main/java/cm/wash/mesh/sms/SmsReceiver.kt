@@ -8,7 +8,7 @@ import android.util.Log
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import cm.wash.mesh.BuildConfig
+import cm.wash.mesh.relay.FieldSettings
 import java.time.LocalDate
 
 /**
@@ -39,11 +39,11 @@ class SmsReceiver : BroadcastReceiver() {
                 Log.i(TAG, "SMS ignoré de $from : ${parsed.error}")
                 continue
             }
-            if (!SmsPolicy.isAllowlisted(from, BuildConfig.SMS_ALLOWLIST)) {
+            if (!SmsPolicy.isAllowlisted(from, FieldSettings.getSmsAllowlist(context))) {
                 Log.w(TAG, "SMS rejeté : $from hors allowlist")
                 continue
             }
-            if (SmsPolicy.quotaExceeded(SmsQuotaStore.countFor(context, from, today), BuildConfig.SMS_QUOTA)) {
+            if (SmsPolicy.quotaExceeded(SmsQuotaStore.countFor(context, from, today), FieldSettings.getSmsQuota(context))) {
                 Log.w(TAG, "SMS rejeté : quota journalier dépassé pour $from")
                 continue
             }

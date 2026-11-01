@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import cm.wash.mesh.BuildConfig
 import cm.wash.mesh.net.Api
+import cm.wash.mesh.relay.FieldSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -17,7 +17,7 @@ import java.time.Instant
  */
 class SmsGatewayWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        if (BuildConfig.SMS_SECRET.isEmpty()) {
+        if (FieldSettings.getSmsSecret(applicationContext).isEmpty()) {
             Log.w(TAG, "transfert impossible : MESH_SMS_SECRET vide")
             return Result.failure()
         }
@@ -28,7 +28,7 @@ class SmsGatewayWorker(context: Context, params: WorkerParameters) : CoroutineWo
         }.getOrNull()
         return try {
             val res = withContext(Dispatchers.IO) {
-                Api.smsPost(BuildConfig.LARAVEL_API_URL, BuildConfig.SMS_SECRET, from, body, sentAt)
+                Api.smsPost(FieldSettings.getLaravelApiUrl(applicationContext), FieldSettings.getSmsSecret(applicationContext), from, body, sentAt)
             }
             Log.i(TAG, "SMS de $from transféré, ticket ${res.optString("ticket", "?")}")
             Result.success()
