@@ -39,6 +39,12 @@ class WashWhatsAppService
     /** Longueur max d'une réponse WhatsApp (ton SMS). */
     protected const MAX_REPLY_LENGTH = 397;
 
+    /** TTL (secondes) de la marque « message déjà vu » : 48h > fenêtre retry Meta. */
+    protected const SEEN_TTL = 172800;
+
+    /** Plafond média par défaut (octets) si la config est absente/invalide : 10 Mo. */
+    protected const DEFAULT_MAX_MEDIA_BYTES = 10485760;
+
     /** Ids stables des boutons de confirmation (reçus dans button_reply.id). */
     public const BUTTON_YES = 'wash_oui';
 
@@ -73,6 +79,13 @@ class WashWhatsAppService
     {
         $results = [];
         foreach ($this->client->parseWebhook($payload) as $message) {
+            // Idempotence relivraisons Meta : même wamid = déjà traité.
+            // Cache::add atomique : un seul traitement gagne en cas de doublon.
+            $wamid = $this->wamidOf($message);
+            if ($wamid !== '' && !Cache::add($this->seenKey($wamid), now()->toIso8601String(), self::SEEN_TTL)) {
+                $results[] = ['status' => 'duplicate_delivery', 'from' => $message['from'] ?? null, 'wamid' => $wamid];
+                continue;
+            }
             // Chaque message usager (reçu) rouvre la fenêtre free-form de 24h.
             $this->stampUserMessage($message['from'] ?? '');
             try {
@@ -111,7 +124,13 @@ class WashWhatsAppService
         $channel = 'text';
 
         if (($message['type'] ?? '') === 'audio' && ($message['media_id'] ?? null)) {
-            $media = $this->safeDownload($message['media_id']);
+            $download = $this->downloadMediaChecked($message['media_id']);
+            if ($download['outcome'] === 'oversized') {
+                $this->reply($from, $this->oversizedAudioReply());
+
+                return ['status' => 'oversized_media', 'from' => $from];
+            }
+            $media = $download['media'];
             if (!$media) {
                 $this->reply($from, "On n'a pas compris votre note vocale. Réenregistrez au calme, près du micro : dites votre école + la panne (ex. robinet cassé au bloc A). Merci !");
 
@@ -126,7 +145,13 @@ class WashWhatsAppService
                 $text = $transcript;
             }
         } elseif (($message['type'] ?? '') === 'image' && ($message['media_id'] ?? null)) {
-            $media = $this->safeDownload($message['media_id']);
+            $download = $this->downloadMediaChecked($message['media_id']);
+            if ($download['outcome'] === 'oversized') {
+                $this->reply($from, $this->oversizedPhotoReply());
+
+                return ['status' => 'oversized_media', 'from' => $from];
+            }
+            $media = $download['media'];
             if (!$media) {
                 $this->reply($from, "La photo n'est pas arrivée jusqu'à nous. Renvoyez-la avec une phrase : école + panne (ex. fuite au bloc A). Merci !");
 
@@ -312,6 +337,44 @@ class WashWhatsAppService
     }
 
     // ------------------------------------------------------------------
+    // Idempotence relivraisons Meta (même wamid livré 2+ fois).
+    // ------------------------------------------------------------------
+
+    /** Id Meta (wamid) d'un message normalisé, '' si absent (pas de dédup possible). */
+    protected function wamidOf(array $message): string
+    {
+        $wamid = $message['wamid'] ?? $message['message_id'] ?? '';
+
+        return is_string($wamid) ? $wamid : '';
+    }
+
+    protected function seenKey(string $wamid): string
+    {
+        return 'wash.whatsapp.seen.' . $wamid;
+    }
+
+    /**
+     * True si TOUS les messages du payload sont des relivraisons déjà vues.
+     * Utilisé par le contrôleur pour accuser réception sans ré-enfiler le job
+     * (ni triage, ni envoi) ; last_webhook_at reste mis à jour dans tous les cas.
+     */
+    public function isDuplicateDelivery(array $payload): bool
+    {
+        $messages = $this->client->parseWebhook($payload);
+        if ($messages === []) {
+            return false;
+        }
+        foreach ($messages as $message) {
+            $wamid = $this->wamidOf($message);
+            if ($wamid === '' || !Cache::has($this->seenKey($wamid))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // ------------------------------------------------------------------
     // Fenêtre free-form 24h (voir entête de classe).
     // ------------------------------------------------------------------
 
@@ -438,17 +501,67 @@ class WashWhatsAppService
         return false;
     }
 
-    protected function safeDownload(string $mediaId): ?array
+    protected function maxMediaBytes(): int
+    {
+        $max = (int) config('whatsapp.max_media_bytes', self::DEFAULT_MAX_MEDIA_BYTES);
+
+        return $max > 0 ? $max : self::DEFAULT_MAX_MEDIA_BYTES;
+    }
+
+    /**
+     * Télécharge un média en respectant le plafond whatsapp.max_media_bytes.
+     * Retourne ['outcome' => 'ok'|'unreadable'|'oversized', 'media' => ?array].
+     * 'oversized' : taille déclarée (métadonnées, quand dispo AVANT le corps)
+     * ou corps reçu > plafond → RIEN n'est stocké (pas de fichier temp).
+     */
+    protected function downloadMediaChecked(string $mediaId): array
     {
         try {
             $media = $this->client->downloadMedia($mediaId);
         } catch (\Throwable $e) {
             Log::warning('WhatsApp media download failed: ' . $e->getMessage());
 
-            return null;
+            return ['outcome' => 'unreadable', 'media' => null];
         }
 
-        return ($media['bytes'] ?? '') === '' ? null : $media;
+        $max = $this->maxMediaBytes();
+
+        // Taille déclarée par Meta (métadonnées, sans le corps) quand dispo :
+        // rejet AVANT tout stockage.
+        foreach (['file_size', 'size', 'content_length', 'content-length'] as $key) {
+            if (isset($media[$key]) && (int) $media[$key] > $max) {
+                Log::info("WhatsApp media oversized (declared {$key}): {$media[$key]} > {$max} bytes.", ['media_id' => $mediaId]);
+
+                return ['outcome' => 'oversized', 'media' => null];
+            }
+        }
+
+        $bytes = $media['bytes'] ?? '';
+        if ($bytes === '') {
+            return ['outcome' => 'unreadable', 'media' => null];
+        }
+        if (strlen($bytes) > $max) {
+            Log::info('WhatsApp media oversized (body ' . strlen($bytes) . " > {$max} bytes), dropped before storage.", ['media_id' => $mediaId]);
+
+            return ['outcome' => 'oversized', 'media' => null];
+        }
+
+        return ['outcome' => 'ok', 'media' => $media];
+    }
+
+    protected function safeDownload(string $mediaId): ?array
+    {
+        return $this->downloadMediaChecked($mediaId)['media'];
+    }
+
+    protected function oversizedAudioReply(): string
+    {
+        return 'Note trop lourde, renvoie plus court : réenregistre ta note vocale au calme, près du micro — école + panne en une phrase (ex. robinet cassé au bloc A). Merci !';
+    }
+
+    protected function oversizedPhotoReply(): string
+    {
+        return 'Photo trop lourde, renvoie une photo plus légère avec une phrase : école + panne (ex. fuite au bloc A). Merci !';
     }
 
     /** Envoie une réponse (tronquée au format SMS), via simulateur ou live selon le client. */

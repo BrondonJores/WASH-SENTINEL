@@ -234,4 +234,70 @@ class WashWhatsAppGuidanceTest extends TestCase
         Http::assertSent(fn ($request) => str_contains($request->url(), '999/messages')
             && ($request['text']['body'] ?? '') === 'Merci ! Incident WASH-2026-ABCDEF enregistré : fuite.');
     }
+
+    public function test_oversized_audio_gets_guided_reply_without_incident(): void
+    {
+        // Le faux média fait 22 o ('fake-voice-note-bytes') : plafond à 10 o.
+        config(['whatsapp.max_media_bytes' => 10]);
+        $this->seedContact();
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('audio'))->assertOk();
+
+        $this->assertEquals(0, Incident::count());
+        $this->assertEquals(0, Report::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $reply = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString('trop lourde', $reply);
+        $this->assertStringContainsString('renvoie plus court', $reply);
+        $this->assertLessThan(400, mb_strlen($reply));
+    }
+
+    public function test_oversized_photo_gets_guided_reply_without_incident(): void
+    {
+        config(['whatsapp.max_media_bytes' => 10]);
+        $this->seedContact();
+        FakeWhatsAppService::$media['MEDIA_PHOTO_BIG'] = [
+            'bytes' => str_repeat('x', 64), 'mime' => 'image/jpeg', 'filename' => 'wa-big.jpg',
+        ];
+
+        $payload = $this->fixture('audio');
+        $payload['entry'][0]['changes'][0]['value']['messages'][0] = [
+            'from' => '237600112233',
+            'id' => 'wamid.PHOTO_BIG_001',
+            'timestamp' => '1760000000',
+            'type' => 'image',
+            'image' => ['id' => 'MEDIA_PHOTO_BIG', 'mime_type' => 'image/jpeg', 'caption' => 'fuite au bloc A'],
+        ];
+
+        $this->postJson('/api/v1/whatsapp/webhook', $payload)->assertOk();
+
+        $this->assertEquals(0, Incident::count());
+        $this->assertEquals(0, Report::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $reply = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString('trop lourde', $reply);
+        $this->assertStringContainsString('plus légère', $reply);
+        $this->assertLessThan(400, mb_strlen($reply));
+    }
+
+    public function test_oversized_declared_size_rejected_before_body(): void
+    {
+        $this->seedContact();
+        // Taille déclarée (métadonnées) > plafond par défaut (10 Mo),
+        // même avec un petit corps : rejeté sans incident.
+        FakeWhatsAppService::$media['MEDIA_AUDIO_BIG'] = [
+            'bytes' => 'tiny', 'mime' => 'audio/ogg', 'filename' => 'wa-big.ogg',
+            'file_size' => 20 * 1024 * 1024,
+        ];
+
+        $payload = $this->fixture('audio');
+        $payload['entry'][0]['changes'][0]['value']['messages'][0]['id'] = 'wamid.AUDIO_BIG_001';
+        $payload['entry'][0]['changes'][0]['value']['messages'][0]['audio']['id'] = 'MEDIA_AUDIO_BIG';
+
+        $this->postJson('/api/v1/whatsapp/webhook', $payload)->assertOk();
+
+        $this->assertEquals(0, Incident::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $this->assertStringContainsString('trop lourde', FakeWhatsAppService::$sent[0]['message']);
+    }
 }

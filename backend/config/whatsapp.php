@@ -15,6 +15,9 @@
 |   WHATSAPP_APP_SECRET=...            (HMAC X-Hub-Signature-256, obligatoire live)
 |   WHATSAPP_BASE_URL=...              (défaut Graph API v21.0)
 |   WHATSAPP_SIMULATOR=true|false      (dev local : aucun appel Meta)
+|   WHATSAPP_MAX_MEDIA_BYTES=...        (plafond octets d'un média entrant,
+|                                       défaut 10 Mo — au-delà, réponse guidée
+|                                       FR, sans stockage)
 |
 | Réglages du flow vocal :
 |   WHATSAPP_VOICE_CONFIRMATION=true|false (défaut true : après une note
@@ -75,4 +78,8 @@ return [
 
     // Durée de vie (secondes) d'une demande de confirmation Oui/Non en cache.
     'pending_ttl' => (int) env('WHATSAPP_PENDING_TTL', 86400),
+
+    // Plafond (octets) d'un média WhatsApp entrant (note vocale, photo).
+    // Au-delà : réponse guidée FR, SANS stockage (voir WashWhatsAppService).
+    'max_media_bytes' => (int) env('WHATSAPP_MAX_MEDIA_BYTES', 10 * 1024 * 1024),
 ];

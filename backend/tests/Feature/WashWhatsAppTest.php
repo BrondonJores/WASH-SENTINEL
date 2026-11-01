@@ -231,4 +231,62 @@ class WashWhatsAppTest extends TestCase
         $this->assertNotNull($at);
         $this->getJson('/api/v1/whatsapp/diagnostics')->assertJsonPath('last_webhook_at', $at);
     }
+
+    public function test_redelivery_same_wamid_creates_single_incident(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('text'))
+            ->assertOk()
+            ->assertJson(['received' => true]);
+        $this->assertEquals(1, Incident::count());
+
+        // Relivraison Meta (retry, même wamid) : accusé, sans doublon ni 2e envoi.
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('text'))
+            ->assertOk()
+            ->assertJson(['received' => true, 'status' => 'duplicate_delivery']);
+
+        $this->assertEquals(1, Incident::count());
+        $this->assertEquals(1, Report::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        // Diagnostics non cassés : horodaté même sur relivraison.
+        $this->assertNotNull(Cache::get('wash.whatsapp.last_webhook_at'));
+        $this->assertTrue(Cache::has('wash.whatsapp.seen.wamid.TEXT001'));
+    }
+
+    public function test_different_wamids_create_two_incidents(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('text'))->assertOk();
+
+        $second = $this->fixture('text');
+        $second['entry'][0]['changes'][0]['value']['messages'][0]['id'] = 'wamid.TEXT002';
+        $second['entry'][0]['changes'][0]['value']['messages'][0]['text']['body'] = 'Les toilettes du bloc B sont bouchées, ça déborde.';
+        $this->postJson('/api/v1/whatsapp/webhook', $second)->assertOk();
+
+        $this->assertEquals(2, Incident::count());
+        $this->assertEquals(2, Report::count());
+        $this->assertCount(2, FakeWhatsAppService::$sent);
+    }
+
+    public function test_service_dedupes_job_retry_without_resend(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+
+        $first = $service->handlePayload($this->fixture('text'));
+        $this->assertEquals('triaged', $first[0]['status'] ?? null);
+        $this->assertEquals(1, Incident::count());
+
+        // Rejeu du même payload (retry job) : ni triage ni envoi.
+        $second = $service->handlePayload($this->fixture('text'));
+        $this->assertEquals('duplicate_delivery', $second[0]['status'] ?? null);
+        $this->assertEquals(1, Incident::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+    }
 }

@@ -49,8 +49,16 @@ class WashWhatsAppController extends Controller
             abort(403, 'Invalid webhook signature.');
         }
 
-        ProcessWhatsAppMessage::dispatch($request->all());
+        $payload = $request->all();
+        // Diagnostics : horodaté à CHAQUE livraison, relivraisons Meta incluses.
         Cache::put('wash.whatsapp.last_webhook_at', now()->toIso8601String(), 86400);
+
+        // Relivraison Meta (retry) déjà traitée : accusé sans triage ni envoi.
+        if ($service->isDuplicateDelivery($payload)) {
+            return response()->json(['received' => true, 'status' => 'duplicate_delivery']);
+        }
+
+        ProcessWhatsAppMessage::dispatch($payload);
 
         return response()->json(['received' => true]);
     }

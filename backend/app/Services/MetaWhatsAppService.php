@@ -79,6 +79,8 @@ class MetaWhatsAppService implements WhatsAppClient
                     $normalized = [
                         'from' => $message['from'] ?? '',
                         'message_id' => $message['id'] ?? '',
+                        // Id Meta (wamid) : clé d'idempotence des relivraisons.
+                        'wamid' => $message['id'] ?? '',
                         'type' => $type,
                         'text' => null,
                         'media_id' => null,
