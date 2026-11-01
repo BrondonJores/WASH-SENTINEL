@@ -80,3 +80,32 @@ Répondez à ce message pour ajouter une précision. Merci !
 3. `WHATSAPP_APP_SECRET` renseigné (sinon webhook 403 en live).
 4. Vérification business Meta pour envoyer en masse / lever les limites.
 5. `WHATSAPP_SIMULATOR=false` en production (sinon aucun appel Meta réel).
+
+## 7. Checklist jour J (ordre exact des opérations)
+
+À exécuter dans cet ordre, sans sauter d'étape :
+
+1. **Renseigner le `.env`** (§2) : `WHATSAPP_TOKEN` (permanent, §6.2),
+   `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_WABA_ID`,
+   `WHATSAPP_VERIFY_TOKEN` (≥ 16 caractères), `WHATSAPP_APP_SECRET`,
+   `WHATSAPP_SIMULATOR=false`. Puis `php artisan config:clear`.
+2. **Lancer le preflight** (depuis `backend/`) :
+   ```bash
+   php artisan wash:whatsapp:preflight
+   ```
+   Il vérifie chaque point en français (canal activé, token présent
+   sans l'afficher, IDs, verify token, app secret, `SIMULATOR=false`,
+   connectivité Graph API avec timeout 10 s, route webhook). Exit 0 =
+   tout vert ; exit 1 = corriger chaque action listée puis relancer.
+3. **Déclarer le webhook** (§3) : URL publique
+   `https://<hôte>/api/v1/whatsapp/webhook` + verify token →
+   **Vérifier** → s'abonner au champ **`messages`**.
+4. **Test vocal de bout en bout** : depuis un téléphone personnel,
+   envoyer une **note vocale** au numéro live
+   (ex. « fuite au robinet du bloc A ») → vérifier le récap texte +
+   les boutons **Oui/Non** + la note vocale TTS de confirmation →
+   toucher **Oui** → « Parfait, c'est confirmé ! » et incident tagué
+   `confirme-usager`. Tester aussi **Non** → « Que dois-je corriger ? ».
+5. **Surveiller les logs** Laravel pendant le test (message entrant →
+   transcription → triage → `received: true`) et
+   `GET /api/v1/whatsapp/diagnostics` (`last_webhook_at` renseigné).
