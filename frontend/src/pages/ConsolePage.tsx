@@ -15,6 +15,7 @@ import { AgentCardList, FollowUps } from '../components/AgentCards';
 import { DetailDrawer } from '../components/DetailDrawer';
 import { VoicePlayer, VoiceRecorder } from '../components/VoiceControls';
 import { VoicePreview } from '../components/VoicePreview';
+import { VoiceMode, VoiceModeToggle } from '../components/VoiceMode';
 import type { DetailKind, DetailTarget } from '../components/DetailDrawer';
 import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
@@ -245,6 +246,7 @@ export default function ConsolePage() {
   const [previewAudio, setPreviewAudio] = useState<string | null>(null);
   const [voiceLang, setVoiceLang] = useState<VoiceLanguage>(() => readVoiceLang());
   const [streamId, setStreamId] = useState<number | null>(null);
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const [visible, setVisible] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -761,6 +763,9 @@ export default function ConsolePage() {
             </p>
           )}
           <div className="stage-in stage-4 mt-8 w-full">{composer(true)}</div>
+          <div className="mt-2 flex justify-center">
+            <VoiceModeToggle size="lg" onOpen={() => setVoiceOpen(true)} />
+          </div>
           {errorBox}
           {preview !== null && (
             <div className="w-full text-left">
@@ -785,6 +790,7 @@ export default function ConsolePage() {
           )}
         </div>
         <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} />
+        {voiceOpen && <VoiceMode onClose={() => setVoiceOpen(false)} />}
       </div>
     );
   }
@@ -811,6 +817,7 @@ export default function ConsolePage() {
             </p>
           </div>
           <div className="flex-1" />
+          <VoiceModeToggle onOpen={() => setVoiceOpen(true)} />
           <button
             type="button"
             onClick={() => newChat()}
@@ -959,6 +966,7 @@ export default function ConsolePage() {
         </div>
       </div>
       <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} />
+      {voiceOpen && <VoiceMode onClose={() => setVoiceOpen(false)} />}
     </div>
   );
 }
