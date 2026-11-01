@@ -1,6 +1,7 @@
 import { memo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Badge, Button, Card } from './ui';
+import { GuideEmpty } from './GuideEmpty';
 import { Icon } from './icons';
 import { VoicePlayer } from './VoiceControls';
 import type { AgentCard, ProposalNextAction } from '../lib/api';
@@ -504,7 +505,15 @@ function RankingCard({
     >
       <InsightLine text={rankingInsight} />
       {ranking.length === 0 ? (
-        <p className="text-sm text-stone-600 dark:text-stone-400">Aucune école à classer.</p>
+        <GuideEmpty
+          phrase="Aucune école à classer."
+          conseil="Essaie un autre district, ou regarde les alertes pour choisir une zone."
+          actions={[
+            { label: 'Voir un autre district ?', question: 'Voir un autre district ?' },
+            { label: 'Voir les alertes ?', question: 'Voir les alertes du district ?' },
+          ]}
+          onAsk={onAsk}
+        />
       ) : (
         <div className="divide-y divide-stone-200 dark:divide-stone-800">
           {ranking.map((r, i) => {
@@ -704,6 +713,17 @@ function DistrictCard({
       <div className="mt-3">
         <InsightLine text={districtInsight ?? ''} />
       </div>
+      {total === 0 && (
+        <GuideEmpty
+          phrase="Aucun incident ouvert."
+          conseil="Tout est calme ici. Regarde un autre district ou les alertes."
+          actions={[
+            { label: 'Voir un autre district ?', question: 'Voir un autre district ?' },
+            { label: 'Voir les alertes ?', question: 'Voir les alertes du district ?' },
+          ]}
+          onAsk={onAsk}
+        />
+      )}
       {urgEntries.length > 0 && (
         <div className="mt-3 space-y-1.5">
           {urgEntries.map(([k, v]) => (
@@ -1013,9 +1033,23 @@ function TrendCard({
           {onAsk !== undefined && <TrendPeriods current={months} school={school} onAsk={onAsk} />}
         </div>
       ) : (
-        <p className="mt-3 text-sm text-stone-600 dark:text-stone-400">
-          Pas assez de données pour tracer la tendance.
-        </p>
+        <div className="mt-3">
+          <GuideEmpty
+            phrase="Pas assez de données pour tracer la tendance."
+            conseil="Essaie une période plus longue, ou compare avec une autre école."
+            actions={[
+              {
+                label: 'Voir sur 12 mois ?',
+                question:
+                  school !== undefined
+                    ? `Voir les tendances de ${school} sur 12 mois`
+                    : 'Voir les tendances sur 12 mois',
+              },
+              { label: 'Comparer deux écoles ?', question: 'Comparer deux écoles ?' },
+            ]}
+            onAsk={onAsk}
+          />
+        </div>
       )}
       <FollowUps
         onAsk={onAsk}
@@ -1325,9 +1359,15 @@ function TerritoryMapCard({
         {points.length > 0 ? (
           <TerritoryMap points={points} />
         ) : (
-          <p className="text-sm text-stone-600 dark:text-stone-400">
-            Aucune école géolocalisée pour ce territoire.
-          </p>
+          <GuideEmpty
+            phrase="Aucune école géolocalisée pour ce territoire."
+            conseil="Vérifie le nom du district, ou regarde les écoles qui ont le plus besoin d’aide."
+            actions={[
+              { label: 'Voir un autre district ?', question: 'Voir un autre district ?' },
+              { label: 'Quelles écoles aider ?', question: "Quelles écoles ont le plus besoin d'aide ?" },
+            ]}
+            onAsk={onAsk}
+          />
         )}
       </div>
       {missing.length > 0 && (
@@ -1423,39 +1463,21 @@ function MaintenanceLogsCard({
           'Essaie hier ou cette semaine.',
         )}
       >
-        <div className="flex flex-col items-center py-4 text-center">
-          <span
-            aria-hidden="true"
-            className="flex h-14 w-14 items-center justify-center rounded-full bg-teal-700/10 text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
-          >
-            <Icon name="inbox" className="h-7 w-7" />
-          </span>
-          <p className="mt-3 text-[15px] font-semibold leading-relaxed">{phrase}</p>
-          {dayLabel !== '—' && (
-            <p className="mt-1 text-sm text-stone-500 dark:text-stone-400">{dayLabel}</p>
-          )}
-          {schoolWarning !== undefined && (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{schoolWarning}</p>
-          )}
-          {onAsk !== undefined && (
-            <div className="mt-3 flex flex-wrap justify-center gap-2">
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => onAsk('Interventions réalisées hier ?')}
-              >
-                Voir hier ?
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => onAsk('Interventions réalisées cette semaine ?')}
-              >
-                Voir la semaine ?
-              </Button>
-            </div>
-          )}
-        </div>
+        <GuideEmpty
+          phrase={phrase}
+          conseil={
+            schoolWarning !== undefined
+              ? `${schoolWarning} Essaie hier ou cette semaine.`
+              : dayLabel !== '—'
+                ? `${dayLabel} — essaie hier ou cette semaine.`
+                : 'Essaie hier ou cette semaine.'
+          }
+          actions={[
+            { label: 'Voir hier ?', question: 'Interventions réalisées hier ?' },
+            { label: 'Voir la semaine ?', question: 'Interventions réalisées cette semaine ?' },
+          ]}
+          onAsk={onAsk}
+        />
       </CardShell>
     );
   }
@@ -1741,8 +1763,15 @@ function DistrictAlertsCard({ title, data, onAsk }: { title: string; data: Recor
     return (
       <CardShell title={title} listenText={speak(insight === '' ? 'Aucune alerte sur ce district. Tout est calme.' : insight)}>
         <InsightLine text={insight} />
-        <p className="text-sm text-stone-500 dark:text-stone-400">Aucune alerte — tout est calme sur ce district.</p>
-        <FollowUps onAsk={onAsk} items={['Voir un autre district ?', 'Quelles écoles ont le plus besoin d’aide ?']} />
+        <GuideEmpty
+          phrase="Aucune alerte."
+          conseil="Tout est calme sur ce district."
+          actions={[
+            { label: 'Voir un autre district ?', question: 'Voir un autre district ?' },
+            { label: 'Quelles écoles aider ?', question: "Quelles écoles ont le plus besoin d'aide ?" },
+          ]}
+          onAsk={onAsk}
+        />
       </CardShell>
     );
   }
@@ -1787,8 +1816,15 @@ function EpidemicAlertsCard({ title, data, onAsk }: { title: string; data: Recor
     return (
       <CardShell title={title} listenText={speak(insight === '' ? 'Aucun foyer sanitaire détecté. La veille continue.' : insight)}>
         <InsightLine text={insight} />
-        <p className="text-sm text-stone-500 dark:text-stone-400">Aucun foyer détecté — la veille sanitaire continue.</p>
-        <FollowUps onAsk={onAsk} items={['Voir les alertes du district ?', 'Voir les incidents ouverts']} />
+        <GuideEmpty
+          phrase="Aucun foyer détecté."
+          conseil="La veille sanitaire continue."
+          actions={[
+            { label: 'Voir les alertes ?', question: 'Voir les alertes du district ?' },
+            { label: 'Voir les incidents ?', question: 'Voir les incidents ouverts' },
+          ]}
+          onAsk={onAsk}
+        />
       </CardShell>
     );
   }
@@ -1996,8 +2032,15 @@ function MissionTimelineCard({ title, data, onAsk }: { title: string; data: Reco
     return (
       <CardShell title={title} listenText={speak(insight === '' ? 'Aucune mission sur cette période.' : insight)}>
         <InsightLine text={insight} />
-        <p className="text-sm text-stone-500 dark:text-stone-400">Aucune mission sur cette période.</p>
-        <FollowUps onAsk={onAsk} items={['Voir une période plus longue ?', 'Qui envoyer sur place ?']} />
+        <GuideEmpty
+          phrase="Aucune mission sur cette période."
+          conseil="Essaie une période plus longue."
+          actions={[
+            { label: 'Voir plus long ?', question: 'Voir une période plus longue ?' },
+            { label: 'Qui envoyer ?', question: 'Qui envoyer sur place ?' },
+          ]}
+          onAsk={onAsk}
+        />
       </CardShell>
     );
   }
@@ -2219,7 +2262,15 @@ function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<
         </span>
       </div>
       {pending.length === 0 ? (
-        <p className="text-sm text-stone-500 dark:text-stone-400">File vide — rien à synchroniser.</p>
+        <GuideEmpty
+          phrase="File vide."
+          conseil="Rien à synchroniser. Tes signalements partiront tout seuls quand tu seras en ligne."
+          actions={[
+            { label: 'Voir les incidents ?', question: 'Voir les incidents ouverts ?' },
+            { label: 'Remplir un signalement ?', question: 'Aide-moi à remplir un signalement' },
+          ]}
+          onAsk={onAsk}
+        />
       ) : (
         <ul className="space-y-2">
           {pending.map((p, i) => (
@@ -2237,7 +2288,9 @@ function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<
           ))}
         </ul>
       )}
-      <FollowUps onAsk={onAsk} items={['Voir les incidents ouverts ?', 'Aide-moi à remplir un signalement']} />
+      {pending.length > 0 && (
+        <FollowUps onAsk={onAsk} items={['Voir les incidents ouverts ?', 'Aide-moi à remplir un signalement']} />
+      )}
     </CardShell>
   );
 }
@@ -2249,8 +2302,15 @@ function RelancesCard({ title, data, onAsk }: { title: string; data: Record<stri
     return (
       <CardShell title={title} listenText={speak(insight === '' ? 'Aucun incident dormant. Tout est suivi.' : insight)}>
         <InsightLine text={insight} />
-        <p className="text-sm text-stone-500 dark:text-stone-400">Aucun incident dormant — tout est suivi.</p>
-        <FollowUps onAsk={onAsk} items={['Voir les incidents ouverts ?', 'Voir les alertes du district ?']} />
+        <GuideEmpty
+          phrase="Aucun incident dormant."
+          conseil="Tout est suivi."
+          actions={[
+            { label: 'Voir les incidents ?', question: 'Voir les incidents ouverts ?' },
+            { label: 'Voir les alertes ?', question: 'Voir les alertes du district ?' },
+          ]}
+          onAsk={onAsk}
+        />
       </CardShell>
     );
   }
