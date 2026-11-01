@@ -9,6 +9,7 @@ use App\Models\School;
 use App\Models\SchoolContact;
 use App\Services\MetaWhatsAppService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
 use Tests\Support\FakeWhatsAppService;
@@ -81,6 +82,74 @@ class WashWhatsAppGuidanceTest extends TestCase
                 'similarity_score' => 0.95,
             ], 200),
         ]);
+    }
+
+    protected function audioPayload(string $id, string $from = '237600112233'): array
+    {
+        $payload = $this->fixture('audio');
+        $payload['entry'][0]['changes'][0]['value']['messages'][0]['id'] = $id;
+        $payload['entry'][0]['changes'][0]['value']['messages'][0]['from'] = $from;
+
+        return $payload;
+    }
+
+    /**
+     * Enchaîne vocal initial + clic Non, retourne l'incident pending.
+     * Les stubs URL Http::fake() s'accumulent (le 1er gagne) : la transcription
+     * de la correction vocale éventuelle est fournie via UNE séquence unique.
+     */
+    protected function seedPendingClarification(?string $correctionTranscript = null): Incident
+    {
+        config(['filesystems.disks.public.root' => sys_get_temp_dir() . '/wash-test-public']);
+        $this->seedContact();
+        $transcribe = $correctionTranscript === null
+            ? Http::response(['transcript' => 'Le robinet du bloc A fuit beaucoup.'], 200)
+            : Http::sequence()
+                ->push(['transcript' => 'Le robinet du bloc A fuit beaucoup.'])
+                ->push(['transcript' => $correctionTranscript]);
+        Http::fake([
+            '*/v1/wash/triage' => $this->triageResponse(),
+            '*/v1/voice/transcribe' => $transcribe,
+        ]);
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('audio'))->assertOk();
+        $incident = Incident::first();
+        $this->assertNotNull($incident);
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('interactive_no'))->assertOk();
+        FakeWhatsAppService::$sent = [];
+
+        return $incident;
+    }
+
+    /** Stub doublon ajouté APRÈS coup (motif neuf : pas de conflit avec le 1er fake). */
+    protected function fakeDuplicateAfterwards(int $incidentId): void
+    {
+        Http::fake([
+            '*/v1/wash/check-duplicates' => Http::response([
+                'is_duplicate' => true,
+                'matched_incident_id' => $incidentId,
+                'similarity_score' => 0.95,
+            ], 200),
+        ]);
+    }
+
+    /** Textes envoyés (hors boutons interactifs / audio). */
+    protected function sentTexts(): array
+    {
+        return array_values(array_filter(
+            FakeWhatsAppService::$sent,
+            fn ($m) => ($m['type'] ?? '') === 'text'
+        ));
+    }
+
+    /** Boutons interactifs envoyés. */
+    protected function sentInteractive(): array
+    {
+        return array_values(array_filter(
+            FakeWhatsAppService::$sent,
+            fn ($m) => ($m['type'] ?? '') === 'interactive'
+        ));
     }
 
     protected function seedContact(): School
@@ -299,5 +368,154 @@ class WashWhatsAppGuidanceTest extends TestCase
         $this->assertEquals(0, Incident::count());
         $this->assertCount(1, FakeWhatsAppService::$sent);
         $this->assertStringContainsString('trop lourde', FakeWhatsAppService::$sent[0]['message']);
+    }
+
+    // --------------------------------------------------------------
+    // Clarification après Non : rattachée au pending, jamais perdue.
+    // --------------------------------------------------------------
+
+    public function test_no_then_text_correction_without_keyword_updates_pending_incident(): void
+    {
+        $incident = $this->seedPendingClarification();
+
+        // Correction TEXTE sans mot-clé eau/hygiène (ancien bug : hors-sujet).
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->textPayload(
+            "Non, c'est au bloc B, pas au bloc A.",
+            '237600112233',
+            'wamid.CLARIFY_TEXT_001'
+        ));
+
+        $this->assertEquals('clarification_applied', $results[0]['status'] ?? null);
+        $this->assertFalse($results[0]['is_duplicate'] ?? true);
+        $this->assertEquals($incident->id, $results[0]['incident_id'] ?? null);
+
+        // Incident inchangé (pas de doublon, pas de nouvel incident), Report rattaché.
+        $this->assertEquals(1, Incident::count());
+        $this->assertEquals(2, Report::count());
+        $correction = Report::latest('id')->first();
+        $this->assertEquals($incident->id, $correction->incident_id);
+        $this->assertFalse((bool) $correction->is_duplicate);
+        $this->assertEquals('text', $correction->channel);
+        $this->assertEquals('whatsapp', $correction->source);
+        $this->assertStringContainsString('bloc B', $correction->raw_content);
+
+        // Résumé incident mis à jour avec la correction.
+        $this->assertStringContainsString('bloc B', (string) $incident->fresh()->ai_summary);
+
+        // Réponse FR de correction + re-confirmation, JAMAIS Déjà reçu / hors-sujet.
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $reply = $texts[0]['message'];
+        $this->assertStringContainsString("J'ai corrigé", $reply);
+        $this->assertStringContainsString("C'est bien ça", $reply);
+        $this->assertStringContainsString('bloc B', $reply);
+        $this->assertStringNotContainsString('Déjà reçu', $reply);
+        $this->assertStringNotContainsString('Ici on signale', $reply);
+        $this->assertLessThan(400, mb_strlen($reply));
+
+        $interactive = $this->sentInteractive();
+        $this->assertCount(1, $interactive);
+        $ids = array_column($interactive[0]['buttons'] ?? [], 'id');
+        $this->assertContains('wash_oui', $ids);
+        $this->assertContains('wash_non', $ids);
+
+        // Pending conservé : Oui confirme l'incident corrigé.
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('interactive_yes'))->assertOk();
+        $this->assertContains('confirme-usager', $incident->fresh()->ai_tags ?? []);
+        $last = end(FakeWhatsAppService::$sent);
+        $this->assertStringContainsString('confirmé', $last['message']);
+    }
+
+    public function test_no_then_voice_correction_is_attached_not_duplicate(): void
+    {
+        $incident = $this->seedPendingClarification("C'est au bloc B, la deuxième porte.");
+
+        // Le triage verrait un doublon (ancien bug : « Déjà reçu », correction perdue).
+        $this->fakeDuplicateAfterwards($incident->id);
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->audioPayload('wamid.CLARIFY_VOICE_001'))
+            ->assertOk();
+
+        // Incident inchangé, Report vocal rattaché, pas de doublon.
+        $this->assertEquals(1, Incident::count());
+        $this->assertEquals(2, Report::count());
+        $correction = Report::latest('id')->first();
+        $this->assertEquals($incident->id, $correction->incident_id);
+        $this->assertFalse((bool) $correction->is_duplicate);
+        $this->assertEquals('voice', $correction->channel);
+        $this->assertNotNull($correction->audio_path);
+        $this->assertStringContainsString('deuxième porte', (string) $incident->fresh()->ai_summary);
+
+        // Réponse FR de correction + boutons Oui/Non renvoyés.
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $reply = $texts[0]['message'];
+        $this->assertStringContainsString("J'ai corrigé", $reply);
+        $this->assertStringContainsString("C'est bien ça", $reply);
+        $this->assertStringNotContainsString('Déjà reçu', $reply);
+        $this->assertStringNotContainsString('Ici on signale', $reply);
+        $this->assertLessThan(400, mb_strlen($reply));
+
+        $interactive = $this->sentInteractive();
+        $this->assertCount(1, $interactive);
+        $ids = array_column($interactive[0]['buttons'] ?? [], 'id');
+        $this->assertContains('wash_oui', $ids);
+        $this->assertContains('wash_non', $ids);
+    }
+
+    public function test_clarification_expired_falls_back_to_normal_triage(): void
+    {
+        $incident = $this->seedPendingClarification();
+
+        // Silence/expiration : la clé clarify a disparu -> triage normal pur.
+        Cache::forget('wash.whatsapp.clarify.237600112233');
+        $this->fakeTriage();
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->textPayload(
+            'Le robinet du bloc A fuit toujours autant.',
+            '237600112233',
+            'wamid.CLARIFY_EXPIRED_001'
+        ));
+
+        $this->assertEquals('triaged', $results[0]['status'] ?? null);
+        $this->assertNotEquals($incident->id, $results[0]['incident_id'] ?? null);
+
+        // Nouvel incident créé, réponse normale sans note de repli.
+        $this->assertEquals(2, Incident::count());
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $this->assertStringContainsString('enregistré', $texts[0]['message']);
+        $this->assertStringNotContainsString('pas retrouvé votre signalement', $texts[0]['message']);
+    }
+
+    public function test_clarification_deleted_incident_falls_back_to_normal_triage_with_note(): void
+    {
+        $incident = $this->seedPendingClarification();
+
+        // Incident pending supprimé -> repli : triage normal + note FR.
+        $incident->delete();
+        $this->fakeTriage();
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->textPayload(
+            'Le robinet du bloc A fuit toujours autant.',
+            '237600112233',
+            'wamid.CLARIFY_STALE_001'
+        ));
+
+        $this->assertEquals('triaged', $results[0]['status'] ?? null);
+
+        $this->assertEquals(1, Incident::count());
+        $fresh = Incident::first();
+        $this->assertEquals($fresh->id, $results[0]['incident_id'] ?? null);
+
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $reply = $texts[0]['message'];
+        $this->assertStringContainsString('pas retrouvé votre signalement', $reply);
+        $this->assertStringContainsString('enregistré', $reply);
+        $this->assertStringContainsString($fresh->reference_code, $reply);
     }
 }

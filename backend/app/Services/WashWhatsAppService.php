@@ -6,6 +6,8 @@ use App\Contracts\AiEngineClient;
 use App\Contracts\IncidentTriage;
 use App\Contracts\WhatsAppClient;
 use App\Models\Incident;
+use App\Models\Report;
+use App\Models\School;
 use App\Models\SchoolContact;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
@@ -24,8 +26,9 @@ use Illuminate\Support\Str;
  *   4. réponse FR simple : récap texte + boutons interactifs Oui/Non
  *      + note vocale TTS de confirmation (best-effort)
  *   5. clic Oui -> incident confirmé ; clic Non -> UNE question courte,
- *      la clarification suivante est traitée comme un nouveau message
- *      (la déduplication évite les doublons).
+ *      la clarification suivante est RATTACHÉE à l'incident pending
+ *      (jamais triée en neuf : ni « Déjà reçu », ni hors-sujet),
+ *      puis re-confirmation Oui/Non.
  *
  * RÈGLE META DES 24H : tout message free-form (texte, boutons, audio) n'est
  * accepté que sous 24h après le DERNIER message de l'usager. Nos réponses
@@ -167,6 +170,24 @@ class WashWhatsAppService
             return ['status' => 'unsupported', 'from' => $from];
         }
 
+        // Clarification en attente (après Non) : lue AVANT le filtre hors-sujet
+        // et AVANT le triage. Une correction ne doit JAMAIS partir en hors-sujet
+        // (même sans mot-clé eau/hygiène) ni en doublon « Déjà reçu ».
+        $staleClarification = false;
+        if (($channel === 'text' || $channel === 'voice') && ($text || $audio)) {
+            $clarifyIncidentId = Cache::get($this->clarifyKey($from));
+            if ($clarifyIncidentId) {
+                $pendingIncident = Incident::find($clarifyIncidentId);
+                if ($pendingIncident) {
+                    return $this->applyClarification($from, $contact->school, $pendingIncident, $channel, $text, $audio, $photo);
+                }
+                // Incident pending disparu (supprimé) : repli triage normal + note FR.
+                // (Clé expirée/silence = plus rien en cache : triage normal pur.)
+                $this->forgetClarification($from);
+                $staleClarification = true;
+            }
+        }
+
         // Texte sans aucun indice eau/hygiène : hors-sujet guidé, sans incident.
         if ($channel === 'text' && !$this->looksLikeWashReport((string) $text)) {
             $this->forgetClarification($from);
@@ -175,14 +196,15 @@ class WashWhatsAppService
             return ['status' => 'off_topic', 'from' => $from];
         }
 
-        // Une clarification demandée (après Non) est traitée comme un message normal.
+        // Plus de clarification en attente à ce stade : message normal.
         $this->forgetClarification($from);
 
         $result = $this->triage->ingest($contact->school, $channel, $text, $audio, $photo, null, 'whatsapp');
         $incident = $result['incident'];
+        $staleNote = $staleClarification ? $this->staleClarificationNote() : '';
 
         if ($result['is_duplicate']) {
-            $this->reply($from, "Déjà reçu ! Incident {$incident->reference_code} suivi par nos équipes. Merci, pas besoin de renvoyer. On vous tient au courant ici.");
+            $this->reply($from, $staleNote . "Déjà reçu ! Incident {$incident->reference_code} suivi par nos équipes. Merci, pas besoin de renvoyer. On vous tient au courant ici.");
 
             return [
                 'status' => 'triaged',
@@ -194,7 +216,7 @@ class WashWhatsAppService
 
         // Flow vocal : récap texte + boutons Oui/Non + note vocale TTS.
         if ($channel === 'voice' && (bool) config('whatsapp.voice_confirmation', true)) {
-            $this->reply($from, $this->createdReply($incident));
+            $this->reply($from, $staleNote . $this->createdReply($incident));
             $this->rememberPending($from, $incident);
             $this->sendConfirmationButtons($from);
             $this->sendVoiceConfirmation($from, $incident);
@@ -207,7 +229,7 @@ class WashWhatsAppService
             ];
         }
 
-        $this->reply($from, $this->createdReply($incident));
+        $this->reply($from, $staleNote . $this->createdReply($incident));
 
         return [
             'status' => 'triaged',
@@ -265,10 +287,61 @@ class WashWhatsAppService
             Cache::put($this->clarifyKey($from), $pending['incident_id'], 86400);
         }
 
-        // UNE seule question courte : la réponse sera triée comme un message normal.
+        // UNE seule question courte : la réponse suivante (texte/vocal)
+        // corrigera l'incident pending (applyClarification), pas un triage neuf.
         $this->reply($from, 'Désolé ! Que dois-je corriger ? Répondez en une phrase : quoi + où.');
 
         return ['status' => 'clarification_asked', 'from' => $from];
+    }
+
+    /**
+     * Correction après Non : rattachée à l'incident pending, JAMAIS triée en neuf.
+     * IncidentTriageService::ingest n'offre aucun override pour forcer l'incident
+     * (applyOverrides ne gère que category/urgency/affected_students), donc on suit
+     * ses patterns via les modèles : Report lié (is_duplicate=false) + résumé à jour.
+     * Re-confirmation : boutons Oui/Non renvoyés, pending + clarification conservés.
+     */
+    protected function applyClarification(string $from, School $school, Incident $incident, string $channel, ?string $text, ?UploadedFile $audio, ?UploadedFile $photo): array
+    {
+        $correction = trim((string) $text);
+        $rawText = $correction !== '' ? $correction : '[message vocal]';
+        $audioPath = $audio ? $audio->store('reports/audio', 'public') : null;
+        $photoPath = $photo ? $photo->store('reports/photos', 'public') : null;
+
+        Report::create([
+            'school_id' => $school->id,
+            'incident_id' => $incident->id,
+            'channel' => $channel,
+            'source' => 'whatsapp',
+            'raw_content' => $rawText,
+            'audio_path' => $audioPath,
+            'photo_path' => $photoPath,
+            'is_duplicate' => false,
+            'raw_ai_extraction' => ['clarification_of_incident_id' => $incident->id],
+        ]);
+
+        if ($correction !== '') {
+            $incident->update([
+                'title' => Str::limit($correction, 120, '…'),
+                'ai_summary' => Str::limit($correction, 200, '…'),
+            ]);
+        }
+        $incident = $incident->fresh() ?? $incident;
+
+        // Re-confirmation : pending conservé + clarification conservée + boutons.
+        $this->rememberPending($from, $incident);
+        Cache::put($this->clarifyKey($from), $incident->id, 86400);
+        $summary = Str::limit((string) ($incident->ai_summary ?: $incident->title), 140);
+        $this->reply($from, "Merci ! J'ai corrigé : {$summary}. C'est bien ça ?");
+        $this->sendConfirmationButtons($from);
+        Log::info("WhatsApp clarification applied to incident {$incident->id}.", ['from' => $from]);
+
+        return ['status' => 'clarification_applied', 'from' => $from, 'incident_id' => $incident->id, 'is_duplicate' => false];
+    }
+
+    protected function staleClarificationNote(): string
+    {
+        return "Je n'ai pas retrouvé votre signalement précédent, je traite votre message comme un nouveau signalement. ";
     }
 
     protected function sendConfirmationButtons(string $to): void
