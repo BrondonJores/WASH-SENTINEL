@@ -11,6 +11,36 @@ use Illuminate\Validation\Rule;
 
 class WashConversationController extends Controller
 {
+    public const LIBRARY_LIMIT = 60;
+
+    public const TITLE_MAX = 120;
+
+    public const MESSAGES_MAX = 200;
+
+    public const MESSAGE_ROLES = ['user', 'assistant'];
+
+    public const MESSAGE_CONTENT_MAX = 20000;
+
+    public const MESSAGE_TOOLS_MAX = 20;
+
+    public const TOOL_MAX = 64;
+
+    public const CARDS_MAX = 20;
+
+    public const CARD_TYPE_MAX = 64;
+
+    public const CARD_TITLE_MAX = 180;
+
+    public const MODEL_MAX = 120;
+
+    public const SAID_AT_MIN = 0;
+
+    public const SAID_AT_MAX = 9999999999999;
+
+    public const FOLLOW_UPS_MAX = 10;
+
+    public const FOLLOW_UP_MAX = 200;
+
     public function library(Request $request)
     {
         $uid = $request->user()->id;
@@ -23,7 +53,7 @@ class WashConversationController extends Controller
             'conversations' => Conversation::where('user_id', $uid)
                 ->with('messages')
                 ->latest('updated_at')
-                ->limit(60)
+                ->limit(self::LIBRARY_LIMIT)
                 ->get(),
         ]);
     }
@@ -32,7 +62,7 @@ class WashConversationController extends Controller
     {
         $validated = $request->validate(array_merge(
             [
-                'title' => ['required', 'string', 'max:120'],
+                'title' => ['required', 'string', 'max:' . self::TITLE_MAX],
                 'project_id' => ['nullable', 'integer', Rule::exists('projects', 'id')->where('user_id', $request->user()->id)],
             ],
             $this->messageRules()
@@ -56,7 +86,7 @@ class WashConversationController extends Controller
     {
         $row = Conversation::where('user_id', $request->user()->id)->findOrFail($conversation);
         $validated = $request->validate([
-            'title' => ['sometimes', 'string', 'max:120'],
+            'title' => ['sometimes', 'string', 'max:' . self::TITLE_MAX],
             'project_id' => ['sometimes', 'nullable', 'integer', Rule::exists('projects', 'id')->where('user_id', $request->user()->id)],
         ]);
         $row->update($validated);
@@ -89,19 +119,19 @@ class WashConversationController extends Controller
     private function messageRules(): array
     {
         return [
-            'messages' => ['required', 'array', 'max:200'],
-            'messages.*.role' => ['required', 'in:user,assistant'],
-            'messages.*.content' => ['required', 'string', 'max:20000'],
-            'messages.*.tools' => ['nullable', 'array', 'max:20'],
-            'messages.*.tools.*' => ['string', 'max:64'],
-            'messages.*.cards' => ['nullable', 'array', 'max:20'],
-            'messages.*.cards.*.type' => ['nullable', 'string', 'max:64'],
-            'messages.*.cards.*.title' => ['nullable', 'string', 'max:180'],
+            'messages' => ['required', 'array', 'max:' . self::MESSAGES_MAX],
+            'messages.*.role' => ['required', 'in:' . implode(',', self::MESSAGE_ROLES)],
+            'messages.*.content' => ['required', 'string', 'max:' . self::MESSAGE_CONTENT_MAX],
+            'messages.*.tools' => ['nullable', 'array', 'max:' . self::MESSAGE_TOOLS_MAX],
+            'messages.*.tools.*' => ['string', 'max:' . self::TOOL_MAX],
+            'messages.*.cards' => ['nullable', 'array', 'max:' . self::CARDS_MAX],
+            'messages.*.cards.*.type' => ['nullable', 'string', 'max:' . self::CARD_TYPE_MAX],
+            'messages.*.cards.*.title' => ['nullable', 'string', 'max:' . self::CARD_TITLE_MAX],
             'messages.*.cards.*.data' => ['nullable', 'array'],
-            'messages.*.model' => ['nullable', 'string', 'max:120'],
-            'messages.*.said_at' => ['nullable', 'integer', 'min:0', 'max:9999999999999'],
-            'messages.*.follow_ups' => ['nullable', 'array', 'max:10'],
-            'messages.*.follow_ups.*' => ['string', 'max:200'],
+            'messages.*.model' => ['nullable', 'string', 'max:' . self::MODEL_MAX],
+            'messages.*.said_at' => ['nullable', 'integer', 'min:' . self::SAID_AT_MIN, 'max:' . self::SAID_AT_MAX],
+            'messages.*.follow_ups' => ['nullable', 'array', 'max:' . self::FOLLOW_UPS_MAX],
+            'messages.*.follow_ups.*' => ['string', 'max:' . self::FOLLOW_UP_MAX],
         ];
     }
 

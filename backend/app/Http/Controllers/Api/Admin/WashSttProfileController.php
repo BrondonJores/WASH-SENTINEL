@@ -12,6 +12,33 @@ use Illuminate\Validation\Rule;
 
 class WashSttProfileController extends Controller
 {
+    public const NAME_MAX = 128;
+
+    public const DRIVERS = ['whisper_cpp', 'omnilingual_onnx', 'cloud_whisper'];
+
+    public const URL_MAX = 255;
+
+    public const PATH_MAX = 255;
+
+    public const API_KEY_MAX = 500;
+
+    public const LANGUAGE_MAX = 16;
+
+    public const THREADS_MIN = 1;
+
+    public const THREADS_MAX = 16;
+
+    public const TIMEOUT_MIN = 5;
+
+    public const TIMEOUT_MAX = 600;
+
+    /** Plafond du fichier de test console — inchangé (hors unification 12 Mo). */
+    public const TEST_AUDIO_MAX_KB = 5120;
+
+    public const TEST_AUDIO_MIMES = ['wav', 'mp3', 'ogg', 'webm', 'm4a', 'mpga'];
+
+    public const STT_TYPES_CACHE_TTL = 3600;
+
     public function index()
     {
         return response()->json(
@@ -22,15 +49,15 @@ class WashSttProfileController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:128', 'unique:ai_stt_profiles,name'],
-            'driver' => ['required', 'in:whisper_cpp,omnilingual_onnx,cloud_whisper'],
-            'base_url' => ['nullable', 'url', 'max:255'],
-            'model' => ['nullable', 'string', 'max:255'],
-            'tokens_path' => ['nullable', 'string', 'max:255'],
-            'api_key' => ['nullable', 'string', 'max:500'],
-            'default_language' => ['nullable', 'string', 'max:16'],
-            'threads' => ['nullable', 'integer', 'min:1', 'max:16'],
-            'timeout' => ['nullable', 'integer', 'min:5', 'max:600'],
+            'name' => ['required', 'string', 'max:' . self::NAME_MAX, 'unique:ai_stt_profiles,name'],
+            'driver' => ['required', 'in:' . implode(',', self::DRIVERS)],
+            'base_url' => ['nullable', 'url', 'max:' . self::URL_MAX],
+            'model' => ['nullable', 'string', 'max:' . self::PATH_MAX],
+            'tokens_path' => ['nullable', 'string', 'max:' . self::PATH_MAX],
+            'api_key' => ['nullable', 'string', 'max:' . self::API_KEY_MAX],
+            'default_language' => ['nullable', 'string', 'max:' . self::LANGUAGE_MAX],
+            'threads' => ['nullable', 'integer', 'min:' . self::THREADS_MIN, 'max:' . self::THREADS_MAX],
+            'timeout' => ['nullable', 'integer', 'min:' . self::TIMEOUT_MIN, 'max:' . self::TIMEOUT_MAX],
         ]);
 
         $profile = DB::transaction(function () use ($validated) {
@@ -53,15 +80,15 @@ class WashSttProfileController extends Controller
     public function update(Request $request, AiSttProfile $sttProfile)
     {
         $validated = $request->validate([
-            'name' => ['sometimes', 'string', 'max:128', Rule::unique('ai_stt_profiles', 'name')->ignore($sttProfile->id)],
-            'driver' => ['sometimes', 'in:whisper_cpp,omnilingual_onnx,cloud_whisper'],
-            'base_url' => ['nullable', 'url', 'max:255'],
-            'model' => ['nullable', 'string', 'max:255'],
-            'tokens_path' => ['nullable', 'string', 'max:255'],
-            'api_key' => ['nullable', 'string', 'max:500'],
-            'default_language' => ['nullable', 'string', 'max:16'],
-            'threads' => ['sometimes', 'integer', 'min:1', 'max:16'],
-            'timeout' => ['sometimes', 'integer', 'min:5', 'max:600'],
+            'name' => ['sometimes', 'string', 'max:' . self::NAME_MAX, Rule::unique('ai_stt_profiles', 'name')->ignore($sttProfile->id)],
+            'driver' => ['sometimes', 'in:' . implode(',', self::DRIVERS)],
+            'base_url' => ['nullable', 'url', 'max:' . self::URL_MAX],
+            'model' => ['nullable', 'string', 'max:' . self::PATH_MAX],
+            'tokens_path' => ['nullable', 'string', 'max:' . self::PATH_MAX],
+            'api_key' => ['nullable', 'string', 'max:' . self::API_KEY_MAX],
+            'default_language' => ['nullable', 'string', 'max:' . self::LANGUAGE_MAX],
+            'threads' => ['sometimes', 'integer', 'min:' . self::THREADS_MIN, 'max:' . self::THREADS_MAX],
+            'timeout' => ['sometimes', 'integer', 'min:' . self::TIMEOUT_MIN, 'max:' . self::TIMEOUT_MAX],
         ]);
 
         if (array_key_exists('api_key', $validated) && empty($validated['api_key'])) {
@@ -99,8 +126,8 @@ class WashSttProfileController extends Controller
     public function test(Request $request, AiSttProfile $sttProfile, AiEngineClient $ai)
     {
         $validated = $request->validate([
-            'audio' => ['required', 'file', 'mimes:wav,mp3,ogg,webm,m4a,mpga', 'max:5120'],
-            'language' => ['nullable', 'string', 'max:16'],
+            'audio' => ['required', 'file', 'mimes:' . implode(',', self::TEST_AUDIO_MIMES), 'max:' . self::TEST_AUDIO_MAX_KB],
+            'language' => ['nullable', 'string', 'max:' . self::LANGUAGE_MAX],
         ]);
 
         $payload = [
@@ -131,7 +158,7 @@ class WashSttProfileController extends Controller
     {
         try {
             $types = $ai->sttTypes();
-            Cache::put('wash.stt_types', $types, 3600);
+            Cache::put('wash.stt_types', $types, self::STT_TYPES_CACHE_TTL);
 
             return response()->json($types);
         } catch (\Throwable) {

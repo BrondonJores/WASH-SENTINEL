@@ -21,11 +21,49 @@ use Illuminate\Http\Request;
 
 class WashAgentController extends Controller
 {
+    public const DISTRICT_MAX_CHARS = 128;
+
+    public const QUERY_MAX_CHARS = 2000;
+
+    public const DISPATCH_SCHOOL_LIMIT = 30;
+
+    public const MONTHS_SINCE_LAST_INTERVENTION_DEFAULT = 12;
+
+    public const EPIDEMIC_WINDOW_DAYS = 7;
+
+    public const EPIDEMIC_INCIDENT_LIMIT = 50;
+
+    public const CONVERSE_HISTORY_MAX = 20;
+
+    public const CONVERSE_HISTORY_MESSAGE_MAX = 2000;
+
+    public const HISTORY_ROLES = ['user', 'assistant', 'tool'];
+
+    public const AGENT_RETRY_DELAY_SECONDS = 1;
+
+    public const SOFT_THROTTLE_MAX_ATTEMPTS = 20;
+
+    public const SOFT_THROTTLE_DECAY_SECONDS = 60;
+
+    public const VOTE_MAX_CHARS = 40;
+
+    public const MAINTENANCE_PROFILE_LIMIT = 30;
+
+    public const RECENT_INCIDENT_WINDOW_MONTHS = 12;
+
+    public const RECENT_INCIDENT_LIMIT = 200;
+
+    public const MAINTENANCE_LOG_WINDOW_DAYS = 30;
+
+    public const MAINTENANCE_LOG_LIMIT = 200;
+
+    public const OPEN_INCIDENT_LIMIT = 50;
+
     public function copilotChat(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate([
-            'user_query' => ['required', 'string', 'max:2000'],
-            'district' => ['nullable', 'string', 'max:128'],
+            'user_query' => ['required', 'string', 'max:' . self::QUERY_MAX_CHARS],
+            'district' => ['nullable', 'string', 'max:' . self::DISTRICT_MAX_CHARS],
         ]);
 
         $schoolsData = $this->maintenanceProfiles($validated['district'] ?? null);
@@ -60,9 +98,9 @@ class WashAgentController extends Controller
 
     public function dispatchPlan(Request $request, AiEngineClient $ai)
     {
-        $validated = $request->validate(['district' => ['required', 'string', 'max:128']]);
+        $validated = $request->validate(['district' => ['required', 'string', 'max:' . self::DISTRICT_MAX_CHARS]]);
 
-        $schools = School::where('district', $validated['district'])->with(['openIncidents', 'maintenanceLogs'])->take(30)->get();
+        $schools = School::where('district', $validated['district'])->with(['openIncidents', 'maintenanceLogs'])->take(self::DISPATCH_SCHOOL_LIMIT)->get();
 
         $profiles = $schools->map(function (School $s) {
             $open = $s->openIncidents;
@@ -83,7 +121,7 @@ class WashAgentController extends Controller
                 'broken_toilets' => (int) $s->broken_toilets,
                 'months_since_last_intervention' => $lastFix?->repaired_at
                     ? (int) $lastFix->repaired_at->diffInMonths(now())
-                    : 12,
+                    : self::MONTHS_SINCE_LAST_INTERVENTION_DEFAULT,
                 'urgency_level' => $maxUrgency,
                 'issue_summary' => (string) ($latest?->ai_summary ?? $latest?->title ?? ''),
                 'lat' => $s->latitude ? (float) $s->latitude : null,
@@ -104,12 +142,12 @@ class WashAgentController extends Controller
 
     public function epidemicScan(Request $request, AiEngineClient $ai)
     {
-        $validated = $request->validate(['district' => ['required', 'string', 'max:128']]);
+        $validated = $request->validate(['district' => ['required', 'string', 'max:' . self::DISTRICT_MAX_CHARS]]);
 
         $recent = Incident::with('school:id,name,district')
             ->whereHas('school', fn ($q) => $q->where('district', $validated['district']))
-            ->where('created_at', '>=', now()->subDays(7))
-            ->latest()->take(50)->get()
+            ->where('created_at', '>=', now()->subDays(self::EPIDEMIC_WINDOW_DAYS))
+            ->latest()->take(self::EPIDEMIC_INCIDENT_LIMIT)->get()
             ->map(fn (Incident $i) => [
                 'id' => $i->id,
                 'school_name' => $i->school->name,
@@ -130,30 +168,31 @@ class WashAgentController extends Controller
         return response()->json($response);
     }
 
-    // Langues vocales : miroir de SUPPORTED_VOICE_LANGUAGES du moteur
-    // (fr, en, dua_Latn, bassa, ewondo). Le Cameroun est bilingue FR/EN :
-    // schools.default_language peut aussi valoir 'en' pour une école
-    // anglophone (le relais transmet alors language=en au moteur).
+    // Langues vocales : wash.voice.languages, miroir de
+    // SUPPORTED_VOICE_LANGUAGES du moteur (fr, en, dua_Latn, bassa, ewondo,
+    // bbj_Latn). Le Cameroun est bilingue FR/EN : schools.default_language
+    // peut aussi valoir 'en' pour une école anglophone (le relais transmet
+    // alors language=en au moteur).
     public function synthesize(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate([
-            'text' => ['required', 'string', 'max:1000'],
-            'voice' => ['nullable', 'string', 'max:64'],
-            'language' => ['nullable', 'string', 'max:16', 'in:fr,en,dua_Latn,bassa,ewondo'],
+            'text' => ['required', 'string', 'max:' . config('wash.voice.text_max_chars')],
+            'voice' => ['nullable', 'string', 'max:' . config('wash.voice.voice_max_chars')],
+            'language' => ['nullable', 'string', 'max:' . config('wash.voice.language_max_chars'), 'in:' . implode(',', config('wash.voice.languages'))],
         ]);
 
         return response()->json($ai->synthesize(
             $validated['text'],
-            $validated['voice'] ?? 'fr_FR-upmc-medium',
-            $validated['language'] ?? 'fr',
+            $validated['voice'] ?? config('wash.voice.default_tts_voice'),
+            $validated['language'] ?? config('wash.voice.default_language'),
         ));
     }
 
     public function transcribe(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate([
-            'audio' => 'required|file|max:10240',
-            'language' => 'nullable|string|max:16|in:fr,en,dua_Latn,bassa,ewondo',
+            'audio' => 'required|file|max:' . config('wash.voice.audio_max_kb'),
+            'language' => 'nullable|string|max:' . config('wash.voice.language_max_chars') . '|in:' . implode(',', config('wash.voice.languages')),
         ]);
 
         return response()->json($ai->transcribe(
@@ -169,11 +208,11 @@ class WashAgentController extends Controller
         }
 
         $validated = $request->validate([
-            'message' => ['required', 'string', 'max:2000'],
-            'history' => ['nullable', 'array', 'max:20'],
-            'history.*.role' => ['required_with:history', 'in:user,assistant,tool'],
-            'history.*.content' => ['required_with:history', 'string', 'max:2000'],
-            'district' => ['nullable', 'string', 'max:128'],
+            'message' => ['required', 'string', 'max:' . self::QUERY_MAX_CHARS],
+            'history' => ['nullable', 'array', 'max:' . self::CONVERSE_HISTORY_MAX],
+            'history.*.role' => ['required_with:history', 'in:' . implode(',', self::HISTORY_ROLES)],
+            'history.*.content' => ['required_with:history', 'string', 'max:' . self::CONVERSE_HISTORY_MESSAGE_MAX],
+            'district' => ['nullable', 'string', 'max:' . self::DISTRICT_MAX_CHARS],
             'guided' => ['nullable', 'boolean'],
         ], [
             'message.required' => "Dites-moi en quelques mots ce dont vous avez besoin, par exemple « Signale une fuite au forage ».",
@@ -244,7 +283,7 @@ class WashAgentController extends Controller
             if ($this->isTimeoutFailure($e)) {
                 throw $e;
             }
-            sleep(1);
+            sleep(self::AGENT_RETRY_DELAY_SECONDS);
             return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context, $guided);
         }
     }
@@ -259,7 +298,7 @@ class WashAgentController extends Controller
     protected function softThrottleResponse(Request $request): ?array
     {
         $key = 'wash.converse.soft:' . ($request->ip() ?? 'unknown');
-        if (RateLimiter::tooManyAttempts($key, 20)) {
+        if (RateLimiter::tooManyAttempts($key, self::SOFT_THROTTLE_MAX_ATTEMPTS)) {
             $retryAfter = RateLimiter::availableIn($key);
 
             return [
@@ -271,7 +310,7 @@ class WashAgentController extends Controller
                 'degraded' => true,
             ];
         }
-        RateLimiter::hit($key, 60);
+        RateLimiter::hit($key, self::SOFT_THROTTLE_DECAY_SECONDS);
 
         return null;
     }
@@ -300,7 +339,7 @@ class WashAgentController extends Controller
     protected function interceptVote(User $user, string $message, AgentProposalService $service): ?array
     {
         $text = mb_strtolower(trim($message));
-        if (mb_strlen($text) > 40) {
+        if (mb_strlen($text) > self::VOTE_MAX_CHARS) {
             return null;
         }
         $confirm = (bool) preg_match("/^(oui|ouais|ok|okay|confirmer?|je confirme|vas-?y|allons-?y|valider?|je valide|d'accord|d’accord)[.! ]*$/u", $text);
@@ -398,7 +437,7 @@ class WashAgentController extends Controller
             ->withCount('incidents')
             ->withSum('maintenanceLogs', 'cost_amount')
             ->withSum('maintenanceLogs', 'days_without_service')
-            ->take(30)->get()
+            ->take(self::MAINTENANCE_PROFILE_LIMIT)->get()
             ->map(fn (School $s) => [
                 'school_id' => $s->id,
                 'school_name' => $s->name,
@@ -418,8 +457,8 @@ class WashAgentController extends Controller
     {
         return Incident::with('school:id,name,district')
             ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
-            ->where('created_at', '>=', now()->subMonths(12))
-            ->latest()->take(200)->get()
+            ->where('created_at', '>=', now()->subMonths(self::RECENT_INCIDENT_WINDOW_MONTHS))
+            ->latest()->take(self::RECENT_INCIDENT_LIMIT)->get()
             ->map(fn (Incident $i) => [
                 'id' => $i->id,
                 'school_id' => $i->school_id,
@@ -431,8 +470,8 @@ class WashAgentController extends Controller
     {
         return MaintenanceLog::with(['school:id,name,district', 'incident:id,reference_code,title'])
             ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
-            ->where('created_at', '>=', now()->subDays(30))
-            ->latest()->take(200)->get()
+            ->where('created_at', '>=', now()->subDays(self::MAINTENANCE_LOG_WINDOW_DAYS))
+            ->latest()->take(self::MAINTENANCE_LOG_LIMIT)->get()
             ->map(fn (MaintenanceLog $l) => [
                 'id' => $l->id,
                 'school_id' => $l->school_id,
@@ -453,7 +492,7 @@ class WashAgentController extends Controller
     {
         return Incident::with('school:id,name,district')
             ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
-            ->open()->latest()->take(50)->get()
+            ->open()->latest()->take(self::OPEN_INCIDENT_LIMIT)->get()
             ->map(fn (Incident $i) => [
                 'id' => $i->id,
                 'school_id' => $i->school_id,

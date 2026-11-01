@@ -8,6 +8,8 @@ use Illuminate\Http\Request;
 
 class WashProjectController extends Controller
 {
+    public const NAME_MAX = 60;
+
     public function index(Request $request)
     {
         return response()->json(
@@ -20,7 +22,7 @@ class WashProjectController extends Controller
 
     public function store(Request $request)
     {
-        $validated = $request->validate(['name' => ['required', 'string', 'max:60']]);
+        $validated = $request->validate(['name' => ['required', 'string', 'max:' . self::NAME_MAX]]);
 
         $project = Project::create([...$validated, 'user_id' => $request->user()->id]);
 
@@ -30,7 +32,7 @@ class WashProjectController extends Controller
     public function update(Request $request, int $project)
     {
         $row = Project::where('user_id', $request->user()->id)->findOrFail($project);
-        $validated = $request->validate(['name' => ['required', 'string', 'max:60']]);
+        $validated = $request->validate(['name' => ['required', 'string', 'max:' . self::NAME_MAX]]);
         $row->update($validated);
 
         return response()->json($row->fresh());

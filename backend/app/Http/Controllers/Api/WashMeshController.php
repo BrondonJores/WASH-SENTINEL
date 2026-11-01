@@ -24,6 +24,70 @@ use Illuminate\Support\Facades\Log;
  */
 class WashMeshController extends Controller
 {
+    public const BATCH_MAX = 100;
+
+    public const ORIGIN_NODE_MAX = 64;
+
+    public const SCHOOL_CODE_MAX = 32;
+
+    public const MESSAGE_MAX = 5000;
+
+    public const CHANNELS = ['text', 'voice', 'photo'];
+
+    public const CHANNEL_DEFAULT = 'text';
+
+    public const HOPS_MAX = 21;
+
+    public const HOP_ID_MAX = 64;
+
+    public const MAX_HOPS_MIN = 1;
+
+    public const MAX_HOPS_MAX = 20;
+
+    public const CHECKSUM_MAX = 128;
+
+    public const EID_MAX = 128;
+
+    public const LIFETIME_MIN_SECONDS = 60;
+
+    public const LIFETIME_MAX_SECONDS = 2592000;
+
+    public const COPIES_MIN = 1;
+
+    public const COPIES_MAX = 64;
+
+    public const COPIES_DEFAULT = 8;
+
+    public const FRAGMENT_OFFSET_MAX = 199;
+
+    public const FRAGMENT_TOTAL_MIN = 1;
+
+    public const FRAGMENT_TOTAL_MAX = 200;
+
+    public const PRIORITIES = ['normal', 'high', 'alert'];
+
+    public const PRIORITY_DEFAULT = 'normal';
+
+    public const SIGNATURE_MAX = 128;
+
+    public const NODE_PUBKEY_MAX = 64;
+
+    public const SEALED_MAX = 20000;
+
+    public const SEALED_ALG_MAX = 32;
+
+    public const BUNDLE_GROUP_MAX = 64;
+
+    public const CHUNK_MAX = 65536;
+
+    public const MEDIA_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg'];
+
+    public const MEDIA_SIZE_MIN = 1;
+
+    public const MEDIA_SIZE_MAX = 2097152;
+
+    public const MEDIA_SHA256_MAX = 128;
+
     /**
      * Ingère un bundle unique ou un batch { bundles: [...] }.
      */
@@ -35,7 +99,7 @@ class WashMeshController extends Controller
         }
 
         $incoming = $request->has('bundles')
-            ? $request->validate(['bundles' => ['required', 'array', 'max:100']])['bundles']
+            ? $request->validate(['bundles' => ['required', 'array', 'max:' . self::BATCH_MAX]])['bundles']
             : [$request->validate($this->rules())];
 
         // Validation unitaire quand c'est un batch (chaque item suit les mêmes règles).
@@ -67,7 +131,7 @@ class WashMeshController extends Controller
 
             $hops = $item['hops'] ?? [$item['origin_node_id']];
             $hopCount = max(0, count($hops) - 1);
-            $maxHops = (int) ($item['max_hops'] ?? 10);
+            $maxHops = (int) ($item['max_hops'] ?? config('wash.mesh.default_max_hops'));
 
             if ($hopCount > $maxHops) {
                 Log::warning('mesh.bundle.rejected', ['bundle_id' => $item['bundle_id'], 'cause' => 'max_hops', 'hop_count' => $hopCount]);
@@ -113,7 +177,7 @@ class WashMeshController extends Controller
             $lifetime = isset($item['lifetime_seconds']) ? (int) $item['lifetime_seconds'] : null;
             $expiresAt = $lifetime !== null
                 ? now()->addSeconds($lifetime)
-                : (isset($item['expires_at']) ? now()->parse($item['expires_at']) : now()->addDays(7));
+                : (isset($item['expires_at']) ? now()->parse($item['expires_at']) : now()->addDays(config('wash.mesh.default_ttl_days')));
             if ($expiresAt->isPast()) {
                 MeshBundle::create($this->attributes($item, $hops, $hopCount, $maxHops, $expiresAt, 'expired'));
                 $summary['expired']++;
@@ -161,7 +225,7 @@ class WashMeshController extends Controller
                     // Triage IA standard : le mesh ne court-circuite jamais le pipeline.
                     $result = $triage->ingest(
                         $school,
-                        $item['channel'] ?? 'text',
+                        $item['channel'] ?? self::CHANNEL_DEFAULT,
                         $item['message'] ?? null,
                         null,
                         null,
@@ -240,7 +304,7 @@ class WashMeshController extends Controller
             ->where('status', 'pending')
             ->latest();
 
-        return response()->json($query->paginate(min(100, (int) $request->get('per_page', 20))));
+        return response()->json($query->paginate(min(config('wash.pagination.max'), (int) $request->get('per_page', config('wash.pagination.default')))));
     }
 
     public function show(string $bundleId)
@@ -285,40 +349,40 @@ class WashMeshController extends Controller
     {
         return [
             'bundle_id' => ['required', 'uuid'],
-            'origin_node_id' => ['required', 'string', 'max:64'],
+            'origin_node_id' => ['required', 'string', 'max:' . self::ORIGIN_NODE_MAX],
             'school_id' => ['required', 'exists:schools,id'],
-            'school_code' => ['nullable', 'string', 'max:32'],
-            'message' => ['nullable', 'string', 'max:5000'],
-            'channel' => ['nullable', 'in:text,voice,photo'],
-            'hops' => ['nullable', 'array', 'max:21'],
-            'hops.*' => ['string', 'max:64'],
-            'max_hops' => ['nullable', 'integer', 'min:1', 'max:20'],
+            'school_code' => ['nullable', 'string', 'max:' . self::SCHOOL_CODE_MAX],
+            'message' => ['nullable', 'string', 'max:' . self::MESSAGE_MAX],
+            'channel' => ['nullable', 'in:' . implode(',', self::CHANNELS)],
+            'hops' => ['nullable', 'array', 'max:' . self::HOPS_MAX],
+            'hops.*' => ['string', 'max:' . self::HOP_ID_MAX],
+            'max_hops' => ['nullable', 'integer', 'min:' . self::MAX_HOPS_MIN, 'max:' . self::MAX_HOPS_MAX],
             'created_at' => ['nullable', 'date'],
             'expires_at' => ['nullable', 'date'],
-            'received_via_node_id' => ['nullable', 'string', 'max:64'],
-            'checksum' => ['nullable', 'string', 'max:128'],
+            'received_via_node_id' => ['nullable', 'string', 'max:' . self::ORIGIN_NODE_MAX],
+            'checksum' => ['nullable', 'string', 'max:' . self::CHECKSUM_MAX],
             // v1.1 additive (tous optionnels, défauts serveur).
-            'destination_eid' => ['nullable', 'string', 'max:128'],
-            'report_to_eid' => ['nullable', 'string', 'max:128'],
-            'lifetime_seconds' => ['nullable', 'integer', 'min:60', 'max:2592000'],
-            'previous_node_id' => ['nullable', 'string', 'max:64'],
-            'copies_remaining' => ['nullable', 'integer', 'min:1', 'max:64'],
-            'fragment_offset' => ['nullable', 'integer', 'min:0', 'max:199'],
-            'fragment_total' => ['nullable', 'integer', 'min:1', 'max:200'],
+            'destination_eid' => ['nullable', 'string', 'max:' . self::EID_MAX],
+            'report_to_eid' => ['nullable', 'string', 'max:' . self::EID_MAX],
+            'lifetime_seconds' => ['nullable', 'integer', 'min:' . self::LIFETIME_MIN_SECONDS, 'max:' . self::LIFETIME_MAX_SECONDS],
+            'previous_node_id' => ['nullable', 'string', 'max:' . self::ORIGIN_NODE_MAX],
+            'copies_remaining' => ['nullable', 'integer', 'min:' . self::COPIES_MIN, 'max:' . self::COPIES_MAX],
+            'fragment_offset' => ['nullable', 'integer', 'min:0', 'max:' . self::FRAGMENT_OFFSET_MAX],
+            'fragment_total' => ['nullable', 'integer', 'min:' . self::FRAGMENT_TOTAL_MIN, 'max:' . self::FRAGMENT_TOTAL_MAX],
             'custody_requested' => ['nullable', 'boolean'],
-            'priority' => ['nullable', 'in:normal,high,alert'],
-            'signature' => ['nullable', 'string', 'max:128'],
-            'node_pubkey' => ['nullable', 'string', 'max:64'],
+            'priority' => ['nullable', 'in:' . implode(',', self::PRIORITIES)],
+            'signature' => ['nullable', 'string', 'max:' . self::SIGNATURE_MAX],
+            'node_pubkey' => ['nullable', 'string', 'max:' . self::NODE_PUBKEY_MAX],
             'v' => ['nullable', 'integer'],
-            'sealed' => ['nullable', 'string', 'max:20000'],
-            'sealed_alg' => ['nullable', 'string', 'max:32'],
+            'sealed' => ['nullable', 'string', 'max:' . self::SEALED_MAX],
+            'sealed_alg' => ['nullable', 'string', 'max:' . self::SEALED_ALG_MAX],
             // V2b médias différés.
-            'bundle_group' => ['nullable', 'string', 'max:64'],
-            'chunk' => ['nullable', 'string', 'max:65536'],
-            'media_mime' => ['nullable', 'in:image/jpeg,image/png,image/webp,audio/webm,audio/mp4,audio/ogg,audio/mpeg'],
-            'media_size' => ['nullable', 'integer', 'min:1', 'max:2097152'],
-            'media_sha256' => ['nullable', 'string', 'max:128'],
-            'media_sealed_alg' => ['nullable', 'string', 'max:32'],
+            'bundle_group' => ['nullable', 'string', 'max:' . self::BUNDLE_GROUP_MAX],
+            'chunk' => ['nullable', 'string', 'max:' . self::CHUNK_MAX],
+            'media_mime' => ['nullable', 'in:' . implode(',', self::MEDIA_MIMES)],
+            'media_size' => ['nullable', 'integer', 'min:' . self::MEDIA_SIZE_MIN, 'max:' . self::MEDIA_SIZE_MAX],
+            'media_sha256' => ['nullable', 'string', 'max:' . self::MEDIA_SHA256_MAX],
+            'media_sealed_alg' => ['nullable', 'string', 'max:' . self::SEALED_ALG_MAX],
         ];
     }
 
@@ -331,7 +395,7 @@ class WashMeshController extends Controller
             'origin_node_id' => $item['origin_node_id'],
             'school_id' => $item['school_id'],
             'school_code' => $item['school_code'] ?? null,
-            'channel' => $item['channel'] ?? 'text',
+            'channel' => $item['channel'] ?? self::CHANNEL_DEFAULT,
             'message' => $item['message'] ?? null,
             'payload' => $item,
             'hops' => $hops,
@@ -340,15 +404,15 @@ class WashMeshController extends Controller
             'received_via_node_id' => $item['received_via_node_id'] ?? end($hops) ?: null,
             'status' => $status,
             'expires_at' => $expiresAt,
-            'destination_eid' => $item['destination_eid'] ?? 'dtn://wash-sentinel/ingest',
+            'destination_eid' => $item['destination_eid'] ?? config('wash.mesh.default_destination_eid'),
             'report_to_eid' => $item['report_to_eid'] ?? null,
             'lifetime_seconds' => isset($item['lifetime_seconds']) ? (int) $item['lifetime_seconds'] : null,
             'previous_node_id' => $item['previous_node_id'] ?? (count($hops) >= 2 ? $hops[count($hops) - 2] : null),
-            'copies_remaining' => (int) ($item['copies_remaining'] ?? 8),
+            'copies_remaining' => (int) ($item['copies_remaining'] ?? self::COPIES_DEFAULT),
             'fragment_offset' => $item['fragment_offset'] ?? null,
             'fragment_total' => $item['fragment_total'] ?? null,
             'custody_requested' => (bool) ($item['custody_requested'] ?? false),
-            'priority' => $item['priority'] ?? 'normal',
+            'priority' => $item['priority'] ?? self::PRIORITY_DEFAULT,
             'signature' => $item['signature'] ?? null,
             'node_pubkey' => $item['node_pubkey'] ?? null,
             'sealed_payload' => $item['sealed'] ?? null,

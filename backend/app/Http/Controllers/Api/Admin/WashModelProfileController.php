@@ -12,6 +12,52 @@ use Illuminate\Validation\Rule;
 
 class WashModelProfileController extends Controller
 {
+    public const NAME_MAX = 128;
+
+    public const PROVIDERS = ['ollama', 'openai_compatible'];
+
+    public const BASE_URL_MAX = 255;
+
+    public const MODEL_MAX = 128;
+
+    public const API_KEY_MAX = 500;
+
+    public const TIMEOUT_MIN = 5;
+
+    public const TIMEOUT_MAX = 600;
+
+    public const PROVIDER_TYPES_CACHE_TTL = 3600;
+
+    /** Repli console quand le moteur IA est injoignable (valeurs inchangées). */
+    public const FALLBACK_PROVIDER_TYPES = [
+        'providers' => [
+            [
+                'id' => 'ollama',
+                'label' => 'Ollama (modèle local)',
+                'description' => 'Modèles hébergés localement.',
+                'api_key_required' => false,
+                'fields' => [
+                    ['name' => 'base_url', 'label' => 'URL Ollama', 'type' => 'url', 'default' => 'http://ollama:11434', 'required' => true],
+                    ['name' => 'model', 'label' => 'Modèle texte', 'type' => 'text', 'default' => 'llama3.2:3b', 'required' => true],
+                    ['name' => 'vision_model', 'label' => 'Modèle vision', 'type' => 'text', 'default' => 'llama3.2-vision:11b', 'required' => false],
+                    ['name' => 'embed_model', 'label' => 'Modèle embeddings', 'type' => 'text', 'default' => 'nomic-embed-text', 'required' => false],
+                ],
+            ],
+            [
+                'id' => 'openai_compatible',
+                'label' => 'API externe (format OpenAI)',
+                'description' => 'OpenAI, Groq, Together, Mistral.',
+                'api_key_required' => true,
+                'fields' => [
+                    ['name' => 'base_url', 'label' => 'URL de base (/v1)', 'type' => 'url', 'default' => 'https://api.openai.com/v1', 'required' => true],
+                    ['name' => 'model', 'label' => 'Modèle texte', 'type' => 'text', 'default' => 'gpt-4o-mini', 'required' => true],
+                    ['name' => 'vision_model', 'label' => 'Modèle vision', 'type' => 'text', 'default' => '', 'required' => false],
+                    ['name' => 'embed_model', 'label' => 'Modèle embeddings', 'type' => 'text', 'default' => 'text-embedding-3-small', 'required' => false],
+                ],
+            ],
+        ],
+    ];
+
     public function index()
     {
         return response()->json(
@@ -22,14 +68,14 @@ class WashModelProfileController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:128', 'unique:ai_model_profiles,name'],
-            'provider' => ['required', 'in:ollama,openai_compatible'],
-            'base_url' => ['required', 'url', 'max:255'],
-            'model' => ['required', 'string', 'max:128'],
-            'vision_model' => ['nullable', 'string', 'max:128'],
-            'embed_model' => ['nullable', 'string', 'max:128'],
-            'api_key' => ['nullable', 'string', 'max:500'],
-            'timeout' => ['nullable', 'integer', 'min:5', 'max:600'],
+            'name' => ['required', 'string', 'max:' . self::NAME_MAX, 'unique:ai_model_profiles,name'],
+            'provider' => ['required', 'in:' . implode(',', self::PROVIDERS)],
+            'base_url' => ['required', 'url', 'max:' . self::BASE_URL_MAX],
+            'model' => ['required', 'string', 'max:' . self::MODEL_MAX],
+            'vision_model' => ['nullable', 'string', 'max:' . self::MODEL_MAX],
+            'embed_model' => ['nullable', 'string', 'max:' . self::MODEL_MAX],
+            'api_key' => ['nullable', 'string', 'max:' . self::API_KEY_MAX],
+            'timeout' => ['nullable', 'integer', 'min:' . self::TIMEOUT_MIN, 'max:' . self::TIMEOUT_MAX],
         ]);
 
         $profile = DB::transaction(function () use ($validated) {
@@ -52,14 +98,14 @@ class WashModelProfileController extends Controller
     public function update(Request $request, AiModelProfile $modelProfile)
     {
         $validated = $request->validate([
-            'name' => ['sometimes', 'string', 'max:128', Rule::unique('ai_model_profiles', 'name')->ignore($modelProfile->id)],
-            'provider' => ['sometimes', 'in:ollama,openai_compatible'],
-            'base_url' => ['sometimes', 'url', 'max:255'],
-            'model' => ['sometimes', 'string', 'max:128'],
-            'vision_model' => ['nullable', 'string', 'max:128'],
-            'embed_model' => ['nullable', 'string', 'max:128'],
-            'api_key' => ['nullable', 'string', 'max:500'],
-            'timeout' => ['sometimes', 'integer', 'min:5', 'max:600'],
+            'name' => ['sometimes', 'string', 'max:' . self::NAME_MAX, Rule::unique('ai_model_profiles', 'name')->ignore($modelProfile->id)],
+            'provider' => ['sometimes', 'in:' . implode(',', self::PROVIDERS)],
+            'base_url' => ['sometimes', 'url', 'max:' . self::BASE_URL_MAX],
+            'model' => ['sometimes', 'string', 'max:' . self::MODEL_MAX],
+            'vision_model' => ['nullable', 'string', 'max:' . self::MODEL_MAX],
+            'embed_model' => ['nullable', 'string', 'max:' . self::MODEL_MAX],
+            'api_key' => ['nullable', 'string', 'max:' . self::API_KEY_MAX],
+            'timeout' => ['sometimes', 'integer', 'min:' . self::TIMEOUT_MIN, 'max:' . self::TIMEOUT_MAX],
         ]);
 
         if (array_key_exists('api_key', $validated) && empty($validated['api_key'])) {
@@ -117,38 +163,11 @@ class WashModelProfileController extends Controller
     {
         try {
             $types = $ai->providerTypes();
-            Cache::put('wash.provider_types', $types, 3600);
+            Cache::put('wash.provider_types', $types, self::PROVIDER_TYPES_CACHE_TTL);
 
             return response()->json($types);
         } catch (\Throwable) {
-            return response()->json(Cache::get('wash.provider_types', [
-                'providers' => [
-                    [
-                        'id' => 'ollama',
-                        'label' => 'Ollama (modèle local)',
-                        'description' => 'Modèles hébergés localement.',
-                        'api_key_required' => false,
-                        'fields' => [
-                            ['name' => 'base_url', 'label' => 'URL Ollama', 'type' => 'url', 'default' => 'http://ollama:11434', 'required' => true],
-                            ['name' => 'model', 'label' => 'Modèle texte', 'type' => 'text', 'default' => 'llama3.2:3b', 'required' => true],
-                            ['name' => 'vision_model', 'label' => 'Modèle vision', 'type' => 'text', 'default' => 'llama3.2-vision:11b', 'required' => false],
-                            ['name' => 'embed_model', 'label' => 'Modèle embeddings', 'type' => 'text', 'default' => 'nomic-embed-text', 'required' => false],
-                        ],
-                    ],
-                    [
-                        'id' => 'openai_compatible',
-                        'label' => 'API externe (format OpenAI)',
-                        'description' => 'OpenAI, Groq, Together, Mistral.',
-                        'api_key_required' => true,
-                        'fields' => [
-                            ['name' => 'base_url', 'label' => 'URL de base (/v1)', 'type' => 'url', 'default' => 'https://api.openai.com/v1', 'required' => true],
-                            ['name' => 'model', 'label' => 'Modèle texte', 'type' => 'text', 'default' => 'gpt-4o-mini', 'required' => true],
-                            ['name' => 'vision_model', 'label' => 'Modèle vision', 'type' => 'text', 'default' => '', 'required' => false],
-                            ['name' => 'embed_model', 'label' => 'Modèle embeddings', 'type' => 'text', 'default' => 'text-embedding-3-small', 'required' => false],
-                        ],
-                    ],
-                ],
-            ]));
+            return response()->json(Cache::get('wash.provider_types', self::FALLBACK_PROVIDER_TYPES));
         }
     }
 }

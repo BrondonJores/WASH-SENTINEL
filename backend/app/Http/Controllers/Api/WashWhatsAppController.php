@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Cache;
 
 class WashWhatsAppController extends Controller
 {
+    public const LAST_WEBHOOK_TTL_SECONDS = 86400;
+
     protected function verifyToken(): string
     {
         $token = (string) config('whatsapp.verify_token', '');
@@ -51,7 +53,7 @@ class WashWhatsAppController extends Controller
 
         $payload = $request->all();
         // Diagnostics : horodaté à CHAQUE livraison, relivraisons Meta incluses.
-        Cache::put('wash.whatsapp.last_webhook_at', now()->toIso8601String(), 86400);
+        Cache::put('wash.whatsapp.last_webhook_at', now()->toIso8601String(), self::LAST_WEBHOOK_TTL_SECONDS);
 
         // Relivraison Meta (retry) déjà traitée : accusé sans triage ni envoi.
         if ($service->isDuplicateDelivery($payload)) {

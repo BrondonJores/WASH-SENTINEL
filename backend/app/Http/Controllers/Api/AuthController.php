@@ -9,11 +9,15 @@ use Illuminate\Support\Facades\Hash;
 
 class AuthController extends Controller
 {
+    public const EMAIL_MAX = 255;
+
+    public const PASSWORD_MAX = 255;
+
     public function token(Request $request)
     {
         $validated = $request->validate([
-            'email' => ['required', 'email', 'max:255'],
-            'password' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:' . self::EMAIL_MAX],
+            'password' => ['required', 'string', 'max:' . self::PASSWORD_MAX],
         ]);
 
         $user = User::where('email', $validated['email'])->first();

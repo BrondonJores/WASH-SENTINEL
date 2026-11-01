@@ -19,6 +19,9 @@ class WashAiAnalysisController extends Controller
             ->when($request->incident_id, fn ($q, $v) => $q->where('incident_id', $v))
             ->latest();
 
-        return response()->json($query->paginate(min(100, max(5, (int) $request->query('per_page', 20)))));
+        return response()->json($query->paginate(min(
+            config('wash.pagination.max'),
+            max(config('wash.pagination.min'), (int) $request->query('per_page', config('wash.pagination.default')))
+        )));
     }
 }

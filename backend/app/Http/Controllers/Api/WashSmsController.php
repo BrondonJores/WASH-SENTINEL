@@ -21,12 +21,22 @@ use Illuminate\Support\Str;
  */
 class WashSmsController extends Controller
 {
+    public const FROM_MAX = 32;
+
+    public const MESSAGE_MAX = 1600;
+
+    public const REPLY_SMS_MAX = 160;
+
+    public const DEDUP_WINDOW_HOURS = 24;
+
+    public const DIRECT_COPIES_REMAINING = 1;
+
     public function store(Request $request, IncidentTriage $triage, MeshSmsParser $parser)
     {
         $validated = $request->validate([
             'secret' => ['required', 'string'],
-            'from' => ['required', 'string', 'max:32'],
-            'message' => ['required', 'string', 'max:1600'],
+            'from' => ['required', 'string', 'max:' . self::FROM_MAX],
+            'message' => ['required', 'string', 'max:' . self::MESSAGE_MAX],
             'sent_at' => ['nullable', 'date'],
         ]);
 
@@ -57,14 +67,14 @@ class WashSmsController extends Controller
             return response()->json([
                 'message' => 'Format SMS invalide.',
                 'error' => $parsed['error'],
-                'reply' => Str::limit($parsed['error'] ?? MeshSmsParser::HELP, 160, ''),
+                'reply' => Str::limit($parsed['error'] ?? MeshSmsParser::HELP, self::REPLY_SMS_MAX, ''),
             ], 422);
         }
 
         // Dédup : même expéditeur + même texte normalisé sur 24 h (double envoi).
         $recent = MeshBundle::where('origin_node_id', $origin)
             ->where('message', $parsed['normalized'])
-            ->where('created_at', '>', now()->subDay())
+            ->where('created_at', '>', now()->subHours(self::DEDUP_WINDOW_HOURS))
             ->with('report.incident')
             ->first();
         if ($recent) {
@@ -91,11 +101,11 @@ class WashSmsController extends Controller
                 ],
                 'hops' => [$origin],
                 'hop_count' => 0,
-                'copies_remaining' => 1,
-                'destination_eid' => 'dtn://wash-sentinel/ingest',
+                'copies_remaining' => self::DIRECT_COPIES_REMAINING,
+                'destination_eid' => config('wash.mesh.default_destination_eid'),
                 'received_via_node_id' => $origin,
                 'status' => 'delivered',
-                'expires_at' => now()->addDays(7),
+                'expires_at' => now()->addDays(config('wash.mesh.default_ttl_days')),
                 'delivered_at' => now(),
             ]);
 

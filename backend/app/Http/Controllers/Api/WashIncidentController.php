@@ -14,6 +14,29 @@ use Illuminate\Support\Str;
 
 class WashIncidentController extends Controller
 {
+    /** Statuts du cycle de vie acceptés par updateStatus (LOT 8 : 'assigned.in_progress' corrigé en deux valeurs). */
+    public const STATUSES = ['reported', 'triaged', 'assigned', 'in_progress', 'resolved', 'closed'];
+
+    public const CLOSED_STATUSES = ['resolved', 'closed'];
+
+    public const PRIORITY_SCORE_MIN = 0;
+
+    public const PRIORITY_SCORE_MAX = 100;
+
+    public const MAINTENANCE_COST_MIN = 0;
+
+    public const MAINTENANCE_CURRENCY_MAX = 8;
+
+    public const MAINTENANCE_DAYS_MIN = 0;
+
+    public const MAINTENANCE_NOTES_MAX = 2000;
+
+    public const RELANCE_DAYS_MIN = 1;
+
+    public const RELANCE_DAYS_MAX = 90;
+
+    public const RELANCE_DAYS_DEFAULT = 7;
+
     public function index(Request $request)
     {
         $sorts = [
@@ -44,7 +67,10 @@ class WashIncidentController extends Controller
             ->when($sort, fn ($q) => $q->orderBy($sort[0], $sort[1]))
             ->when(! $sort, fn ($q) => $q->orderByDesc('priority_score')->latest());
 
-        return response()->json($query->paginate(min(100, max(5, (int) $request->query('per_page', 20)))));
+        return response()->json($query->paginate(min(
+            config('wash.pagination.max'),
+            max(config('wash.pagination.min'), (int) $request->query('per_page', config('wash.pagination.default')))
+        )));
     }
 
     public function overview()
@@ -88,12 +114,12 @@ class WashIncidentController extends Controller
     public function updateStatus(Request $request, Incident $incident)
     {
         $validated = $request->validate([
-            'status' => ['required', 'in:reported,triaged,assigned,in_progress,resolved,closed'],
+            'status' => ['required', 'in:' . implode(',', self::STATUSES)],
         ]);
 
         $incident->update([
             'status' => $validated['status'],
-            'resolved_at' => in_array($validated['status'], ['resolved', 'closed']) ? now() : null,
+            'resolved_at' => in_array($validated['status'], self::CLOSED_STATUSES) ? now() : null,
         ]);
 
         return response()->json(['message' => 'Statut mis à jour.', 'incident' => $incident->fresh()]);
@@ -111,8 +137,8 @@ class WashIncidentController extends Controller
     public function overridePriority(Request $request, Incident $incident)
     {
         $validated = $request->validate([
-            'priority_score' => ['required', 'numeric', 'min:0', 'max:100'],
-            'urgency' => ['nullable', 'in:low,medium,high,critical'],
+            'priority_score' => ['required', 'numeric', 'min:' . self::PRIORITY_SCORE_MIN, 'max:' . self::PRIORITY_SCORE_MAX],
+            'urgency' => ['nullable', 'in:' . implode(',', config('wash.urgencies'))],
         ]);
 
         $incident->update($validated);
@@ -123,14 +149,14 @@ class WashIncidentController extends Controller
     public function storeMaintenanceLog(Request $request, Incident $incident)
     {
         $validated = $request->validate([
-            'cost_amount' => ['required', 'numeric', 'min:0'],
-            'currency' => ['nullable', 'string', 'max:8'],
+            'cost_amount' => ['required', 'numeric', 'min:' . self::MAINTENANCE_COST_MIN],
+            'currency' => ['nullable', 'string', 'max:' . self::MAINTENANCE_CURRENCY_MAX],
             'repaired_at' => ['nullable', 'date'],
-            'days_without_service' => ['nullable', 'integer', 'min:0'],
-            'notes' => ['nullable', 'string', 'max:2000'],
+            'days_without_service' => ['nullable', 'integer', 'min:' . self::MAINTENANCE_DAYS_MIN],
+            'notes' => ['nullable', 'string', 'max:' . self::MAINTENANCE_NOTES_MAX],
         ]);
 
-        $validated['days_without_service'] ??= 0;
+        $validated['days_without_service'] ??= self::MAINTENANCE_DAYS_MIN;
         $log = $incident->maintenanceLogs()->create([
             ...$validated,
             'school_id' => $incident->school_id,
@@ -152,11 +178,11 @@ class WashIncidentController extends Controller
     public function relance(Request $request, WashRelanceService $relances)
     {
         $validated = $request->validate([
-            'days' => ['nullable', 'integer', 'min:1', 'max:90'],
+            'days' => ['nullable', 'integer', 'min:' . self::RELANCE_DAYS_MIN, 'max:' . self::RELANCE_DAYS_MAX],
             'dry_run' => ['nullable', 'boolean'],
         ]);
 
-        $days = (int) ($validated['days'] ?? 7);
+        $days = (int) ($validated['days'] ?? self::RELANCE_DAYS_DEFAULT);
         $dryRun = $request->boolean('dry_run', true);
 
         $dormants = $relances->dormants($days);

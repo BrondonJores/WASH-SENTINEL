@@ -49,4 +49,44 @@ return [
         'recap_limit' => 200,
     ],
 
+    /*
+     * LOT 8 — valeurs des contrôleurs API (extraction pure, comportement
+     * inchangé, SAUF les deux plafonds audio unifiés à 12 Mo et la règle
+     * langues voix alignée sur le moteur : voir notes ci-dessous).
+     */
+    'pagination' => [
+        'default' => 20,
+        'min' => 5,
+        'max' => 100,
+    ],
+
+    'voice' => [
+        // Miroir de SUPPORTED_VOICE_LANGUAGES (ai-engine/app/stt_providers.py).
+        // Parité verrouillée par WashLot8ControllersTest (lecture du set Python).
+        // bbj_Latn (ghomala') ajouté ici : le moteur le couvre nativement
+        // (driver omnilingual_ctc), la validation Laravel le rejetait à tort.
+        'languages' => ['fr', 'en', 'dua_Latn', 'bassa', 'ewondo', 'bbj_Latn'],
+        'default_language' => 'fr',
+        // Miroir de DEFAULT_TTS_VOICE (ai-engine/app/schemas.py).
+        'default_tts_voice' => 'fr_FR-upmc-medium',
+        // Plafond audio UNIFIÉ à 12 Mo (Ko pour la règle max:), référence
+        // STT_MAX_INPUT_MB côté ai-engine : agent 10240 -> 12288 (montée),
+        // report 20480 -> 12288 (baisse). Photo 10 Mo inchangée (const locale).
+        'audio_max_kb' => 12288,
+        'text_max_chars' => 1000,
+        'voice_max_chars' => 64,
+        'language_max_chars' => 16,
+    ],
+
+    /*
+     * CONTRAT avec le frontend : TTL 7 jours et max_hops 10 par défaut.
+     * Le front suit ces valeurs — ne pas les modifier sans le synchroniser.
+     * Partagé par WashMeshController, WashSmsController, WashUssdController.
+     */
+    'mesh' => [
+        'default_ttl_days' => 7,
+        'default_max_hops' => 10,
+        'default_destination_eid' => 'dtn://wash-sentinel/ingest',
+    ],
+
 ];

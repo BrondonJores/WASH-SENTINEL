@@ -12,7 +12,10 @@ class WashNotificationController extends Controller
         return response()->json(
             $request->user()->notifications()
                 ->when($request->query('unread') === '1', fn ($q) => $q->whereNull('read_at'))
-                ->paginate(min(100, max(5, (int) $request->query('per_page', 20))))
+                ->paginate(min(
+                    config('wash.pagination.max'),
+                    max(config('wash.pagination.min'), (int) $request->query('per_page', config('wash.pagination.default')))
+                ))
         );
     }
 

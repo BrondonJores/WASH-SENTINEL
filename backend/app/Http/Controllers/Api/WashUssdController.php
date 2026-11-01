@@ -38,6 +38,24 @@ class WashUssdController extends Controller
 
     public const MAX_SCHOOL_ATTEMPTS = 3;
 
+    public const SESSION_ID_MAX = 64;
+
+    public const SERVICE_CODE_MAX = 32;
+
+    public const PHONE_MAX = 32;
+
+    public const TEXT_MAX = 1000;
+
+    public const ORIGIN_HASH_LENGTH = 16;
+
+    public const DESC_MAX_CHARS = 100;
+
+    public const DEDUP_WINDOW_HOURS = 24;
+
+    public const DIRECT_COPIES_REMAINING = 1;
+
+    public const SESSION_KEY_MAX = 64;
+
     /**
      * Réception passerelle (Africa's Talking : form-encoded).
      */
@@ -70,10 +88,10 @@ class WashUssdController extends Controller
     private function validatedInput(Request $request): array
     {
         return $request->validate([
-            'sessionId' => ['required', 'string', 'max:64'],
-            'serviceCode' => ['nullable', 'string', 'max:32'],
-            'phoneNumber' => ['required', 'string', 'max:32'],
-            'text' => ['nullable', 'string', 'max:1000'],
+            'sessionId' => ['required', 'string', 'max:' . self::SESSION_ID_MAX],
+            'serviceCode' => ['nullable', 'string', 'max:' . self::SERVICE_CODE_MAX],
+            'phoneNumber' => ['required', 'string', 'max:' . self::PHONE_MAX],
+            'text' => ['nullable', 'string', 'max:' . self::TEXT_MAX],
         ]);
     }
 
@@ -88,7 +106,7 @@ class WashUssdController extends Controller
         $text = (string) ($text ?? '');
         // Origine non réversible (pas de PII persistée) ; stable par appelant
         // pour quota et dédup.
-        $origin = 'ussd:'.substr(hash('sha256', $phone), 0, 16);
+        $origin = 'ussd:'.substr(hash('sha256', $phone), 0, self::ORIGIN_HASH_LENGTH);
 
         // Idempotence : la passerelle rejoue parfois la confirmation.
         $done = Cache::get("ussd:done:{$sid}");
@@ -225,7 +243,7 @@ class WashUssdController extends Controller
         if ($input === '9') {
             $state['desc'] = null;
         } else {
-            $clean = Str::limit(trim(preg_replace('/\s+/', ' ', strip_tags($input)) ?? ''), 100, '');
+            $clean = Str::limit(trim(preg_replace('/\s+/', ' ', strip_tags($input)) ?? ''), self::DESC_MAX_CHARS, '');
             if ($clean === '') {
                 return $this->con('Description vide. Reessayez ou 9 pour passer:', $sid, $state);
             }
@@ -266,7 +284,7 @@ class WashUssdController extends Controller
         // Dédup : même appelant (empreinte) + même texte normalisé sur 24 h.
         $recent = MeshBundle::where('origin_node_id', $origin)
             ->where('message', $normalized)
-            ->where('created_at', '>', now()->subDay())
+            ->where('created_at', '>', now()->subHours(self::DEDUP_WINDOW_HOURS))
             ->with('report.incident')
             ->first();
         if ($recent) {
@@ -293,11 +311,11 @@ class WashUssdController extends Controller
                 ],
                 'hops' => [$origin],
                 'hop_count' => 0,
-                'copies_remaining' => 1,
-                'destination_eid' => 'dtn://wash-sentinel/ingest',
+                'copies_remaining' => self::DIRECT_COPIES_REMAINING,
+                'destination_eid' => config('wash.mesh.default_destination_eid'),
                 'received_via_node_id' => $origin,
                 'status' => 'delivered',
-                'expires_at' => now()->addDays(7),
+                'expires_at' => now()->addDays(config('wash.mesh.default_ttl_days')),
                 'delivered_at' => now(),
             ]);
 
@@ -389,7 +407,7 @@ class WashUssdController extends Controller
     {
         $safe = preg_replace('/[^A-Za-z0-9_.:-]/', '_', trim($sessionId)) ?: '';
 
-        return $safe !== '' ? Str::limit($safe, 64, '') : sha1($sessionId);
+        return $safe !== '' ? Str::limit($safe, self::SESSION_KEY_MAX, '') : sha1($sessionId);
     }
 
     /** @param array<string, mixed>|null $state */
