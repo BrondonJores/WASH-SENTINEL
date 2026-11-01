@@ -13,6 +13,8 @@ export interface WelcomeScreenProps {
   onAsk: (question: string) => void;
   /** Ouvre le Mode Voix (dictée plein écran). */
   onSpeak: () => void;
+  /** Lance la démo automatique (fil temporaire isolé). */
+  onDemo: () => void;
 }
 
 interface WelcomeExample {
@@ -65,7 +67,7 @@ function MicIcon({ className = 'h-6 w-6' }: { className?: string }) {
   );
 }
 
-export function WelcomeScreen({ count, onAsk, onSpeak }: WelcomeScreenProps) {
+export function WelcomeScreen({ count, onAsk, onSpeak, onDemo }: WelcomeScreenProps) {
   const plural = count > 1 ? 's' : '';
   return (
     <section aria-label="Pour commencer" className="w-full text-left">
@@ -129,6 +131,16 @@ export function WelcomeScreen({ count, onAsk, onSpeak }: WelcomeScreenProps) {
         >
           <MicIcon className="h-6 w-6" />
           Parler
+        </button>
+
+        <button
+          type="button"
+          onClick={onDemo}
+          aria-label="Voir une démonstration automatique"
+          className="flex min-h-[56px] w-full items-center justify-center gap-3 rounded-2xl border border-teal-700/30 bg-teal-700/10 px-4 py-3 text-[16px] font-semibold text-teal-800 transition-[border-color] duration-150 hover:border-teal-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent motion-reduce:transition-none dark:text-teal-200"
+        >
+          <Icon name="chat" className="h-6 w-6" />
+          Voir une démo
         </button>
       </div>
     </section>

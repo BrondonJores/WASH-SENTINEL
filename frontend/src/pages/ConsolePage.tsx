@@ -17,6 +17,7 @@ import { VoicePlayer, VoiceRecorder } from '../components/VoiceControls';
 import { VoicePreview } from '../components/VoicePreview';
 import { VoiceMode, VoiceModeToggle } from '../components/VoiceMode';
 import { WelcomeScreen } from '../components/WelcomeScreen';
+import { DemoPlayer } from '../components/DemoPlayer';
 import type { DetailKind, DetailTarget } from '../components/DetailDrawer';
 import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
@@ -273,6 +274,7 @@ export default function ConsolePage() {
   const [voiceLang, setVoiceLang] = useState<VoiceLanguage>(() => readVoiceLang());
   const [streamId, setStreamId] = useState<number | null>(null);
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [demoOpen, setDemoOpen] = useState(false);
   const [visible, setVisible] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -802,6 +804,7 @@ export default function ConsolePage() {
               count={pulse?.open_incidents ?? 0}
               onAsk={ask}
               onSpeak={() => setVoiceOpen(true)}
+              onDemo={() => setDemoOpen(true)}
             />
           </div>
           {errorBox}
@@ -829,6 +832,7 @@ export default function ConsolePage() {
         </div>
         <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} />
         {voiceOpen && <VoiceMode onClose={() => setVoiceOpen(false)} />}
+        {demoOpen && <DemoPlayer onExit={() => setDemoOpen(false)} />}
       </div>
     );
   }
