@@ -31,6 +31,7 @@ class WashWhatsAppController extends Controller
         }
 
         ProcessWhatsAppMessage::dispatch($request->all());
+        Cache::put('wash.whatsapp.last_webhook_at', now()->toIso8601String(), 86400);
 
         return response()->json(['received' => true]);
     }

@@ -32,7 +32,8 @@ class MetaWhatsAppService implements WhatsAppClient
     {
         $secret = (string) config('services.whatsapp.app_secret', '');
         if ($secret === '') {
-            return true;
+            // Sans secret : ouvert en simulateur (dev), fermé en live.
+            return $this->isSimulator();
         }
 
         return hash_equals('sha256=' . hash_hmac('sha256', $rawBody, $secret), (string) $signature);

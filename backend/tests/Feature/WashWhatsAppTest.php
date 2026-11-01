@@ -7,7 +7,9 @@ use App\Models\Incident;
 use App\Models\Report;
 use App\Models\School;
 use App\Models\SchoolContact;
+use App\Services\MetaWhatsAppService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
 use Tests\Support\FakeWhatsAppService;
@@ -150,5 +152,26 @@ class WashWhatsAppTest extends TestCase
             'HTTP_X-Hub-Signature-256' => $valid,
         ], $raw)->assertOk();
         $this->assertEquals(1, Incident::count());
+    }
+
+    public function test_empty_secret_is_closed_in_live_mode(): void
+    {
+        config(['services.whatsapp.simulator' => false]);
+        config(['services.whatsapp.app_secret' => '']);
+        $this->assertFalse((new MetaWhatsAppService())->verifySignature('{}', null));
+
+        config(['services.whatsapp.simulator' => true]);
+        $this->assertTrue((new MetaWhatsAppService())->verifySignature('{}', null));
+    }
+
+    public function test_receive_records_last_webhook_at(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('text'))->assertOk();
+
+        $at = Cache::get('wash.whatsapp.last_webhook_at');
+        $this->assertNotNull($at);
+        $this->getJson('/api/v1/whatsapp/diagnostics')->assertJsonPath('last_webhook_at', $at);
     }
 }
