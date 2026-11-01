@@ -1,25 +1,29 @@
 # WASH Sentinel — Frontend
 
-Interface d'administration (page Réglages IA) et widget agent.
+React 19 + TypeScript + Tailwind v4: AI console (dashboard, incidents, schools, reports, journal,
+notifications, mesh monitor, AI settings), public report form (`/signaler`), and the installable
+offline field PWA (`/m` — outbox, QR show/scan/import, Background Sync, install prompt).
 
-## Développement
+## Development
 
 ```bash
 cp .env.example .env
 npm install
-npm run dev
+npm run dev        # http://localhost:5173 (Vite)
 ```
 
-Ouvrez [http://localhost:5173](http://localhost:5173) dans le navigateur.
-Le backend Laravel doit tourner (ex: `php artisan serve --port=80` ou Docker)
-avec `VITE_API_URL` pointant sur `/api`.
+The Laravel backend must run (Docker compose from the repo root, or `php artisan serve`)
+with `VITE_API_URL` pointing at `/api`.
 
-Compte démo : `test@example.com` / `password` (seeders Laravel).
+Demo accounts (`password`): `admin@wash.cm`, `tech@wash.cm`, `directeur@ecole.cm`.
 
-## Production
+## Checks & production
 
 ```bash
-npm run build
+npx tsc -b        # types (CI gate)
+npm run lint      # oxlint, 0 errors
+npm run build     # dist/ (service worker precaches the shell + /m)
 ```
 
-Les fichiers sont générés dans `dist/`.
+Notes: the TS mesh client is vendored at `src/lib/mesh-sdk.ts` and must stay identical to
+`mesh/sdk/mesh-sdk.ts` (CI diff guard). PWA install: open `/m` once online, then Add to Home Screen.
