@@ -110,7 +110,8 @@ class ObservatoireCardTest(unittest.TestCase):
         obs = TOOL_EXECUTORS["observatoire"]({}, {})
         loop = AgentLoop.__new__(AgentLoop)
         cards = AgentLoop._build_cards(loop, [("observatoire", obs)])
-        self.assertEqual(cards, [])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "guidance")
 
 
 if __name__ == "__main__":

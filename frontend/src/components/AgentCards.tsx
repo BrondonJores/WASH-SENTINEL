@@ -2305,6 +2305,47 @@ function ObservatoireCard({ title, data, onAsk }: { title: string; data: Record<
   );
 }
 
+function GuidanceCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const insight = fmtOpt(data.insight) ?? '';
+  const explication = fmtOpt(data.explication);
+  const causes = asArray<unknown>(data.causes_possibles).map((c) => (typeof c === 'string' ? c : '')).filter((c) => c !== '');
+  const actions = asArray<Record<string, unknown>>(data.actions);
+  return (
+    <CardShell title={title} listenText={speak(insight, explication)}>
+      <InsightLine text={insight} />
+      {explication !== undefined && (
+        <p className="text-sm leading-relaxed text-stone-600 dark:text-stone-400">{explication}</p>
+      )}
+      {causes.length > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-[13px] text-stone-500 marker:text-stone-400 dark:text-stone-400">
+          {causes.map((c, i) => (
+            <li key={i}>{c}</li>
+          ))}
+        </ul>
+      )}
+      {actions.length > 0 && (
+        <div className="mt-2.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          {actions.map((a, i) => {
+            const label = fmtOpt(a.label) ?? fmtOpt(a.question) ?? `Action ${i + 1}`;
+            const question = fmtOpt(a.question);
+            return (
+              <button
+                key={`${label}-${i}`}
+                type="button"
+                disabled={onAsk === undefined || question === undefined}
+                onClick={() => question !== undefined && onAsk?.(question)}
+                className="rounded-lg border border-line bg-card px-3 py-2 text-left text-sm font-medium transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.98] disabled:cursor-default disabled:hover:border-line motion-reduce:transition-none motion-reduce:active:scale-100"
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
 function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void }) {
   const data = asRecord(card.data);
   switch (card.type) {
@@ -2364,6 +2405,8 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <RelancesCard title={card.title} data={data} onAsk={onAsk} />;
     case 'observatoire':
       return <ObservatoireCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'guidance':
+      return <GuidanceCard title={card.title} data={data} onAsk={onAsk} />;
     default:
       return <GenericCard card={card} />;
   }

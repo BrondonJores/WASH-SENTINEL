@@ -78,11 +78,12 @@ class OfflineQueueRouteCardTest(unittest.TestCase):
         self.assertEqual(cards[0].type, "offline_queue")
         self.assertIsNotNone(cards[0])
 
-    def test_card_none_on_error(self) -> None:
+    def test_error_yields_guidance_card(self) -> None:
         from app.agent_loop import AgentLoop
         loop = AgentLoop.__new__(AgentLoop)
         cards = AgentLoop._build_cards(loop, [("offline_queue", {"error": "oups"})])
-        self.assertEqual(cards, [])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "guidance")
 
     def test_hints_lowercase_and_no_legacy_collision(self) -> None:
         from app.tools.offline_queue import INTENT_HINTS

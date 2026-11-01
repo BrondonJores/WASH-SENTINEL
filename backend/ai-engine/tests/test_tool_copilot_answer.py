@@ -118,11 +118,12 @@ class CopilotAnswerPluginTest(unittest.TestCase):
         self.assertEqual(cards[0].type, "copilot_answer")
         self.assertIsNotNone(cards[0])
 
-    def test_card_none_on_error(self) -> None:
+    def test_error_yields_guidance_card(self) -> None:
         from app.agent_loop import AgentLoop
         loop = AgentLoop.__new__(AgentLoop)
         cards = AgentLoop._build_cards(loop, [("copilot_answer", {"error": "oups"})])
-        self.assertEqual(cards, [])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "guidance")
 
 
 if __name__ == "__main__":

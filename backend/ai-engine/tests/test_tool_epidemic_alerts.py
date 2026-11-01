@@ -131,9 +131,9 @@ class EpidemicAlertsCardTest(unittest.TestCase):
         self.assertIsNone(CARD_BUILDERS["epidemic_alerts"]({"error": "x"}))
         self.assertIsNone(CARD_BUILDERS["epidemic_alerts"]({}))
         loop = AgentLoop.__new__(AgentLoop)
-        self.assertEqual(
-            AgentLoop._build_cards(loop, [("epidemic_alerts", {"error": "x"})]),
-            [])
+        cards = AgentLoop._build_cards(loop, [("epidemic_alerts", {"error": "x"})])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "guidance")
 
 
 if __name__ == "__main__":

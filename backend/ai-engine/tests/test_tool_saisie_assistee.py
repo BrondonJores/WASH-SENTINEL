@@ -86,9 +86,10 @@ class SaisieAssisteePluginTest(unittest.TestCase):
         cards = AgentLoop._build_cards(loop, [("saisie_assistee", obs)])
         self.assertEqual(len(cards), 1)
         self.assertEqual(cards[0].type, "saisie_assistee")
-        # Erreur -> pas de carte (builder défensif).
+        # Erreur -> carte de guidage (jamais de vide).
         cards = AgentLoop._build_cards(loop, [("saisie_assistee", {"error": "x"})])
-        self.assertEqual(cards, [])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "guidance")
 
 
 if __name__ == "__main__":

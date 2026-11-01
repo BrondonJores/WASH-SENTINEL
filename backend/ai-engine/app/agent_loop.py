@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ONLY, TOOL_EXECUTORS
+from .guidance import build_guidance_card
 from .providers import BaseLLMProvider
 from .schemas import AgentCard, AgentChatRequest, AgentChatResponse
 
@@ -802,6 +803,9 @@ class AgentLoop:
         cards: list[AgentCard] = []
         for name, observation in executed:
             if "error" in observation:
+                guide = build_guidance_card(name, observation)
+                if guide is not None:
+                    cards.append(guide)
                 continue
             if name == "analyze_school":
                 cards.append(AgentCard(

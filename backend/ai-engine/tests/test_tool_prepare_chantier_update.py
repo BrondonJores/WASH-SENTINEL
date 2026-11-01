@@ -159,12 +159,13 @@ class PrepareChantierUpdatePluginTest(unittest.TestCase):
         self.assertEqual(len(cards), 1)
         self.assertIsNotNone(cards[0])
         self.assertEqual(cards[0].type, "chantier_dossier")
-        # Défensif : vide / erreur -> aucune carte, pas de crash.
+        # Défensif : vide -> aucune carte, erreur -> carte de guidage.
         self.assertEqual(
             AgentLoop._build_cards(loop, [("prepare_chantier_update", {})]), [])
-        self.assertEqual(
-            AgentLoop._build_cards(
-                loop, [("prepare_chantier_update", {"error": "x"})]), [])
+        err_cards = AgentLoop._build_cards(
+            loop, [("prepare_chantier_update", {"error": "x"})])
+        self.assertEqual(len(err_cards), 1)
+        self.assertEqual(err_cards[0].type, "guidance")
 
 
 if __name__ == "__main__":
