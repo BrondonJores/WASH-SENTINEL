@@ -52,6 +52,15 @@ class MetaWhatsAppService implements WhatsAppClient
         return (string) $this->cfg('phone_number_id', '');
     }
 
+    /**
+     * Client HTTP vers Graph API avec retries (le DNS Docker flanche par
+     * intermittence : cURL error 6). 3 tentatives, 300 ms d'intervalle.
+     */
+    protected function http(): \Illuminate\Http\Client\PendingRequest
+    {
+        return Http::withToken($this->token())->retry(3, 300);
+    }
+
     public function isSimulator(): bool
     {
         return (bool) $this->cfg('simulator', false);
@@ -126,13 +135,13 @@ class MetaWhatsAppService implements WhatsAppClient
             return ['bytes' => '', 'mime' => 'application/octet-stream', 'filename' => "sim-{$mediaId}.bin"];
         }
 
-        $meta = Http::withToken($this->token())
+        $meta = $this->http()
             ->timeout(30)
             ->get("{$this->baseUrl()}/{$mediaId}")
             ->throw()
             ->json();
 
-        $response = Http::withToken($this->token())
+        $response = $this->http()
             ->timeout(60)
             ->get($meta['url'] ?? '');
         $response->throw();
@@ -150,7 +159,7 @@ class MetaWhatsAppService implements WhatsAppClient
             return ['messages' => [['id' => 'sim-' . uniqid()]]];
         }
 
-        return Http::withToken($this->token())
+        return $this->http()
             ->timeout(30)
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/messages", [
                 'messaging_product' => 'whatsapp',
@@ -181,7 +190,7 @@ class MetaWhatsAppService implements WhatsAppClient
             ];
         }
 
-        return Http::withToken($this->token())
+        return $this->http()
             ->timeout(30)
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/messages", [
                 'messaging_product' => 'whatsapp',
@@ -203,7 +212,7 @@ class MetaWhatsAppService implements WhatsAppClient
             return 'sim-media-' . uniqid();
         }
 
-        $response = Http::withToken($this->token())
+        $response = $this->http()
             ->timeout(60)
             ->attach('file', $bytes, $filename ?? 'whatsapp-media', ['ContentType' => $mime])
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/media", [
@@ -223,7 +232,7 @@ class MetaWhatsAppService implements WhatsAppClient
             return ['messages' => [['id' => 'sim-' . uniqid()]]];
         }
 
-        return Http::withToken($this->token())
+        return $this->http()
             ->timeout(30)
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/messages", [
                 'messaging_product' => 'whatsapp',
@@ -262,7 +271,7 @@ class MetaWhatsAppService implements WhatsAppClient
             ]];
         }
 
-        return Http::withToken($this->token())
+        return $this->http()
             ->timeout(30)
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/messages", $payload)
             ->throw()

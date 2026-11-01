@@ -24,7 +24,7 @@ class WashWhatsAppTest extends TestCase
         parent::setUp();
         FakeWhatsAppService::reset();
         $this->app->bind(WhatsAppClient::class, FakeWhatsAppService::class);
-        config(['services.whatsapp.simulator' => true]);
+        config(['whatsapp.simulator' => true]);
         Notification::fake();
     }
 
@@ -70,7 +70,7 @@ class WashWhatsAppTest extends TestCase
 
     public function test_verify_returns_challenge_with_valid_token(): void
     {
-        config(['services.whatsapp.verify_token' => 'secret-token']);
+        config(['whatsapp.verify_token' => 'secret-token']);
 
         $this->get('/api/v1/whatsapp/webhook?hub_mode=subscribe&hub_verify_token=secret-token&hub_challenge=CHALLENGE123')
             ->assertOk()
@@ -79,7 +79,7 @@ class WashWhatsAppTest extends TestCase
 
     public function test_verify_rejects_bad_token(): void
     {
-        config(['services.whatsapp.verify_token' => 'secret-token']);
+        config(['whatsapp.verify_token' => 'secret-token']);
 
         $this->get('/api/v1/whatsapp/webhook?hub_mode=subscribe&hub_verify_token=wrong&hub_challenge=CHALLENGE123')
             ->assertForbidden();
@@ -178,6 +178,26 @@ class WashWhatsAppTest extends TestCase
         $this->assertLessThan(120, mb_strlen($question));
     }
 
+    public function test_legacy_services_keys_still_honored_when_canonical_absent(): void
+    {
+        config([
+            'whatsapp.simulator' => null,
+            'whatsapp.verify_token' => null,
+            'whatsapp.app_secret' => null,
+            'services.whatsapp.simulator' => true,
+            'services.whatsapp.verify_token' => 'legacy-token',
+            'services.whatsapp.app_secret' => '',
+        ]);
+
+        $service = app(\App\Services\MetaWhatsAppService::class);
+        $this->assertTrue($service->isSimulator());
+        $this->assertTrue($service->verifySignature('body', null));
+
+        $this->getJson('/api/v1/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=legacy-token&hub.challenge=abc')
+            ->assertOk()
+            ->assertSee('abc', false);
+    }
+
     public function test_unknown_number_gets_registration_reply(): void
     {
         $this->fakeTriage();
@@ -192,8 +212,8 @@ class WashWhatsAppTest extends TestCase
 
     public function test_bad_signature_is_rejected_when_not_simulator(): void
     {
-        config(['services.whatsapp.simulator' => false]);
-        config(['services.whatsapp.app_secret' => 'test-secret']);
+        config(['whatsapp.simulator' => false]);
+        config(['whatsapp.app_secret' => 'test-secret']);
 
         $raw = json_encode($this->fixture('text'));
         $this->call('POST', '/api/v1/whatsapp/webhook', [], [], [], [
@@ -213,11 +233,11 @@ class WashWhatsAppTest extends TestCase
 
     public function test_empty_secret_is_closed_in_live_mode(): void
     {
-        config(['services.whatsapp.simulator' => false]);
-        config(['services.whatsapp.app_secret' => '']);
+        config(['whatsapp.simulator' => false]);
+        config(['whatsapp.app_secret' => '', 'services.whatsapp.app_secret' => '']);
         $this->assertFalse((new MetaWhatsAppService())->verifySignature('{}', null));
 
-        config(['services.whatsapp.simulator' => true]);
+        config(['whatsapp.simulator' => true]);
         $this->assertTrue((new MetaWhatsAppService())->verifySignature('{}', null));
     }
 

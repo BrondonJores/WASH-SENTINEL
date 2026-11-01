@@ -23,7 +23,7 @@ class WashWhatsAppGuidanceTest extends TestCase
         parent::setUp();
         FakeWhatsAppService::reset();
         $this->app->bind(WhatsAppClient::class, FakeWhatsAppService::class);
-        config(['services.whatsapp.simulator' => true]);
+        config(['whatsapp.simulator' => true]);
         Notification::fake();
     }
 
@@ -205,7 +205,7 @@ class WashWhatsAppGuidanceTest extends TestCase
 
     public function test_simulator_path_sends_without_http_call(): void
     {
-        config(['services.whatsapp.simulator' => true]);
+        config(['whatsapp.simulator' => true]);
         Http::fake();
 
         $response = (new MetaWhatsAppService())->sendText(
@@ -219,9 +219,9 @@ class WashWhatsAppGuidanceTest extends TestCase
     public function test_live_path_posts_guided_text_to_graph_api(): void
     {
         config([
-            'services.whatsapp.simulator' => false,
-            'services.whatsapp.access_token' => 'test-token',
-            'services.whatsapp.phone_number_id' => '999',
+            'whatsapp.simulator' => false,
+            'whatsapp.token' => 'test-token',
+            'whatsapp.phone_number_id' => '999',
         ]);
         Http::fake([
             '*' => Http::response(['messages' => [['id' => 'wamid.LIVE001']]], 200),

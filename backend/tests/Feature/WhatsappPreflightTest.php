@@ -19,6 +19,10 @@ class WhatsappPreflightTest extends TestCase
             'whatsapp.app_secret' => 'app-secret-value',
             'whatsapp.simulator' => false,
             'services.whatsapp.simulator' => false,
+            'services.whatsapp.verify_token' => '',
+            'services.whatsapp.access_token' => '',
+            'services.whatsapp.phone_number_id' => '',
+            'services.whatsapp.app_secret' => '',
         ], $overrides));
     }
 
@@ -66,7 +70,7 @@ class WhatsappPreflightTest extends TestCase
 
     public function test_preflight_secret_manquant_en_live(): void
     {
-        $this->liveConfig(['whatsapp.app_secret' => '', 'services.whatsapp.app_secret' => '']);
+        $this->liveConfig(['whatsapp.app_secret' => '', 'whatsapp.app_secret' => '']);
         Http::fake(['*' => Http::response(['display_phone_number' => '+221 77 000 00 00'], 200)]);
 
         $this->artisan('wash:whatsapp:preflight')
@@ -78,9 +82,9 @@ class WhatsappPreflightTest extends TestCase
     {
         $this->liveConfig([
             'whatsapp.app_secret' => '',
-            'services.whatsapp.app_secret' => '',
+            'whatsapp.app_secret' => '',
             'whatsapp.simulator' => true,
-            'services.whatsapp.simulator' => true,
+            'whatsapp.simulator' => true,
         ]);
         Http::fake(['*' => Http::response(['display_phone_number' => '+221 77 000 00 00'], 200)]);
 

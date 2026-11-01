@@ -16,8 +16,8 @@ class WashWhatsAppDiagnosticsTest extends TestCase
     public function test_diagnostics_reports_configured_tokens_and_hint(): void
     {
         config([
-            'services.whatsapp.verify_token' => 'diag-verify-token',
-            'services.whatsapp.access_token' => 'diag-access-token',
+            'whatsapp.verify_token' => 'diag-verify-token',
+            'whatsapp.token' => 'diag-access-token',
             'queue.default' => 'database',
             'app.url' => 'http://demo.test',
         ]);
@@ -36,6 +36,8 @@ class WashWhatsAppDiagnosticsTest extends TestCase
     public function test_diagnostics_reports_missing_tokens_without_server_error(): void
     {
         config([
+            'whatsapp.verify_token' => '',
+            'whatsapp.token' => '',
             'services.whatsapp.verify_token' => '',
             'services.whatsapp.access_token' => '',
         ]);
@@ -53,8 +55,8 @@ class WashWhatsAppDiagnosticsTest extends TestCase
         $verifyToken = 'verify-SECRET-should-never-leak-001';
         $accessToken = 'access-SECRET-should-never-leak-002';
         config([
-            'services.whatsapp.verify_token' => $verifyToken,
-            'services.whatsapp.access_token' => $accessToken,
+            'whatsapp.verify_token' => $verifyToken,
+            'whatsapp.token' => $accessToken,
         ]);
 
         $response = $this->getJson('/api/v1/whatsapp/diagnostics');
