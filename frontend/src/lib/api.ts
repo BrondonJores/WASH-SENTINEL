@@ -174,18 +174,67 @@ export function setToken(t: string | null) {
   else localStorage.removeItem('wash_admin_token');
 }
 
+export type ApiFailureKind = 'network' | 'timeout' | 'unauthorized' | 'rate-limit' | 'server' | 'other';
+
+export const GUIDED_NETWORK_MESSAGE =
+  'Pas de connexion. Vérifiez le réseau puis réessayez — votre texte est gardé.';
+export const GUIDED_RATE_LIMIT_MESSAGE = "Trop de questions d'un coup, pause 30 secondes.";
+export const GUIDED_SERVER_MESSAGE =
+  'Sentinel met trop longtemps. Réessayez — si ça persiste, reposez plus simplement.';
+
+function kindForStatus(status: number): ApiFailureKind {
+  if (status === 0) return 'network';
+  if (status === 401) return 'unauthorized';
+  if (status === 408) return 'timeout';
+  if (status === 429) return 'rate-limit';
+  if (status >= 500) return 'server';
+  return 'other';
+}
+
+export interface ProposalNextAction {
+  label?: string;
+  prompt?: string | null;
+}
+
+export interface ProposalGuidance {
+  status?: string;
+  next_action?: ProposalNextAction | null;
+}
+
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  kind: ApiFailureKind;
+  guidanceStatus?: string;
+  nextAction?: ProposalNextAction | null;
+  constructor(status: number, message: string, kind?: ApiFailureKind, guidance?: ProposalGuidance) {
     super(message);
     this.status = status;
+    this.kind = kind ?? kindForStatus(status);
+    this.guidanceStatus = guidance?.status;
+    this.nextAction = guidance?.next_action;
   }
 }
 
+interface ErrorBody {
+  message?: string;
+  status?: string;
+  next_action?: ProposalNextAction | null;
+  errors?: Record<string, string[]>;
+  degraded?: boolean;
+}
+
 async function parseError(res: Response, fallback: string): Promise<never> {
-  const body = (await res.json().catch(() => ({}))) as { message?: string; errors?: Record<string, string[]> };
+  const body = (await res.json().catch(() => ({}))) as ErrorBody;
+  if (res.status === 429) throw new ApiError(res.status, GUIDED_RATE_LIMIT_MESSAGE, 'rate-limit');
+  if (res.status === 408 || res.status >= 500) {
+    throw new ApiError(res.status, GUIDED_SERVER_MESSAGE, 'server');
+  }
   const first = body.errors ? Object.values(body.errors)[0]?.[0] : undefined;
-  throw new ApiError(res.status, first ?? body.message ?? fallback);
+  const guidance: ProposalGuidance | undefined =
+    body.status !== undefined || body.next_action !== undefined
+      ? { status: body.status, next_action: body.next_action ?? null }
+      : undefined;
+  throw new ApiError(res.status, first ?? body.message ?? fallback, undefined, guidance);
 }
 
 function handle401(): never {
@@ -194,8 +243,30 @@ function handle401(): never {
   throw new ApiError(401, 'Session expirée, reconnectez-vous.');
 }
 
+async function guardedFetch(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+      throw new ApiError(408, GUIDED_SERVER_MESSAGE, 'timeout');
+    }
+    throw new ApiError(0, GUIDED_NETWORK_MESSAGE, 'network');
+  }
+}
+
+/** Un corps { degraded: true } n'est jamais une erreur : il transporte une réponse partielle. */
+async function readDegraded<T>(res: Response): Promise<T | undefined> {
+  try {
+    const body = (await res.clone().json()) as { degraded?: boolean };
+    if (typeof body === 'object' && body !== null && body.degraded === true) return body as T;
+  } catch {
+    /* corps illisible : traitement d'erreur normal */
+  }
+  return undefined;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const res = await guardedFetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -205,18 +276,26 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (res.status === 401) handle401();
-  if (!res.ok) await parseError(res, `Erreur ${res.status}`);
+  if (!res.ok) {
+    const degraded = await readDegraded<T>(res);
+    if (degraded !== undefined) return degraded;
+    await parseError(res, `Erreur ${res.status}`);
+  }
   return (await res.json()) as T;
 }
 
 async function reqMultipart<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const res = await guardedFetch(`${baseUrl}${path}`, {
     method: 'POST',
     headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: form,
   });
   if (res.status === 401) handle401();
-  if (!res.ok) await parseError(res, `Erreur ${res.status}`);
+  if (!res.ok) {
+    const degraded = await readDegraded<T>(res);
+    if (degraded !== undefined) return degraded;
+    await parseError(res, `Erreur ${res.status}`);
+  }
   return (await res.json()) as T;
 }
 
@@ -522,4 +601,5 @@ export interface ProposalResult {
   report_id?: number;
   log_id?: number;
   is_duplicate?: boolean;
+  next_action?: ProposalNextAction | null;
 }

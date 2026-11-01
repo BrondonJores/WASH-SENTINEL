@@ -482,10 +482,31 @@ export default function ConsolePage() {
     />
   );
 
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
   const errorBox = error && (
-    <p className="mt-3 rounded-md border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger">
-      {error}
-    </p>
+    <div className="mt-3 rounded-md border border-danger/30 bg-danger-soft px-3 py-2.5">
+      <p className="text-sm text-danger">{error}</p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {lastUserMessage !== '' && (
+          <button
+            type="button"
+            onClick={() => ask(lastUserMessage)}
+            disabled={busy || streaming}
+            className="rounded-full bg-danger px-3 py-1 text-[13px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+          >
+            Réessayer
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => ask('Voir les incidents ouverts')}
+          disabled={busy || streaming}
+          className="rounded-full border border-line bg-card px-3 py-1 text-[13px] font-medium transition-[border-color] hover:border-accent disabled:cursor-default disabled:opacity-50"
+        >
+          Voir les incidents
+        </button>
+      </div>
+    </div>
   );
 
   if (messages.length === 0 && !busy) {
