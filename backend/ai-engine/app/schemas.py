@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
+from .thresholds import DUPLICATE_DECISION_THRESHOLD
+
 
 # ==========================================
 # 1. Extraction & Triage Textuel / Vocal
@@ -62,7 +64,8 @@ class IncidentItem(BaseModel):
 class DuplicateCheckRequest(BaseModel):
     incoming_summary: str
     active_incidents: list[IncidentItem]
-    similarity_threshold: float = 0.80
+    # Source unique app.thresholds (AXE 8) : pas de duplication du défaut.
+    similarity_threshold: float = DUPLICATE_DECISION_THRESHOLD
 
 
 class DuplicateMatch(BaseModel):

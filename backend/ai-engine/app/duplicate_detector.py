@@ -1,12 +1,15 @@
 """Détection de doublons par similarité cosinus sur embeddings.
 
-Seuils constatés (hérités du code, NON calibrés empiriquement — heuristiques) :
+Seuils (source unique : app.thresholds, AXE 8) :
 - Décision doublon : 0.80 par défaut (`DuplicateCheckRequest.similarity_threshold`,
   schemas.py). Le service Laravel appelle avec threshold=0.80 : cohérent.
   Surcharge possible par appel via le paramètre `threshold` de `check()`.
-- Inscription en liste `matches` : 0.70 (interne, fixe).
-- Repli textuel Jaccard (embeddings indisponibles) : 0.50 (interne, fixe,
-  indépendant du seuil cosinus).
+  NON calibré empiriquement (aucun seed ne fournit de vrais vecteurs).
+- Inscription en liste `matches` : 0.70 (cosinus, NON calibré, idem).
+- Repli textuel Jaccard (embeddings indisponibles) : 0.25, CALIBRÉ AXE 8
+  (était 0.50 : R=0.00 -> P=1.00 R=0.625 F1=0.77 sur n=179 paires, voir
+  app.thresholds + tests/test_threshold_calibration.py).
+  Indépendant du seuil cosinus (comportement hérité).
 
 Latence : UN seul appel batch (`get_embeddings`, requête + candidats) au lieu
 de N+1 appels unitaires. Pas de pré-filtre Jaccard volontairement : il casserait
@@ -19,9 +22,14 @@ from __future__ import annotations
 import numpy as np
 from .providers import BaseLLMProvider
 from .schemas import DuplicateCheckRequest, DuplicateCheckResponse, DuplicateMatch
+from .thresholds import (
+    DUPLICATE_DECISION_THRESHOLD,
+    DUPLICATE_JACCARD_FALLBACK,
+    DUPLICATE_MATCH_CUTOFF,
+)
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.80
-"""Miroir documenté du défaut `DuplicateCheckRequest.similarity_threshold` (0.80)."""
+DEFAULT_SIMILARITY_THRESHOLD = DUPLICATE_DECISION_THRESHOLD
+"""Alias historique : défaut `DuplicateCheckRequest.similarity_threshold` (0.80)."""
 
 
 class DuplicateDetector:
@@ -49,7 +57,7 @@ class DuplicateDetector:
                 + [inc.summary for inc in request.active_incidents]
             )
         except RuntimeError:
-            # Embeddings indisponibles -> repli textuel documenté (Jaccard 0.50).
+            # Embeddings indisponibles -> repli textuel (Jaccard, cf. thresholds).
             return self._fallback_text_match(request)
         if not vectors or not vectors[0]:
             return self._fallback_text_match(request)
@@ -75,7 +83,7 @@ class DuplicateDetector:
             # Similarité Cosinus
             similarity = float(np.dot(q_arr, i_arr) / (q_norm * i_norm))
 
-            if similarity >= 0.70:
+            if similarity >= DUPLICATE_MATCH_CUTOFF:
                 conf = "high" if similarity >= effective_threshold else "moderate"
                 matches.append(DuplicateMatch(
                     incident_id=inc.id,
@@ -99,7 +107,8 @@ class DuplicateDetector:
     def _fallback_text_match(self, request: DuplicateCheckRequest) -> DuplicateCheckResponse:
         """Fallback basique par intersection de mots-clés si Ollama Embeddings est injoignable.
 
-        Seuil Jaccard fixe 0.50, indépendant du seuil cosinus (comportement hérité).
+        Seuil Jaccard DUPLICATE_JACCARD_FALLBACK (0.25, calibré AXE 8),
+        indépendant du seuil cosinus (comportement hérité).
         """
         incoming_words = set(request.incoming_summary.lower().split())
         best_id = None
@@ -114,7 +123,7 @@ class DuplicateDetector:
                 max_overlap = overlap
                 best_id = inc.id
 
-        is_dup = max_overlap >= 0.50
+        is_dup = max_overlap >= DUPLICATE_JACCARD_FALLBACK
         return DuplicateCheckResponse(
             is_duplicate=is_dup,
             matched_incident_id=best_id if is_dup else None,
