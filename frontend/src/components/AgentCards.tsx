@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Badge, Button, Card } from './ui';
 import { Icon } from './icons';
 import { VoicePlayer } from './VoiceControls';
-import type { AgentCard } from '../lib/api';
+import type { AgentCard, ProposalNextAction } from '../lib/api';
 import { api, ApiError } from '../lib/api';
 import { ThresholdGauge } from './ThresholdGauge';
 import { TrendChart, TrendDonut, TrendHBars } from './TrendChart';
@@ -1066,15 +1066,18 @@ function ConfirmationCard({ title, data }: { title: string; data: Record<string,
 function ActionConfirmationCard({
   title,
   data,
+  onAsk,
   onAppend,
 }: {
   title: string;
   data: Record<string, unknown>;
+  onAsk?: (q: string) => void;
   onAppend?: (content: string, cards?: AgentCard[]) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [guidance, setGuidance] = useState<ProposalNextAction | null>(null);
   const proposalId = typeof data.proposal_id === 'number' ? data.proposal_id : null;
   const rows = Array.isArray(data.recap_rows) ? data.recap_rows : [];
   const loginRequired = data.login_required === true;
@@ -1086,6 +1089,7 @@ function ActionConfirmationCard({
     if (proposalId === null || busy || outcome !== null) return;
     setBusy(true);
     setError(null);
+    setGuidance(null);
     try {
       const res = kind === 'confirm' ? await api.confirmProposal(proposalId) : await api.cancelProposal(proposalId);
       setOutcome(res.result.status);
@@ -1097,7 +1101,17 @@ function ActionConfirmationCard({
         },
       ]);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Erreur réseau.');
+      if (e instanceof ApiError) {
+        setError(e.message);
+        // Guidage structuré (expiré, déjà validé, conflit, refusé) : terminal,
+        // on ne réessaie pas — on propose l'action suivante.
+        if (e.guidanceStatus !== undefined) {
+          setGuidance(e.nextAction ?? null);
+          setOutcome(e.guidanceStatus);
+        }
+      } else {
+        setError('Erreur réseau.');
+      }
     } finally {
       setBusy(false);
     }
@@ -1123,6 +1137,11 @@ function ActionConfirmationCard({
           })
           .filter((s) => s !== '')
           .join('. ');
+  const retryPrompt =
+    typeof guidance?.prompt === 'string' && guidance.prompt !== '' ? guidance.prompt : null;
+  const retryLabel =
+    typeof guidance?.label === 'string' && guidance.label !== '' ? guidance.label : 'Refaire la demande';
+  const ask = onAsk;
   return (
     <CardShell
       title={title}
@@ -1132,6 +1151,16 @@ function ActionConfirmationCard({
           <Badge tone="success">Confirmé</Badge>
         ) : outcome === 'cancelled' ? (
           <Badge tone="neutral">Annulé</Badge>
+        ) : outcome === 'already_confirmed' ? (
+          <Badge tone="success">Déjà enregistré</Badge>
+        ) : outcome === 'expired' ? (
+          <Badge tone="neutral">Expiré</Badge>
+        ) : outcome === 'conflict' ? (
+          <Badge tone="neutral">Déjà traité</Badge>
+        ) : outcome === 'forbidden' ? (
+          <Badge tone="danger">Refusé</Badge>
+        ) : outcome !== null ? (
+          <Badge tone="neutral">Terminé</Badge>
         ) : (
           <Badge tone="warn">Confirmation requise</Badge>
         )
@@ -1173,6 +1202,13 @@ function ActionConfirmationCard({
         </p>
       )}
       {error && <p className="mt-2 text-sm text-red-700 dark:text-red-400">{error}</p>}
+      {retryPrompt !== null && ask !== undefined && (
+        <div className="mt-2">
+          <Button variant="primary" size="sm" onClick={() => ask(retryPrompt)}>
+            {retryLabel}
+          </Button>
+        </div>
+      )}
       {!terminal && proposalId !== null && (
         <div className="mt-3 flex gap-2">
           <Button variant="primary" size="sm" disabled={busy} onClick={() => void run('confirm')}>
@@ -2405,7 +2441,7 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
     case 'report_confirmation':
       return <ConfirmationCard title={card.title} data={data} />;
     case 'action_confirmation':
-      return <ActionConfirmationCard title={card.title} data={data} onAppend={onAppend} />;
+      return <ActionConfirmationCard title={card.title} data={data} onAsk={onAsk} onAppend={onAppend} />;
     case 'action_result':
       return <ActionResultCard title={card.title} data={data} />;
     case 'incident_picker':

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Contracts\IncidentTriage;
+use App\Exceptions\ProposalGuidanceException;
 use App\Models\AgentProposal;
 use App\Models\AiAnalysis;
 use App\Models\Incident;
@@ -13,8 +14,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
-use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
-use Symfony\Component\HttpKernel\Exception\GoneHttpException;
 
 class AgentProposalService
 {
@@ -64,7 +63,7 @@ class AgentProposalService
     {
         $fresh = AgentProposal::findOrFail($proposal->id);
         if ($fresh->user_id !== $user->id) {
-            throw new AccessDeniedHttpException('Cette proposition appartient à un autre utilisateur.');
+            throw ProposalGuidanceException::ownerMismatch($fresh);
         }
         if ($fresh->status === AgentProposal::STATUS_PENDING && $fresh->isExpired()) {
             $fresh->update(['status' => AgentProposal::STATUS_EXPIRED]);
@@ -73,15 +72,25 @@ class AgentProposalService
         return DB::transaction(function () use ($user, $proposal) {
             $proposal = AgentProposal::whereKey($proposal->id)->lockForUpdate()->firstOrFail();
             if ($proposal->user_id !== $user->id) {
-                throw new AccessDeniedHttpException('Cette proposition appartient à un autre utilisateur.');
+                throw ProposalGuidanceException::ownerMismatch($proposal);
             }
             if ($proposal->status === AgentProposal::STATUS_EXPIRED || $proposal->isExpired()) {
-                throw new GoneHttpException('Proposition expirée, demandez un nouveau récapitulatif.');
+                if ($proposal->status !== AgentProposal::STATUS_EXPIRED) {
+                    $proposal->update(['status' => AgentProposal::STATUS_EXPIRED]);
+                }
+                throw ProposalGuidanceException::expired($proposal, $this->redraftPrompt($proposal));
+            }
+            if ($proposal->status === AgentProposal::STATUS_CONFIRMED) {
+                throw ProposalGuidanceException::alreadyConfirmed($proposal, $this->createdRecord($proposal));
             }
             if ($proposal->status !== AgentProposal::STATUS_PENDING) {
-                throw new ConflictHttpException('Proposition déjà traitée.');
+                throw ProposalGuidanceException::conflict($proposal, $this->redraftPrompt($proposal));
             }
-            $this->requirePermission($user, $proposal->action);
+            try {
+                $this->requirePermission($user, $proposal->action);
+            } catch (AccessDeniedHttpException $e) {
+                throw ProposalGuidanceException::refused($proposal, $e->getMessage());
+            }
             $result = $this->execute($user, $proposal);
             $proposal->update(['status' => AgentProposal::STATUS_CONFIRMED]);
             AiAnalysis::create([
@@ -103,10 +112,10 @@ class AgentProposalService
     public function cancel(User $user, AgentProposal $proposal): array
     {
         if ($proposal->user_id !== $user->id) {
-            throw new AccessDeniedHttpException('Cette proposition appartient à un autre utilisateur.');
+            throw ProposalGuidanceException::ownerMismatch($proposal);
         }
         if ($proposal->status === AgentProposal::STATUS_CONFIRMED) {
-            throw new ConflictHttpException("Proposition déjà exécutée, impossible de l'annuler.");
+            throw ProposalGuidanceException::alreadyConfirmed($proposal, $this->createdRecord($proposal));
         }
         $proposal->update(['status' => AgentProposal::STATUS_CANCELLED]);
 
@@ -114,7 +123,52 @@ class AgentProposalService
             'status' => 'cancelled',
             'action' => $proposal->action,
             'summary' => "Proposition annulée, rien n'a été créé.",
+            'next_action' => ['label' => 'Refaire la demande', 'prompt' => $this->redraftPrompt($proposal)],
         ];
+    }
+
+    /**
+     * Prompt de relance pré-rempli pour refaire la demande en un clic.
+     */
+    protected function redraftPrompt(AgentProposal $proposal): string
+    {
+        $p = is_array($proposal->payload) ? $proposal->payload : [];
+        $school = isset($p['school_name']) && is_string($p['school_name']) && $p['school_name'] !== ''
+            ? $p['school_name']
+            : null;
+
+        return match ($proposal->action) {
+            'create_report' => trim(sprintf(
+                'Signale %s: %s',
+                $school ? "à {$school}" : 'un problème',
+                Str::limit((string) ($p['description'] ?? 'un problème'), 120)
+            )),
+            'create_incident' => trim(sprintf(
+                'Crée une intervention %s: %s',
+                $school ? "à {$school}" : '',
+                Str::limit((string) ($p['title'] ?? 'sans titre'), 100)
+            )),
+            'create_maintenance_log' => trim(sprintf(
+                'Journalise %s XAF sur %s',
+                number_format((float) ($p['cost_amount'] ?? 0), 0, ',', ' '),
+                (string) ($p['incident_ref'] ?? "l'incident")
+            )),
+            default => 'Refais ma demande',
+        };
+    }
+
+    /**
+     * Retrouve l'objet créé par une proposition déjà confirmée (pour « Voir : … »).
+     */
+    protected function createdRecord(AgentProposal $proposal): ?array
+    {
+        $row = AiAnalysis::where('analysis_type', 'agent_action')
+            ->where('input_payload->proposal_id', $proposal->id)
+            ->latest()
+            ->first();
+        $out = $row?->output_payload;
+
+        return is_array($out) ? $out : null;
     }
 
     protected function requirePermission(User $user, string $action): void

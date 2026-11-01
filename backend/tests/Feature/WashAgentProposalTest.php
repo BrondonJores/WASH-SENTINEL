@@ -294,4 +294,98 @@ class WashAgentProposalTest extends TestCase
         }
         $this->assertDatabaseCount('agent_proposals', 0);
     }
+
+    public function test_expired_confirm_returns_guided_redraft_payload(): void
+    {
+        $user = $this->userWithRole('school_reporter', 'rep@wash.cm');
+        $school = $this->school();
+        $proposal = AgentProposal::create([
+            'user_id' => $user->id, 'action' => 'create_report',
+            'payload' => [
+                'school_id' => $school->id, 'school_name' => $school->name,
+                'description' => 'Fuite au robinet', 'category' => 'water_point',
+                'urgency' => 'low', 'affected_students' => 10,
+            ],
+            'status' => 'pending', 'expires_at' => now()->subMinute(),
+        ]);
+
+        $res = $this->postJson("/api/v1/wash/agent/proposals/{$proposal->id}/confirm");
+        $res->assertStatus(410)
+            ->assertJsonPath('status', 'expired')
+            ->assertJsonPath('next_action.label', 'Refaire la demande');
+        $this->assertStringContainsString('expiré', mb_strtolower((string) $res->json('message')));
+        $this->assertStringContainsString('Redemandez', (string) $res->json('message'));
+        $this->assertNotEmpty($res->json('next_action.prompt'));
+        $this->assertSame('expired', $proposal->fresh()->status);
+    }
+
+    public function test_double_confirm_returns_already_recorded_guidance(): void
+    {
+        $user = $this->userWithRole('maintenance_agent', 'agent@wash.cm');
+        $school = $this->school();
+        $proposal = AgentProposal::create([
+            'user_id' => $user->id, 'action' => 'create_incident',
+            'payload' => [
+                'school_id' => $school->id, 'school_name' => $school->name,
+                'title' => 'Forage à réhabiliter', 'category' => 'water_point',
+                'urgency' => 'high', 'affected_students' => 195,
+            ],
+            'status' => 'pending', 'expires_at' => now()->addMinutes(30),
+        ]);
+
+        $ref = $this->postJson("/api/v1/wash/agent/proposals/{$proposal->id}/confirm")
+            ->assertOk()->json('result.reference_code');
+
+        $res = $this->postJson("/api/v1/wash/agent/proposals/{$proposal->id}/confirm");
+        $res->assertStatus(409)
+            ->assertJsonPath('status', 'already_confirmed')
+            ->assertJsonPath('reference_code', $ref);
+        $this->assertStringContainsString('Déjà enregistré', (string) $res->json('message'));
+        $this->assertStringContainsString((string) $ref, (string) $res->json('message'));
+        $this->assertStringContainsString((string) $ref, (string) $res->json('next_action.prompt'));
+    }
+
+    public function test_confirm_cancelled_returns_conflict_guidance(): void
+    {
+        $user = $this->userWithRole('school_reporter', 'rep@wash.cm');
+        $school = $this->school();
+        $proposal = AgentProposal::create([
+            'user_id' => $user->id, 'action' => 'create_report',
+            'payload' => [
+                'school_id' => $school->id, 'school_name' => $school->name,
+                'description' => 'Fuite au robinet', 'category' => 'water_point',
+                'urgency' => 'low', 'affected_students' => 10,
+            ],
+            'status' => 'pending', 'expires_at' => now()->addMinutes(30),
+        ]);
+        $this->postJson("/api/v1/wash/agent/proposals/{$proposal->id}/cancel")->assertOk();
+
+        $res = $this->postJson("/api/v1/wash/agent/proposals/{$proposal->id}/confirm");
+        $res->assertStatus(409)
+            ->assertJsonPath('status', 'conflict')
+            ->assertJsonPath('next_action.label', 'Refaire la demande');
+        $this->assertStringContainsString('déjà traité', mb_strtolower((string) $res->json('message')));
+        $this->assertNotEmpty($res->json('next_action.prompt'));
+    }
+
+    public function test_confirm_without_permission_returns_refused_guidance(): void
+    {
+        $user = $this->userWithRole('school_reporter', 'rep@wash.cm');
+        $school = $this->school();
+        $proposal = AgentProposal::create([
+            'user_id' => $user->id, 'action' => 'create_incident',
+            'payload' => [
+                'school_id' => $school->id, 'school_name' => $school->name,
+                'title' => 'Forage HS', 'category' => 'water_point',
+                'urgency' => 'high', 'affected_students' => 100,
+            ],
+            'status' => 'pending', 'expires_at' => now()->addMinutes(30),
+        ]);
+
+        $res = $this->postJson("/api/v1/wash/agent/proposals/{$proposal->id}/confirm");
+        $res->assertStatus(403)->assertJsonPath('status', 'forbidden');
+        $this->assertStringContainsString('refusée', mb_strtolower((string) $res->json('message')));
+        $this->assertStringContainsString("Rien n'a été créé", (string) $res->json('message'));
+        $this->assertSame('pending', $proposal->fresh()->status);
+    }
 }
