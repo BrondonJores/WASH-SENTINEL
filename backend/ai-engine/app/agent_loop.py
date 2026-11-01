@@ -93,13 +93,9 @@ def _norm(text: str) -> str:
 
 
 def known_places(context: dict[str, Any]) -> tuple[list[str], list[str]]:
-    """(écoles, districts) connus du contexte, libellés d'affichage."""
-    schools = [str(s.get("school_name") or s.get("name") or "")
-               for s in context.get("schools", [])]
-    districts = {str(s.get("district") or "") for s in context.get("schools", [])}
-    districts |= {str(i.get("district") or "") for i in context.get("incidents", [])}
-    return ([s for s in schools if s],
-            sorted(d for d in districts if d))
+    """(écoles, districts) connus — délégation au canonique textnorm (AXE 3)."""
+    from .textnorm import known_places as _canonical_known_places
+    return _canonical_known_places(context or {})
 
 
 def resolve_place(message: str, context: dict[str, Any]) -> tuple[str, str] | None:

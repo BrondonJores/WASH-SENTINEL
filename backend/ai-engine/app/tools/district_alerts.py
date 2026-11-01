@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..schemas import AgentCard
+from ..textnorm import dedup_incidents, district_match, fold, parse_dt
 
 TOOL_NAME = "district_alerts"
 
@@ -69,65 +70,20 @@ def _parse_days(value: Any, default: int = 7) -> int:
     return min(max(days, 1), 90)
 
 
-def _parse_dt(raw: Any) -> datetime | None:
-    if not raw or not isinstance(raw, str):
-        return None
-    text = raw.strip().replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
 def _age_days(reported_at: Any, now: datetime) -> int | None:
-    parsed = _parse_dt(reported_at)
+    parsed = parse_dt(reported_at)
     if parsed is None:
         return None
     return max((now - parsed).days, 0)
 
 
-def _district_matches(item_district: Any, wanted: str) -> bool:
-    if not wanted:
-        return True
-    low = str(item_district or "").strip().lower()
-    if not low:
-        return False
-    return wanted in low or low in wanted
-
-
-def _dedup_incidents(*pools: Any) -> list[dict[str, Any]]:
-    """Fusion dédupliquée (id exact, sinon école+date+titre). Ordre stable.
-
-    Miroir local de epidemic_alerts._dedup_incidents (dupliqué : les outils
-    ne s'importent pas entre eux, cf. tools/__init__.py).
-    """
-    seen: set[Any] = set()
-    merged: list[dict[str, Any]] = []
-    for pool in pools:
-        for incident in pool or []:
-            if not isinstance(incident, dict):
-                continue
-            if incident.get("id") is not None:
-                key = ("id", incident.get("id"))
-            else:
-                key = ("row", incident.get("school_id"),
-                       str(incident.get("reported_at")),
-                       str(incident.get("title") or incident.get("summary")))
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(incident)
-    return merged
-
-
 def _is_no_water(incident: dict[str, Any]) -> bool:
-    if str(incident.get("issue_type") or "").strip().lower() in _NO_WATER_ISSUES:
+    if fold(incident.get("issue_type")).strip() in _NO_WATER_ISSUES:
         return True
-    text = f"{incident.get('title') or ''} {incident.get('summary') or ''}".lower()
-    return any(kw in text for kw in _NO_WATER_KEYWORDS)
+    # Famille absence-d'eau : NON niable ("pas d'eau" EST l'incident).
+    text = fold(f"{incident.get('title') or ''} "
+                f"{incident.get('summary') or ''}")
+    return any(fold(kw) in text for kw in _NO_WATER_KEYWORDS)
 
 
 def _school_districts(context: dict[str, Any]) -> dict[Any, str]:
@@ -147,12 +103,12 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         args = args or {}
         context = context or {}
         district = str(args.get("district") or "").strip()
-        district_low = district.lower()
         days = _parse_days(args.get("days", 7))
         now = datetime.now(timezone.utc)
 
         incidents = [i for i in (context.get("incidents", []) or [])
-                     if isinstance(i, dict) and _district_matches(i.get("district"), district_low)]
+                     if isinstance(i, dict)
+                     and district_match(i.get("district"), district)]
         if context.get("incidents") is None:
             # Cas "unknown" : clé manquante -> erreur (guidance). Une liste
             # présente mais vide est un vide valide -> carte typée vide.
@@ -205,14 +161,14 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         # Les deux flux Laravel fusionnés (dédupliqués) : un pic se détecte
         # quel que soit le flux peuplé. Les sans-date du district sont
         # comptés à part (prudent, traçable dans le titre).
-        pool = _dedup_incidents(context.get("incidents"),
-                                context.get("recent_incidents"))
+        pool = dedup_incidents(context.get("incidents"),
+                               context.get("recent_incidents"))
         recent_count = 0
         undated_count = 0
         for recent in pool:
             item_district = (recent.get("district")
                              or sid_district.get(recent.get("school_id")))
-            if district_low and not _district_matches(item_district, district_low):
+            if not district_match(item_district, district):
                 continue
             age = _age_days(recent.get("reported_at"), now)
             if age is None:

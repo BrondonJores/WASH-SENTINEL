@@ -181,3 +181,31 @@ class EpidemicAlertsCardTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EpidemicAlertsNegationTest(unittest.TestCase):
+    """AXE 3 : symptômes niés ignorés ; synonymes locaux détectés."""
+
+    def test_negated_symptom_no_cluster(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        ctx = {"incidents": [
+            _incident(1, 11, "École de Bonanjo", "Wouri",
+                      "Pas de diarrhée ni de vomissements cette semaine"),
+            _incident(2, 12, "École de Ngok", "Wouri",
+                      "Aucun cas de choléra, eau claire au forage"),
+        ]}
+        res = TOOL_EXECUTORS["epidemic_alerts"]({}, ctx)
+        self.assertEqual(res["clusters"], [])
+        self.assertIn("Aucun", res["insight"])
+
+    def test_pidgin_synonym_clusters(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        ctx = {"incidents": [
+            _incident(1, 11, "École de Bonanjo", "Wouri",
+                      "Pikin them get running stomach since morning"),
+            _incident(2, 12, "École de Ngok", "Wouri",
+                      "Dirty wata for tap, pikin them dey sick"),
+        ]}
+        res = TOOL_EXECUTORS["epidemic_alerts"]({}, ctx)
+        self.assertEqual(len(res["clusters"]), 1)
+        self.assertEqual(res["clusters"][0]["school_count"], 2)

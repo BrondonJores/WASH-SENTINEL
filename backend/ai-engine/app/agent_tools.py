@@ -16,16 +16,13 @@ except Exception:
 
 from .decision_agent import DecisionAgent
 from .schemas import SchoolMaintenanceHistory
-
-
-def _parse_dt(value: Any) -> datetime | None:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+from .textnorm import (
+    PLACE_CUTOFF,
+    dedup_incidents as _dedup_incidents,
+    fold,
+    parse_dt as _parse_dt,
+    score_place,
+)
 
 
 def _open_incidents(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -37,7 +34,12 @@ FRENCH_MONTHS = ["", "janvier", "février", "mars", "avril", "mai", "juin",
 
 
 def _resolve_school(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
-    schools = context.get("schools", [])
+    """Id exact, puis nom exact replié, puis meilleur flou (seuil balayé).
+
+    Égalité de score en tête = ambiguïté -> None (l'appelant fait choisir
+    l'utilisateur, même contrat que _resolve_incident).
+    """
+    schools = [s for s in context.get("schools", []) if isinstance(s, dict)]
     try:
         wanted = int(ref)
         for school in schools:
@@ -45,12 +47,22 @@ def _resolve_school(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
                 return school
     except (TypeError, ValueError):
         pass
-    hint = str(ref or "").strip().lower()
-    if hint:
-        for school in schools:
-            if hint in str(school.get("school_name", "")).lower():
-                return school
-    return None
+    hint = fold(ref)
+    if not hint:
+        return None
+    for school in schools:
+        if fold(school.get("school_name", "")) == hint:
+            return school
+    scored = sorted(
+        ((score_place(hint, school.get("school_name", "")), i, school)
+         for i, school in enumerate(schools)),
+        key=lambda t: (-t[0], t[1]),
+    )
+    if not scored or scored[0][0] < PLACE_CUTOFF:
+        return None
+    if len(scored) > 1 and scored[1][0] == scored[0][0]:
+        return None
+    return scored[0][2]
 
 
 def _school_choices(context: dict[str, Any], limit: int = 10) -> str:
@@ -78,30 +90,6 @@ def _float_cost(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-
-
-def _dedup_incidents(*pools: Any) -> list[dict[str, Any]]:
-    """Fusion dédupliquée de pools d'incidents (incidents + recent_incidents).
-
-    Clé id exact quand présent, sinon (école, date, titre). Ordre stable.
-    """
-    seen: set[Any] = set()
-    merged: list[dict[str, Any]] = []
-    for pool in pools:
-        for incident in pool or []:
-            if not isinstance(incident, dict):
-                continue
-            if incident.get("id") is not None:
-                key = ("id", incident.get("id"))
-            else:
-                key = ("row", incident.get("school_id"),
-                       str(incident.get("reported_at")),
-                       str(incident.get("title") or incident.get("summary")))
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(incident)
-    return merged
 
 
 HEATMAP_WINDOW_DAYS = 90
@@ -202,9 +190,9 @@ def build_budget_compare(context: dict[str, Any], district: Any = None,
     (incident_id → incidents/recent_incidents, repli champ category du log),
     sinon bucket "unknown". nb_pannes = incidents + recent_incidents dédupliqués.
     """
-    dlow = str(district or "").strip().lower()
+    dlow = fold(district or "")
     schools = [s for s in context.get("schools", [])
-               if not dlow or str(s.get("district", "")).lower() == dlow]
+               if not dlow or fold(s.get("district", "")) == dlow]
     scope_sids = {s.get("school_id") for s in schools}
     logs = [log for log in context.get("maintenance_logs", [])
             if isinstance(log, dict) and log.get("school_id") in scope_sids]
@@ -689,9 +677,9 @@ CAT_FR = {"water_point": "point d'eau", "toilets_latrines": "latrines",
 def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Assemble un mini-dossier de briefing (diaporama) déterministe."""
     district = str(args.get("district") or "").strip()
-    dlow = district.lower()
+    dlow = fold(district)
     schools = [s for s in context.get("schools", [])
-               if not dlow or str(s.get("district", "")).lower() == dlow]
+               if not dlow or fold(s.get("district", "")) == dlow]
     sids = {s.get("school_id") for s in schools}
     open_incs = [i for i in _open_incidents(context) if i.get("school_id") in sids]
     weights = {"critical": 10.0, "high": 5.0, "medium": 2.0, "low": 0.5}
@@ -756,12 +744,12 @@ def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[s
 
 def tool_territory_overview(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Vue géographique du territoire : écoles géolocalisées + urgences ouvertes."""
-    district = str(args.get("district") or "").strip().lower()
+    district = fold(str(args.get("district") or ""))
     weights = {"critical": 10.0, "high": 5.0, "medium": 2.0, "low": 0.5}
     points: list[dict[str, Any]] = []
     missing: list[str] = []
     for school in context.get("schools", []):
-        if district and str(school.get("district", "")).lower() != district:
+        if district and fold(str(school.get("district", ""))) != district:
             continue
         open_incs = [i for i in _open_incidents(context) if i.get("school_id") == school.get("school_id")]
         affected = sum(int(i.get("affected_students", 0) or 0) for i in open_incs)
@@ -811,10 +799,10 @@ def tool_territory_overview(args: dict[str, Any], context: dict[str, Any]) -> di
 def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Tendances mensuelles d'une école : pannes, coûts de réparation, jours sans service."""
     district = str(args.get("district") or "").strip()
-    dlow = district.lower()
+    dlow = fold(district)
     school = _resolve_school(context, args.get("school"))
     district_sids = {s.get("school_id") for s in context.get("schools", [])
-                     if dlow and str(s.get("district", "")).lower() == dlow}
+                     if dlow and fold(s.get("district", "")) == dlow}
     if not school and not district_sids:
         return {"error": f"École '{args.get('school')}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."}
     months = min(max(int(args.get("months", 3) or 3), 1), 12)
@@ -867,7 +855,7 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     # --- Enrichissement graphes (défensif, optionnel à la lecture) : portée
     # district si un district est passé, sinon échelle du contexte entier. ---
     scope_schools = [s for s in context.get("schools", [])
-                     if not dlow or str(s.get("district", "")).lower() == dlow]
+                     if not dlow or fold(s.get("district", "")) == dlow]
     scope_sids = {s.get("school_id") for s in scope_schools}
     bucket_set = set(buckets)
 

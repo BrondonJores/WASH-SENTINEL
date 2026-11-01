@@ -4,6 +4,11 @@ Les filets `_INFRA_KEYWORDS` / `_ISSUE_KEYWORDS` (français) et `_LOCAL_KEYWORDS
 (pidgin camerounais + douala, conservateur) ne servent qu'à normaliser les
 réponses LLM hors-liste vers des catégories valides. Ils ne modifient ni le
 prompt ni la formule de priorité `calculate_priority_score` (inchangée).
+
+AXE 3 : appariement replié sans accents (textnorm.fold), négation à portée
+côté pannes (famille absence-d'eau NON niable : "pas d'eau" EST l'incident),
+palier UNVALIDATED pour les langues locales (pidgin/anglais, validation
+locuteur requise avant promotion ; signalé via unknowns).
 """
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from typing import Any
 from .prompts import is_small_model, render_extractor_prompt
 from .providers import BaseLLMProvider
 from .schemas import ExtractedWashIncident, WashExtractionResponse
+from .textnorm import contains_keyword, fold, negation_spans
 
 #: Alias historique : rendu neutre du builder prompts.extractor_sections()
 #: (sans few-shots par défaut, taille stable).
@@ -86,6 +92,13 @@ class WashExtractor:
             and not self._wash_cue_hit(raw_text)
         )
 
+        # AXE 3 : le filet local UNVALIDATED n'a servi que si le LLM est
+        # hors-liste (repli) ET qu'aucun filet FR/validé n'a matché.
+        unvalidated_hit = (
+            (not infra_valid or not issue_valid)
+            and self._local_unvalidated_hit(raw_text)
+        )
+
         unknowns: list[str] = []
         if not infra_valid:
             unknowns.append("infrastructure_guess")
@@ -103,6 +116,8 @@ class WashExtractor:
             unknowns.append("empty_report")
         if off_topic:
             unknowns.append("off_topic_suspected")
+        if unvalidated_hit:
+            unknowns.append("local_language_unvalidated")
 
         confidence = 0.90
         if not infra_valid:
@@ -113,6 +128,8 @@ class WashExtractor:
             confidence -= 0.10
         if students_defaulted:
             confidence -= 0.10
+        if unvalidated_hit:
+            confidence -= 0.05
         if blank or off_topic:
             confidence -= 0.20
         confidence = round(max(0.05, min(0.95, confidence)), 2)
@@ -135,6 +152,7 @@ class WashExtractor:
                 "affected_students_unknown": "le nombre d'élèves impactés",
                 "school_unknown": "l'école concernée",
                 "health_hazard_default": "le risque sanitaire",
+                "local_language_unvalidated": "la validation du terme local par un locuteur",
             }
             parts = [labels[u] for u in unknowns if u in labels]
             next_action = f"Précisez {', '.join(parts)} pour fiabiliser le diagnostic."
@@ -216,13 +234,57 @@ class WashExtractor:
         (("lave-main", "lavage des mains", "lave mains"), "handwashing"),
         (("égout", "egout", "drain", "caniveau", "évacuation", "evacuation", "fosse"), "sewage_drainage"),
     )
+    # Filet pannes : (motif, catégorie, frontière, niable). Ordre INCHANGÉ
+    # (non-régression) : blockage, dry_well, breakdown, leak, vandalism,
+    # contamination. Frontière "subword" partout (allowlist explicite de
+    # tiges : bouch, diarrh, cholera, debord...) pour ne pas perdre le
+    # rappel sur flexions ("bouchées", "fuite"). Niable=False pour la
+    # famille absence-d'eau ("pas d'eau" EST l'incident) et les pannes
+    # "ne X" (positives par construction : "ne coule" = panne avérée).
     _ISSUE_KEYWORDS = (
-        (("bouch", "déborde", "deborde", "engorg"), "blockage"),
-        (("plus d'eau", "pas d'eau", "coupure", "coupé", "coupe", "à sec", "a sec", "tari", "asséch"), "dry_well"),
-        (("cass", "panne", "hors service", "ne marche", "ne fonctionne", "ne coule"), "total_breakdown"),
-        (("fuit", "coule", "goutte", "perce", "percé"), "leak"),
-        (("volé", "volée", "vandalis", "saccag", "détruit", "disparu"), "vandalism"),
-        (("eau jaune", "eau sale", "saleté", "contamin", "choléra", "cholera", "pollu", "trouble", "couleur"), "contamination"),
+        ("bouch", "blockage", "subword", True),
+        ("déborde", "blockage", "subword", True),
+        ("deborde", "blockage", "subword", True),
+        ("engorg", "blockage", "subword", True),
+        ("plus d'eau", "dry_well", "subword", False),
+        ("pas d'eau", "dry_well", "subword", False),
+        ("coupure", "dry_well", "subword", False),
+        ("coupé", "dry_well", "subword", False),
+        ("coupe", "dry_well", "subword", False),
+        ("à sec", "dry_well", "subword", False),
+        ("a sec", "dry_well", "subword", False),
+        ("tari", "dry_well", "subword", False),
+        ("asséch", "dry_well", "subword", False),
+        ("cass", "total_breakdown", "subword", False),
+        ("panne", "total_breakdown", "subword", False),
+        ("hors service", "total_breakdown", "subword", False),
+        ("ne marche", "total_breakdown", "subword", False),
+        ("ne fonctionne", "total_breakdown", "subword", False),
+        ("ne coule", "total_breakdown", "subword", False),
+        ("fuit", "leak", "subword", True),
+        ("coule", "leak", "subword", True),
+        ("goutte", "leak", "subword", True),
+        ("perce", "leak", "subword", True),
+        ("percé", "leak", "subword", True),
+        ("volé", "vandalism", "subword", True),
+        ("volée", "vandalism", "subword", True),
+        ("vandalis", "vandalism", "subword", True),
+        ("saccag", "vandalism", "subword", True),
+        ("détruit", "vandalism", "subword", True),
+        ("disparu", "vandalism", "subword", True),
+        ("eau jaune", "contamination", "subword", True),
+        ("eau sale", "contamination", "subword", True),
+        ("saleté", "contamination", "subword", True),
+        ("contamin", "contamination", "subword", True),
+        ("choléra", "contamination", "subword", True),
+        ("cholera", "contamination", "subword", True),
+        ("pollu", "contamination", "subword", True),
+        ("trouble", "contamination", "subword", True),
+        ("couleur", "contamination", "subword", True),
+        # Symptômes sentinelles (AXE 3, niables) : "diarrhée partout" doit
+        # remonter en contamination, "pas de diarrhée" rester muet.
+        ("diarrh", "contamination", "subword", True),
+        ("vomiss", "contamination", "subword", True),
     )
     # Filet langues locales — CONSERVATEUR : uniquement des termes haute-confiance.
     # Règle : en cas de doute sur un mot, NE PAS l'ajouter. Chaque entrée indique
@@ -236,26 +298,58 @@ class WashExtractor:
         # AVERTISSEMENT : validation par locuteur recommandée avant élargissement.
         (("madiba",), "water_point"),
     )
+    # Palier UNVALIDATED (AXE 3) : candidats pidgin/anglais/foulfouldé, consultés
+    # APRÈS le filet validé, signalés via unknowns ("local_language_unvalidated").
+    # NE PROMOUVOIR qu'après validation par un locuteur natif (note signée).
+    # "pikin" volontairement exclu : "enfant" n'est ni une infra ni une panne.
+    # "blocked" volontairement exclu : test_prompt_eval documente qu'il ne
+    # matche aucun mot-clé (filet -> total_breakdown).
+    _LOCAL_KEYWORDS_UNVALIDATED = (
+        # Pidgin : « dirty wata » = eau sale → point d'eau.
+        (("dirty wata",), "water_point"),
+        # Anglais standard : forage → point d'eau.
+        (("borehole",), "water_point"),
+        # Foulfouldé : « ndiyam » = eau → point d'eau.
+        (("ndiyam",), "water_point"),
+    )
+    # UNVALIDATED côté pannes : mêmes règles de consultation et de promotion.
+    _LOCAL_ISSUE_UNVALIDATED = (
+        (("running stomach", "dirty wata", "wata don dirty"), "contamination"),
+    )
 
     def _guess_infrastructure(self, raw_text: str) -> str:
         """Filet FR d'abord, puis filet local conservateur, sinon « water_point ».
 
         L'ordre du filet français est inchangé (non-régression) : le filet
         local ne s'applique qu'aux textes sans mot-clé français reconnu.
+        Appariement replié sans accents (AXE 3).
         """
-        t = raw_text.lower()
+        t = fold(raw_text)
         for keywords, value in self._INFRA_KEYWORDS:
-            if any(k in t for k in keywords):
+            if any(fold(k) in t for k in keywords):
                 return value
         for keywords, value in self._LOCAL_KEYWORDS:
-            if any(k in t for k in keywords):
+            if any(fold(k) in t for k in keywords):
+                return value
+        for keywords, value in self._LOCAL_KEYWORDS_UNVALIDATED:
+            if any(fold(k) in t for k in keywords):
                 return value
         return "water_point"
 
     def _guess_issue(self, raw_text: str) -> str:
-        t = raw_text.lower()
-        for keywords, value in self._ISSUE_KEYWORDS:
-            if any(k in t for k in keywords):
+        """Filet pannes avec négation à portée (AXE 3).
+
+        Chaque motif niable est ignoré sous négateur ("pas de diarrhée",
+        "sans choléra") ; la famille absence-d'eau et les "ne X" restent
+        positifs. Palier local UNVALIDATED avant le défaut.
+        """
+        t = fold(raw_text)
+        spans = negation_spans(t)
+        for pattern, value, boundary, negatable in self._ISSUE_KEYWORDS:
+            if contains_keyword(t, pattern, boundary, negatable, spans):
+                return value
+        for keywords, value in self._LOCAL_ISSUE_UNVALIDATED:
+            if any(contains_keyword(t, k, "subword", True, spans) for k in keywords):
                 return value
         return "total_breakdown"
 
@@ -279,18 +373,42 @@ class WashExtractor:
 
     def _infra_keyword_hit(self, raw_text: str) -> bool:
         """True si le filet infra aurait matché (lecture seule des tables)."""
-        t = raw_text.lower()
-        tables = (*self._INFRA_KEYWORDS, *self._LOCAL_KEYWORDS)
-        return any(k in t for keywords, _ in tables for k in keywords)
+        t = fold(raw_text)
+        tables = (*self._INFRA_KEYWORDS, *self._LOCAL_KEYWORDS,
+                  *self._LOCAL_KEYWORDS_UNVALIDATED)
+        return any(fold(k) in t for keywords, _ in tables for k in keywords)
 
     def _issue_keyword_hit(self, raw_text: str) -> bool:
         """True si le filet panne aurait matché (lecture seule des tables)."""
-        t = raw_text.lower()
-        return any(k in t for keywords, _ in self._ISSUE_KEYWORDS for k in keywords)
+        t = fold(raw_text)
+        spans = negation_spans(t)
+        for pattern, _, boundary, negatable in self._ISSUE_KEYWORDS:
+            if contains_keyword(t, pattern, boundary, negatable, spans):
+                return True
+        tables = self._LOCAL_ISSUE_UNVALIDATED
+        return any(contains_keyword(t, k, "subword", True, spans)
+                   for keywords, _ in tables for k in keywords)
+
+    def _local_unvalidated_hit(self, raw_text: str) -> bool:
+        """True si seul le palier UNVALIDATED a matché (ni FR ni validé)."""
+        t = fold(raw_text)
+        tables_fr = (*self._INFRA_KEYWORDS, *self._LOCAL_KEYWORDS)
+        if any(fold(k) in t for keywords, _ in tables_fr for k in keywords):
+            return False
+        spans = negation_spans(t)
+        for pattern, _, boundary, negatable in self._ISSUE_KEYWORDS:
+            if contains_keyword(t, pattern, boundary, negatable, spans):
+                return False
+        if any(fold(k) in t for keywords, _ in self._LOCAL_KEYWORDS_UNVALIDATED
+               for k in keywords):
+            return True
+        return any(contains_keyword(t, k, "subword", True, spans)
+                   for keywords, _ in self._LOCAL_ISSUE_UNVALIDATED
+                   for k in keywords)
 
     def _wash_cue_hit(self, raw_text: str) -> bool:
         """True si un indice WASH large est présent (anti-faux-hors-sujet)."""
-        t = raw_text.lower()
+        t = fold(raw_text)
         if re.search(r"\beau\b", t):
             return True
-        return any(k in t for k in self._WASH_CUES)
+        return any(fold(k) in t for k in self._WASH_CUES)

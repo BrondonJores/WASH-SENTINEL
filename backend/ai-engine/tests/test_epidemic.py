@@ -221,3 +221,42 @@ class EpidemicFixturesTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NegationFixturesTest(unittest.IsolatedAsyncioTestCase):
+    """AXE 3 : symptômes niés -> silence ; synonymes locaux -> cluster."""
+
+    async def test_negated_symptoms_stay_normal(self) -> None:
+        llm = FakeLLM({"risk_level": "outbreak_warning",
+                       "alert_triggered": True})
+        req = EpidemicClusterRequest(
+            district=DISTRICT,
+            recent_incidents=[
+                make_inc(41, "École Publique Centre A", DISTRICT, "sante",
+                         "Pas de diarrhée ni de vomissements cette semaine.", 1),
+                make_inc(42, "École Les Palmiers", DISTRICT, "sante",
+                         "Aucun cas de choléra signalé, eau claire.", 2),
+            ],
+        )
+        res = await EpidemicDetector(llm).detect_cluster(req)  # type: ignore[arg-type]
+        self.assertEqual(res.risk_level, "normal")
+        self.assertFalse(res.alert_triggered)
+        # incident_count = périmètre (district+fenêtre), pas signaux matchés.
+        self.assertEqual(res.incident_count, 2)
+        self.assertEqual(llm.calls, 0)
+
+    async def test_local_synonyms_cluster_with_french_strong(self) -> None:
+        llm = FakeLLM({})
+        req = EpidemicClusterRequest(
+            district=DISTRICT,
+            recent_incidents=[
+                make_inc(43, "École Publique Centre A", DISTRICT, "sante",
+                         "Deux cas de choléra confirmés au dispensaire.", 1),
+                make_inc(44, "École Les Palmiers", DISTRICT, "sante",
+                         "Pikin them get running stomach, dirty wata for tap.", 1),
+            ],
+        )
+        res = await EpidemicDetector(llm).detect_cluster(req)  # type: ignore[arg-type]
+        self.assertEqual(res.risk_level, "high")
+        self.assertTrue(res.alert_triggered)
+        self.assertEqual(res.incident_count, 2)

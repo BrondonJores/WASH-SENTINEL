@@ -177,3 +177,73 @@ class HonestConfidenceTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NegationBatteryTest(unittest.TestCase):
+    """AXE 3 : négation scopée + accents + gazetteer (filet à mots-clés)."""
+
+    def setUp(self) -> None:
+        self.ex = WashExtractor(llm=None)  # type: ignore[arg-type]
+
+    def test_positive_control_is_contamination(self) -> None:
+        self.assertEqual(
+            self.ex._guess_issue("Diarrhée dans trois classes ce matin."),
+            "contamination")
+
+    def test_negated_symptom_is_not_contamination(self) -> None:
+        self.assertEqual(
+            self.ex._guess_issue("Pas de diarrhée signalée cette semaine."),
+            "total_breakdown")
+        self.assertEqual(
+            self.ex._guess_issue("L'eau n'est pas jaune au forage."),
+            "total_breakdown")
+        self.assertEqual(
+            self.ex._guess_issue("Aucun vomissement à la cantine."),
+            "total_breakdown")
+        self.assertEqual(
+            self.ex._guess_issue("No cholera in the school yard."),
+            "total_breakdown")
+
+    def test_absence_stays_dry_well(self) -> None:
+        self.assertEqual(
+            self.ex._guess_issue("Pas d'eau au robinet depuis lundi."),
+            "dry_well")
+
+    def test_accent_fold_uppercase(self) -> None:
+        self.assertEqual(
+            self.ex._guess_infrastructure("ÉVACUATION bouchée derrière les classes."),
+            "sewage_drainage")
+
+    def test_gazetteer_validated_and_unvalidated(self) -> None:
+        self.assertEqual(
+            self.ex._guess_infrastructure("Dirty wata stand for yard."),
+            "water_point")
+        self.assertTrue(self.ex._local_unvalidated_hit("Borehole don spoil."))
+        self.assertFalse(
+            self.ex._local_unvalidated_hit("Wata don spoil for pump."))
+
+    def test_dual_form_causal_compound(self) -> None:
+        self.assertEqual(
+            self.ex._guess_issue("La pompe est cassée donc l'eau ne coule plus."),
+            "total_breakdown")
+
+
+class GazetteerExtractTest(unittest.IsolatedAsyncioTestCase):
+    """Niveau non validé -> unknowns traçables via extract()."""
+
+    async def test_unvalidated_local_hits_unknowns(self) -> None:
+        stub = StubLLM({
+            "school_detected": None,
+            "infrastructure_type": "other",
+            "issue_type": "other",
+            "urgency_level": "medium",
+            "estimated_affected_students": 0,
+            "health_hazard_risk": "low",
+            "short_summary": "Borehole broken.",
+        })
+        ex = WashExtractor(llm=stub)  # type: ignore[arg-type]
+        # "borehole" seul : niveau non validé, aucun token validé (wata...).
+        res = await ex.extract("The borehole is broken, no spare parts.")
+        self.assertEqual(res.data.infrastructure_type, "water_point")
+        self.assertIn("local_language_unvalidated", res.unknowns)
+        self.assertTrue(res.next_action)

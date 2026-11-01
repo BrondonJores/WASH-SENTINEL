@@ -855,3 +855,37 @@ class ExplainIncidentRefTest(unittest.TestCase):
         res = TOOL_EXECUTORS["explain_incident"]({"incident_id": "ZZZ"}, self._ctx())
         self.assertIn("error", res)
         self.assertIn("WASH-2026-QJHIPH", res["error"])
+
+
+class ResolveSchoolFuzzyTest(unittest.TestCase):
+    """AXE 3 : typo résolue, égalité -> None, district accentué."""
+
+    def test_typo_resolves_best(self) -> None:
+        from app.agent_tools import _resolve_school
+        hit = _resolve_school(CONTEXT, "Nkole")
+        self.assertIsNotNone(hit)
+        assert hit is not None
+        self.assertEqual(hit["school_name"], "École de Nkol")
+
+    def test_tie_returns_none(self) -> None:
+        from app.agent_tools import _resolve_school
+        ctx = {"schools": [
+            {"school_id": 1, "school_name": "École Alpha"},
+            {"school_id": 2, "school_name": "École Beta"},
+        ]}
+        # "ecole" seul : les deux noms scorent à égalité -> ambigu.
+        self.assertIsNone(_resolve_school(ctx, "École"))
+
+    def test_accented_district_filter(self) -> None:
+        ctx = {"schools": [
+            {"school_id": 1, "school_name": "E1",
+             "district": "Vallée-du-Ntem",
+             "latitude": 4.0, "longitude": 9.6},
+            {"school_id": 2, "school_name": "E2",
+             "district": "Mvila",
+             "latitude": None, "longitude": None},
+        ], "incidents": []}
+        res = TOOL_EXECUTORS["territory_overview"](
+            {"district": "vallee-du-ntem"}, ctx)
+        self.assertEqual(res["total"], 1)
+        self.assertEqual(res["schools"][0]["school_name"], "E1")

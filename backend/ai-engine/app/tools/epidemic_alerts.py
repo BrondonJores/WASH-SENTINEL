@@ -6,11 +6,20 @@ sur la fenêtre demandée. Logique maison à mots-clés, déterministe.
 """
 from __future__ import annotations
 
-import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..schemas import AgentCard
+from ..textnorm import (
+    HEALTH_SIGNALS,
+    dedup_incidents,
+    district_match,
+    find_keyword_spans,
+    fold,
+    is_negated,
+    negation_spans,
+    parse_dt,
+)
 
 TOOL_NAME = "epidemic_alerts"
 
@@ -65,60 +74,34 @@ INTENT_HINTS = frozenset({
     "malades",
 })
 
-# Signaux sanitaires : mots-clés sur texte normalisé (minuscules, sans accents).
-_SIGNAL_KEYWORDS = (
-    "contamination", "contamine",  # contamination / contaminé / contaminée
-    "cholera",
-    "souille",  # eau souillée
-    "jaune", "trouble",  # eau jaune / trouble
-    "diarrhee", "vomissement",
-    "epidemi",  # épidémie / épidémique
-    "deborde",  # latrines débordées
-    "fecal",  # matières fécales
-)
-
 # Seuil multi-écoles : en dessous, incident(s) isolé(s), pas de cluster.
 CLUSTER_MIN_SCHOOLS = 2
 
-
-def _fold(text: Any) -> str:
-    """Minuscules + sans accents (comparaisons robustes)."""
-    lowered = str(text or "").lower()
-    return "".join(
-        c for c in unicodedata.normalize("NFD", lowered)
-        if unicodedata.category(c) != "Mn"
-    )
-
-
-def _parse_dt(value: Any) -> datetime | None:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-
-def _dedup_incidents(*pools: Any) -> list[dict[str, Any]]:
-    """Fusion dédupliquée (id exact, sinon école+date+titre). Ordre stable."""
-    seen: set[Any] = set()
-    merged: list[dict[str, Any]] = []
-    for pool in pools:
-        for incident in pool or []:
-            if not isinstance(incident, dict):
-                continue
-            if incident.get("id") is not None:
-                key = ("id", incident.get("id"))
-            else:
-                key = ("row", incident.get("school_id"),
-                       str(incident.get("reported_at")),
-                       str(incident.get("title") or incident.get("summary")))
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(incident)
-    return merged
+#: Libellés d'affichage des tiges sanitaires (table partagée HEALTH_SIGNALS).
+_SIGNAL_LABELS = {
+    "diarrh": "diarrhée",
+    "cholera": "choléra",
+    "vomiss": "vomissements",
+    "vomit": "vomissements",
+    "dysenteri": "dysenterie",
+    "contamin": "contamination",
+    "eau jaune": "eau jaune",
+    "jaune": "eau jaune",
+    "jaunatre": "eau jaunâtre",
+    "debord": "débordement",
+    "souille": "eau souillée",
+    "epidemi": "épidémie",
+    "fecal": "matières fécales",
+    "trouble": "eau trouble",
+    "odeur": "odeur",
+    "gout": "goût",
+    "ventre": "maux de ventre",
+    "nause": "nausées",
+    "dirty water": "eau sale",
+    "running stomach": "diarrhée",
+    "dirty wata": "eau sale",
+    "wata don dirty": "eau sale",
+}
 
 
 def _incident_district(incident: dict[str, Any],
@@ -135,7 +118,7 @@ def _incident_district(incident: dict[str, Any],
 def _school_key(incident: dict[str, Any]) -> str:
     if incident.get("school_id") is not None:
         return f"id:{incident.get('school_id')}"
-    name = _fold(incident.get("school_name")).strip()
+    name = fold(incident.get("school_name")).strip()
     if name:
         return f"name:{name}"
     return "unknown"  # prudent : écoles inconnues = un seul bucket
@@ -151,16 +134,30 @@ def _school_label(incident: dict[str, Any]) -> str:
 
 
 def _signal_keywords(incident: dict[str, Any]) -> list[str]:
-    text = _fold(f"{incident.get('title') or ''} {incident.get('summary') or ''}")
-    matched = [kw for kw in _SIGNAL_KEYWORDS if kw in text]
-    if _fold(incident.get("issue_type")).strip() == "contamination":
-        if "contamination" not in matched:
-            matched.append("contamination")
+    """Tiges sanitaires matchées hors négation (table partagée)."""
+    text = fold(f"{incident.get('title') or ''} "
+                f"{incident.get('summary') or ''}")
+    spans = negation_spans(text)
+    matched: list[str] = []
+    for pattern, _strength, boundary, negatable in HEALTH_SIGNALS:
+        hits = find_keyword_spans(text, pattern, boundary)
+        if not hits:
+            continue
+        if negatable and all(is_negated(s, e, spans) for s, e in hits):
+            continue
+        matched.append(pattern)
+    if fold(incident.get("issue_type")).strip() == "contamination":
+        if "contamin" not in matched:
+            matched.append("contamin")
     return matched
 
 
+def _signal_labels(patterns: list[str] | set[str]) -> list[str]:
+    return sorted({_SIGNAL_LABELS.get(p, p) for p in patterns})
+
+
 def _cluster_risk(school_count: int, signals: set[str]) -> str:
-    if "cholera" in signals or "diarrhee" in signals:
+    if "cholera" in signals or "diarrh" in signals:
         return "outbreak_warning"
     if school_count >= 3:
         return "high"
@@ -177,8 +174,8 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             days = 7
         days = min(max(days, 1), 90)
-        district_filter = _fold(args.get("district")).strip() or None
-        district_label = str(args.get("district") or "").strip() or None
+        district_arg = args.get("district")
+        district_label = str(district_arg or "").strip() or None
         if (context.get("incidents") is None
                 and context.get("recent_incidents") is None):
             # Cas "unknown" : clés manquantes -> erreur (guidance). Des listes
@@ -193,19 +190,19 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             if isinstance(school, dict) and school.get("school_id") is not None:
                 schools_by_id[school.get("school_id")] = school
 
-        pool = _dedup_incidents(context.get("incidents"),
-                                context.get("recent_incidents"))
+        pool = dedup_incidents(context.get("incidents"),
+                               context.get("recent_incidents"))
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         # Incidents sanitaires dans la fenêtre (sans date = conservé, prudent).
         signals: list[dict[str, Any]] = []
         for incident in pool:
-            seen_at = _parse_dt(incident.get("reported_at")
-                                or incident.get("created_at"))
+            seen_at = parse_dt(incident.get("reported_at")
+                               or incident.get("created_at"))
             if seen_at is not None and seen_at < cutoff:
                 continue
             district = _incident_district(incident, schools_by_id)
-            if district_filter and _fold(district) != district_filter:
+            if not district_match(district, district_arg):
                 continue
             matched = _signal_keywords(incident)
             if matched:
@@ -215,7 +212,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         # Regroupement par district, cluster si >= 2 écoles distinctes.
         by_district: dict[str, list[dict[str, Any]]] = {}
         for entry in signals:
-            key = _fold(entry["district"]) or "unknown"
+            key = fold(entry["district"]) or "unknown"
             by_district.setdefault(key, []).append(entry)
 
         clusters: list[dict[str, Any]] = []
@@ -227,6 +224,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             sig_words: set[str] = set()
             for e in entries:
                 sig_words.update(e["matched"])
+            sig_labels = _signal_labels(sig_words)
             display = entries[0]["district"] or "District inconnu"
             labels = sorted({_school_label(e["incident"]) for e in entries})
             clusters.append({
@@ -235,7 +233,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 "schools": labels,
                 "school_count": len(schools),
                 "incident_count": len(entries),
-                "signals": sorted(sig_words),
+                "signals": sig_labels,
                 "incidents": [{
                     "id": e["incident"].get("id"),
                     "school_name": _school_label(e["incident"]),

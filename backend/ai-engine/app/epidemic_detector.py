@@ -17,21 +17,32 @@ Limites honnêtes :
 - Jamais confronté à de vraies données terrain : les seuils sont réglés
   sur 5 fixtures synthétiques, pas sur des cas historiques ni une courbe
   ROC. Recalibrer dès que des données réelles existent.
-- Mots-clés français uniquement, sans analyse de négation ("pas de
-  diarrhée" compte à tort comme signal) ni prise en charge des langues
-  locales camerounaises.
+- Négation à portée (AXE 3) : "pas de diarrhée / sans choléra / no
+  vomiting" ne comptent plus comme signal ; les synonymes locaux
+  (pidgin/anglais) restent pour partie UNVALIDATED (validation locuteur
+  requise, cf. textnorm.HEALTH_SIGNALS).
 - Aucune donnée sanitaire externe (centres de santé, pluviométrie,
   saisonnalité du choléra) : le détecteur ne voit que les signalements.
 """
 
 from __future__ import annotations
 
-import unicodedata
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from .providers import BaseLLMProvider
 from .schemas import DistrictIncidentRecord, EpidemicClusterRequest, EpidemicClusterResponse
+from .textnorm import (
+    HEALTH_SIGNALS,
+    STRONG_HEALTH_PATTERNS,
+    WEAK_HEALTH_PATTERNS,
+    district_match,
+    find_keyword_spans,
+    fold,
+    is_negated,
+    negation_spans,
+    parse_date,
+)
 
 EPIDEMIC_ANALYZER_SYSTEM = """
 Tu es l'épidémiologiste et expert en santé publique de WASH Sentinel.
@@ -69,29 +80,19 @@ OUTBREAK_MIN_STRONG_SCHOOLS = 3
 #: avérée ; déclenche l'alerte (riposte) sans le niveau maximal.
 HIGH_MIN_STRONG_SCHOOLS = 2
 
-#: Sous-strings (normalisés : minuscules, sans accents) trahissant un danger
-#: sanitaire avéré : symptômes ou contamination explicite de l'eau/latrines.
-STRONG_SIGNAL_KEYWORDS = (
-    "diarrh",    # diarrhée(s) — symptôme sentinelle n°1 des épidémies hydriques
-    "cholera",   # mention explicite (même suspectée) : toujours maximale
-    "vomiss",    # vomissements groupés = toxi-infection / choléra possible
-    "dysenteri",  # dysenterie (selles sanglantes) : gravité immédiate
-    "contamin",  # contamination / eau contaminée : cause racine explicite
-    "eau jaune",  # eau jaune : turbidité/pollution organique visible
-    "jaune",     # couvre "l'eau est jaune" (tournure courante des signalements)
-    "jaunatre",  # variante orthographique fréquente
-    "debord",    # latrines/WC qui débordent : contact fécal direct
-)
-
-#: Sous-strings trahissant un indice faible : anomalie sensorielle ou trouble
-#: digestif vague, insuffisant seul pour alerter mais à surveiller.
-WEAK_SIGNAL_KEYWORDS = (
-    "trouble",  # eau trouble : anomalie visuelle, pas de symptôme
-    "odeur",    # odeur inhabituelle : indice, pas preuve
-    "gout",     # goût étrange : subjectif, à recouper
-    "ventre",   # maux de ventre : vague, non spécifique
-    "nause",    # nausées : symptôme léger, non spécifique
-)
+#: Table unique des signaux sanitaires (AXE 3, cf. textnorm.HEALTH_SIGNALS) :
+#: (motif replié, force, frontière word|subword, niable). Partagée avec
+#: tools/epidemic_alerts.py (les deux listes divergentes sont supprimées).
+#: Historique des motifs français :
+#: - forts : diarrhée(s) sentinelle n°1, choléra explicite, vomissements
+#:   groupés, dysenterie, contamination explicite, eau jaune/jaune/jaunâtre,
+#:   latrines qui débordent (+ souille/epidemi/fecal ex-epidemic_alerts) ;
+#: - faibles : eau trouble, odeur, goût (mot entier : "gout" ne matche plus
+#:   "goutte"), maux de ventre, nausées.
+#: Les motifs faibles sont en frontière "word" (anti-faux-positifs) ; les
+#: tiges fortes restent "subword" (rappel sur flexions).
+STRONG_SIGNAL_KEYWORDS = STRONG_HEALTH_PATTERNS
+WEAK_SIGNAL_KEYWORDS = WEAK_HEALTH_PATTERNS
 
 #: Actions d'urgence servies quand le LLM est indisponible ou muet.
 #: Justification : kit standard OMS/choléra (chloration, hygiène, prélèvement)
@@ -104,33 +105,38 @@ DEFAULT_HEALTH_ACTIONS = [
 
 
 def _normalize(text: str | None) -> str:
-    """Minuscules + suppression des accents pour une comparaison robuste."""
-    ascii_folded = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode("ascii")
-    return " ".join(ascii_folded.lower().split())
+    """Alias historique : repli canonique (cf. textnorm.fold)."""
+    return fold(text)
 
 
 def _parse_reported_date(value: str | None) -> date | None:
-    """Parse ``reported_at`` (ISO ``AAAA-MM-JJ`` ou datetime ISO), None sinon."""
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).strip()).date()
-    except ValueError:
-        return None
+    """Parse ``reported_at`` (ISO ``AAAA-MM-JJ`` ou datetime ISO), None sinon.
+
+    Sur-ensemble historique : tolère aussi le suffixe Z et les objets
+    date/datetime (cf. textnorm.parse_date).
+    """
+    return parse_date(value)
 
 
 def signal_strength(incident: DistrictIncidentRecord) -> str:
     """Force du signal sanitaire d'un incident : ``strong`` | ``weak`` | ``none``.
 
     Les signaux forts (symptômes, contamination explicite) priment : dès
-    qu'un mot-clé fort est présent, l'incident est fort même s'il contient
-    aussi des mots faibles.
+    qu'un motif fort est présent hors négation, l'incident est fort même
+    s'il contient aussi des mots faibles. Chaque motif niable sous
+    négateur ("pas de diarrhée", "sans choléra") est ignoré.
     """
-    haystack = _normalize(f"{incident.category} {incident.summary}")
-    if any(kw in haystack for kw in STRONG_SIGNAL_KEYWORDS):
-        return "strong"
-    if any(kw in haystack for kw in WEAK_SIGNAL_KEYWORDS):
-        return "weak"
+    haystack = fold(f"{incident.category} {incident.summary}")
+    spans = negation_spans(haystack)
+    for strength in ("strong", "weak"):
+        for pattern, entry_strength, boundary, negatable in HEALTH_SIGNALS:
+            if entry_strength != strength:
+                continue
+            matches = find_keyword_spans(haystack, pattern, boundary)
+            if not matches:
+                continue
+            if not negatable or any(not is_negated(s, e, spans) for s, e in matches):
+                return strength
     return "none"
 
 
@@ -154,11 +160,10 @@ class EpidemicDetector:
         self, req: EpidemicClusterRequest, today: date
     ) -> list[DistrictIncidentRecord]:
         """Incidents du district demandé ET dans la fenêtre temporelle."""
-        district = _normalize(req.district)
         return [
             inc
             for inc in req.recent_incidents
-            if _normalize(inc.district) == district
+            if district_match(inc.district, req.district)
             and _is_within_window(_parse_reported_date(inc.reported_at), today)
         ]
 
@@ -225,7 +230,7 @@ class EpidemicDetector:
         # très bavarde déclenche seule une alerte de grappe).
         school_signals: dict[str, str] = {}
         for inc in relevant:
-            key = _normalize(inc.school_name)
+            key = fold(inc.school_name)
             strength = signal_strength(inc)
             if strength == "strong" or key not in school_signals:
                 school_signals[key] = strength
