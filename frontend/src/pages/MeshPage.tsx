@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, ApiError } from '../lib/api';
+import { api, ApiError, API_URL } from '../lib/api';
 import type { School } from '../lib/api';
 import { Badge, Button, Card, PageHeader } from '../components/ui';
 import { ErrorBanner } from '../components/crud';
@@ -13,6 +13,17 @@ interface HopNode {
 }
 
 const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
+
+/**
+ * MIROIRS MESH (ne pas modifier sans synchroniser) : mesh-sdk.ts ne les
+ * exporte pas (fichier vendored, CI d'identité) — valeurs recopiées ici.
+ * - MESH_TTL_DAYS = 7 ↔ SDK `TTL_DAYS` ↔ wash.php `mesh.default_ttl_days`
+ * - MESH_DEFAULT_MAX_HOPS = 10 ↔ SDK `DEFAULT_MAX_HOPS` ↔ wash.php `mesh.default_max_hops`
+ * Le texte d'aide ci-dessous est interpolé depuis ces CONST (jamais figé).
+ */
+const MESH_TTL_DAYS = 7;
+const MESH_DEFAULT_MAX_HOPS = 10;
+const MESH_MS_PER_DAY = 86_400_000;
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -44,7 +55,7 @@ export default function MeshPage() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch(`${(import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost/api'}/v1/mesh/stats`);
+      const res = await fetch(`${API_URL}/v1/mesh/stats`);
       if (res.ok) setStats(await res.json());
     } catch {
       /* API pas encore migrée */
@@ -78,8 +89,7 @@ export default function MeshPage() {
     setBusy(true);
     setError(null);
     try {
-      const base = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost/api';
-      const res = await fetch(`${base}/v1/mesh/bundles`, {
+      const res = await fetch(`${API_URL}/v1/mesh/bundles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -90,8 +100,8 @@ export default function MeshPage() {
               school_id: Number(schoolId),
               message,
               hops,
-              max_hops: 10,
-              expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+              max_hops: MESH_DEFAULT_MAX_HOPS,
+              expires_at: new Date(Date.now() + MESH_TTL_DAYS * MESH_MS_PER_DAY).toISOString(),
               received_via_node_id: nodes[2].id,
             },
           ],
@@ -176,7 +186,7 @@ export default function MeshPage() {
           Page terrain publique (sans login, iOS/Android) : <a className="font-medium text-accent underline" href="/m">/m</a> —
           saisie offline, QR réel, upload, secours SMS.
         </p>
-        <p>Démo du protocole store-and-forward : déduplication par <span className="font-mono">bundle_id</span>, anti-boucle via <span className="font-mono">hops</span>, TTL 7 jours, <span className="font-mono">max_hops</span> 10. Le relai mesh (<span className="font-mono">:8001</span>) et le SDK <span className="font-mono">mesh/sdk/mesh-sdk.ts</span> implémentent le même protocole pour les vrais téléphones.</p>
+        <p>Démo du protocole store-and-forward : déduplication par <span className="font-mono">bundle_id</span>, anti-boucle via <span className="font-mono">hops</span>, TTL {MESH_TTL_DAYS} jours, <span className="font-mono">max_hops</span> {MESH_DEFAULT_MAX_HOPS}. Le relai mesh (<span className="font-mono">:8001</span>) et le SDK <span className="font-mono">mesh/sdk/mesh-sdk.ts</span> implémentent le même protocole pour les vrais téléphones.</p>
       </Card>
     </div>
   );

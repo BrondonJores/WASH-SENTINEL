@@ -7,6 +7,7 @@ import { Select } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { CATEGORY_FR, CHANNEL_FR, INPUT_CLS, URGENCY_FR, fmtDate, fmtNum, urgencyTone } from '../lib/wash';
+import { DEFAULT_PER_PAGE } from '../lib/pagination';
 
 // Valeurs réelles de `analysis_type` observées dans backend/app (lecture seule) :
 // triage (IncidentTriageService), repair (WashIncidentController),
@@ -178,7 +179,7 @@ const buildSummary = (a: AiAnalysis): Summary => {
 export default function JournalPage() {
   const [items, setItems] = useState<AiAnalysis[]>([]);
   const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(20);
+  const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);

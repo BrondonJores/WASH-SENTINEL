@@ -46,6 +46,10 @@ import type { SealKey } from '../lib/mesh-crypto';
 const outbox = new MeshOutbox();
 const SCANNER_ID = 'mesh-field-qr-reader';
 const FILE_SCAN_ID = 'mesh-field-qr-file';
+/** Flush best-effort périodique de la file (fallback minuteur pour iOS/Safari). */
+const MESH_FLUSH_INTERVAL_MS = 30_000;
+/** Durée max d'un vocal terrain (auto-stop ; les textes « 30 s » en découlent). */
+const MESH_VOCAL_MAX_MS = 30_000;
 const SMS_TYPES = [
   { value: 'P', label: 'P — Panne pompe/forage' },
   { value: 'L', label: 'L — Latrine' },
@@ -265,7 +269,7 @@ export default function MeshFieldPage() {
     window.addEventListener('online', kick);
     document.addEventListener('visibilitychange', onVisible);
     sw?.addEventListener('message', onSwMessage);
-    const timer = window.setInterval(kick, 30000);
+    const timer = window.setInterval(kick, MESH_FLUSH_INTERVAL_MS);
     kick();
     return () => {
       window.removeEventListener('online', kick);
@@ -372,7 +376,7 @@ export default function MeshFieldPage() {
         setRecording(true);
         window.setTimeout(() => {
           if (recorderRef.current === rec && rec.state === 'recording') rec.stop();
-        }, 30000);
+        }, MESH_VOCAL_MAX_MS);
       })
       .catch(() => setError('Micro inaccessible (autorisation + HTTPS requis).'));
   };

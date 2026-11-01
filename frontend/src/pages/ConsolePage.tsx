@@ -23,9 +23,14 @@ import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
 import { SlowWaitActions, WaitingSteps } from '../components/StreamingStatus';
 import { UX_WAIT_TIMEOUT_MS } from '../lib/streaming';
+import { LOCALE } from '../lib/locale';
+import { MAX_VOICE_MESSAGE } from '../lib/voice-limits';
+import { AGENT_INPUT_MAX_CHARS } from '../lib/agent-limits';
 
 const CHUNK = 8;
 const TICK_MS = 18;
+/** Rotation des questions suggérées sur l'écran d'accueil. */
+const HINT_ROTATE_MS = 4200;
 
 const BUBBLES = [
   { left: 4, size: 10, dur: 14, delay: 0 },
@@ -78,9 +83,6 @@ function readVoiceLang(): VoiceLanguage {
   return 'fr';
 }
 
-/** Seuil de garde vocal : au-delà, la transcription est coupée proprement (limite backend 2000). */
-const MAX_VOICE_MESSAGE = 1800;
-
 /** Suffixe FR ajouté quand une longue dictée est coupée (préciser en une phrase). */
 const LONG_MESSAGE_SUFFIX = '…(message long, suite coupée : précisez en une phrase)';
 
@@ -88,9 +90,10 @@ const LONG_MESSAGE_SUFFIX = '…(message long, suite coupée : précisez en une 
 const MIN_KEPT_MESSAGE = 400;
 
 /**
- * Coupe une transcription trop longue à la dernière fin de phrase ≤ 1800
- * caractères, puis ajoute le suffixe FR. Repli : dernière espace, puis coupe
- * dure. Le résultat reste sous la limite backend : jamais de 422, jamais perdu.
+ * Coupe une transcription trop longue à la dernière fin de phrase ≤
+ * MAX_VOICE_MESSAGE, puis ajoute le suffixe FR. Repli : dernière espace,
+ * puis coupe dure. Le résultat reste sous la limite backend : jamais de
+ * 422, jamais perdu.
  */
 function truncateLongVoiceMessage(text: string): string {
   if (text.length <= MAX_VOICE_MESSAGE) return text;
@@ -207,7 +210,7 @@ function writeDraft(chatId: number | null, value: string): void {
 }
 
 function fmtTime(at: number): string {
-  return new Date(at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  return new Date(at).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
 }
 
 function greeting(hour: number): string {
@@ -229,7 +232,7 @@ function whisperText(pulse: TerritoryPulse, hour: number): string {
   const urg = `${pulse.open_incidents} urgence${pulse.open_incidents > 1 ? 's' : ''} ouverte${pulse.open_incidents > 1 ? 's' : ''}`;
   const kids =
     pulse.affected_students > 0
-      ? `, ${pulse.affected_students.toLocaleString('fr-FR')} \u00e9l\u00e8ves concern\u00e9s`
+      ? `, ${pulse.affected_students.toLocaleString(LOCALE)} \u00e9l\u00e8ves concern\u00e9s`
       : '';
   return `${dayMoment(hour)} : ${urg}${kids} \u2014 je veille sur ${schools}.`;
 }
@@ -304,7 +307,7 @@ export default function ConsolePage() {
 
   useEffect(() => {
     if (messages.length > 0 || busy || hintPaused) return;
-    const t = window.setInterval(() => setHint((h) => (h + 1) % HINTS.length), 4200);
+    const t = window.setInterval(() => setHint((h) => (h + 1) % HINTS.length), HINT_ROTATE_MS);
     return () => window.clearInterval(t);
   }, [messages.length, busy, hintPaused]);
 
@@ -619,7 +622,7 @@ export default function ConsolePage() {
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          maxLength={2000}
+          maxLength={AGENT_INPUT_MAX_CHARS}
           placeholder={placeholder}
           aria-label="Message à Sentinel"
           disabled={busy || streaming}
@@ -654,7 +657,7 @@ export default function ConsolePage() {
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          maxLength={2000}
+          maxLength={AGENT_INPUT_MAX_CHARS}
           placeholder={placeholder}
           aria-label="Message à Sentinel"
           disabled={busy || streaming}

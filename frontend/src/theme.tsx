@@ -10,8 +10,11 @@ interface ThemeState {
 
 const ThemeContext = createContext<ThemeState | null>(null);
 
+/** Clé localStorage du thème (cohérente avec TOKEN_STORAGE_KEY dans lib/api). */
+const THEME_STORAGE_KEY = 'wash_admin_theme';
+
 function initialTheme(): Theme {
-  const saved = localStorage.getItem('wash_admin_theme');
+  const saved = localStorage.getItem(THEME_STORAGE_KEY);
   if (saved === 'light' || saved === 'dark') return saved;
   return 'dark'; // Mission Control : sombre par défaut.
 }
@@ -21,7 +24,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
-    localStorage.setItem('wash_admin_theme', theme);
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
   const toggle = useCallback(() => {

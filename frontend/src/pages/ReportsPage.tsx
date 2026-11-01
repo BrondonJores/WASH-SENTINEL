@@ -8,6 +8,8 @@ import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { Icon } from '../components/icons';
 import { CHANNEL_FR, INPUT_CLS, fmtDate } from '../lib/wash';
+import { DEFAULT_PER_PAGE } from '../lib/pagination';
+import { SEARCH_DEBOUNCE_MS } from '../lib/search';
 
 const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
 const errorCls = 'mt-1 text-xs font-medium text-danger';
@@ -16,7 +18,7 @@ const CHANNEL_KEYS = ['voice', 'text', 'photo', 'webrtc_call'] as const;
 type DupFilter = 'all' | 'unique' | 'dup';
 
 // Recherche d'école distante debounced avec anti-requêtes-obsolètes
-// (même pattern que le widget public : debounce 300 ms + compteur de run).
+// (même pattern que le widget public : debounce partagé + compteur de run).
 function useSchoolOptions() {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -26,7 +28,7 @@ function useSchoolOptions() {
   const reqRef = useRef(0);
 
   useEffect(() => {
-    const id = window.setTimeout(() => setDebounced(search.trim()), 300);
+    const id = window.setTimeout(() => setDebounced(search.trim()), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [search]);
 
@@ -57,7 +59,7 @@ function useSchoolOptions() {
 export default function ReportsPage() {
   const [items, setItems] = useState<Report[]>([]);
   const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(20);
+  const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);

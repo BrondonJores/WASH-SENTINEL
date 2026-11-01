@@ -17,6 +17,8 @@ import {
   statusTone,
   urgencyTone,
 } from '../lib/wash';
+import { DEFAULT_PER_PAGE } from '../lib/pagination';
+import { SEARCH_DEBOUNCE_MS } from '../lib/search';
 
 const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
 
@@ -37,7 +39,7 @@ export default function IncidentsPage() {
 
   const [items, setItems] = useState<Incident[]>([]);
   const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(20);
+  const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -77,12 +79,12 @@ export default function IncidentsPage() {
   const [bulkProg, setBulkProg] = useState({ done: 0, total: 0 });
   const [bulkSummary, setBulkSummary] = useState<{ ok: number; fail: number } | null>(null);
 
-  // Recherche : debounce 300 ms + retour page 1.
+  // Recherche : debounce + retour page 1.
   useEffect(() => {
     const t = window.setTimeout(() => {
       setSearchQ(searchInput.trim());
       setPage(1);
-    }, 300);
+    }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
   }, [searchInput]);
 

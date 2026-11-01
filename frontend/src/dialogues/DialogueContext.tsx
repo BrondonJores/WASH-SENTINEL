@@ -8,6 +8,9 @@ import type { ChatItem, DialogueMessage, ProjectItem } from '../lib/dialogues';
 
 const ACTIVE_KEY = 'wash_active_chat';
 
+/** Longueur max d'un nom de projet (tronqué à la saisie, création comme renommage). */
+const PROJECT_NAME_MAX_CHARS = 60;
+
 function readActive(): number | null {
   try {
     const v = Number(localStorage.getItem(ACTIVE_KEY));
@@ -175,7 +178,7 @@ export function DialogueProvider({ children }: { children: ReactNode }) {
 
   const createProject = useCallback(
     (name: string): Promise<number | null> => {
-      const clean = name.trim().slice(0, 60);
+      const clean = name.trim().slice(0, PROJECT_NAME_MAX_CHARS);
       if (!clean) return Promise.resolve(null);
       return api
         .createProject(clean)
@@ -197,7 +200,7 @@ export function DialogueProvider({ children }: { children: ReactNode }) {
 
   const renameProject = useCallback(
     (id: number, name: string) => {
-      const clean = name.trim().slice(0, 60);
+      const clean = name.trim().slice(0, PROJECT_NAME_MAX_CHARS);
       if (!clean) return;
       setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name: clean } : p)));
       api.renameProject(id, clean).catch(() => refresh());

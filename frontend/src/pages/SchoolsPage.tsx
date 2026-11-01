@@ -8,6 +8,8 @@ import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { Icon } from '../components/icons';
 import { INPUT_CLS, fmtNum } from '../lib/wash';
+import { DEFAULT_PER_PAGE } from '../lib/pagination';
+import { SEARCH_DEBOUNCE_MS } from '../lib/search';
 
 const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
 const toNum = (v: string): number | undefined => (v === '' ? undefined : Number(v));
@@ -19,7 +21,7 @@ export default function SchoolsPage() {
 
   const [items, setItems] = useState<School[]>([]);
   const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(20);
+  const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
   const [lastPage, setLastPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -51,12 +53,12 @@ export default function SchoolsPage() {
   const teachersRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
 
-  // Recherche live debounced 300 ms (remplace le bouton).
+  // Recherche live debounced (remplace le bouton).
   useEffect(() => {
     const id = window.setTimeout(() => {
       setSearch(searchV.trim());
       setPage(1);
-    }, 300);
+    }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [searchV]);
 
@@ -65,7 +67,7 @@ export default function SchoolsPage() {
     const id = window.setTimeout(() => {
       setDistrict(districtV.trim());
       setPage(1);
-    }, 300);
+    }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [districtV]);
 

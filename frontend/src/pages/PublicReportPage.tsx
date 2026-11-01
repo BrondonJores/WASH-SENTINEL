@@ -13,10 +13,17 @@ import { Badge, Button, Card, Skeleton, StatusDot } from '../components/ui';
 import { SentinelAvatar } from '../components/SentinelAvatar';
 import { Icon } from '../components/icons';
 import { CATEGORY_FR, INPUT_CLS, URGENCY_FR, urgencyTone } from '../lib/wash';
+import { SEARCH_DEBOUNCE_MS } from '../lib/search';
 
 const CATEGORY_KEYS = ['water_point', 'toilets_latrines', 'handwashing', 'sewage_drainage'] as const;
 const URGENCY_KEYS = ['low', 'medium', 'high', 'critical'] as const;
 const DESCRIPTION_MAX = 4500;
+/**
+ * CONTRAT BACKEND (ne pas modifier sans synchroniser) : plafond « élèves
+ * affectés » — wash.php `proposals.affected_students_max` (100000), appliqué
+ * par AgentProposalService::needInt (min 0). Vérifié côté backend.
+ */
+const MAX_AFFECTED_STUDENTS = 100_000;
 
 type CategoryKey = (typeof CATEGORY_KEYS)[number];
 type UrgencyKey = (typeof URGENCY_KEYS)[number];
@@ -63,7 +70,7 @@ export default function PublicReportPage() {
   const searchRef = useRef(0);
 
   useEffect(() => {
-    const id = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    const id = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(id);
   }, [search]);
 
@@ -109,7 +116,7 @@ export default function PublicReportPage() {
     if (students.trim() !== '') {
       if (!Number.isInteger(parsedStudents) || (parsedStudents as number) < 0) {
         errors.students = 'Indiquez un nombre entier positif (ou laissez vide).';
-      } else if ((parsedStudents as number) > 100000) {
+      } else if ((parsedStudents as number) > MAX_AFFECTED_STUDENTS) {
         errors.students = 'Nombre trop élevé (maximum 100 000).';
       }
     }
@@ -349,7 +356,7 @@ export default function PublicReportPage() {
                   type="number"
                   inputMode="numeric"
                   min={0}
-                  max={100000}
+                  max={MAX_AFFECTED_STUDENTS}
                   step={1}
                   placeholder="Ex. 120"
                   value={students}

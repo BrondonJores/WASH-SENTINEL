@@ -7,6 +7,8 @@ import { Toggle } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { URGENCY_FR, fmtNum, urgencyTone } from '../lib/wash';
+import { LOCALE } from '../lib/locale';
+import { DEFAULT_PER_PAGE } from '../lib/pagination';
 
 // Forme réelle de `data` (lecture seule backend) — seule classe existante :
 // CriticalIncidentNotification::toArray() = { incident_id, reference_code, school,
@@ -38,7 +40,7 @@ const fullDate = (iso: string): string => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
     ? iso
-    : d.toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' });
+    : d.toLocaleString(LOCALE, { dateStyle: 'full', timeStyle: 'short' });
 };
 
 const byNewest = (a: AppNotification, b: AppNotification): number =>
@@ -48,7 +50,7 @@ export default function NotificationsPage() {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(20);
+  const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
   const [lastPage, setLastPage] = useState(1);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [loading, setLoading] = useState(true);
