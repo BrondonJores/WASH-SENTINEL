@@ -317,25 +317,52 @@ class ListMaintenanceLogsTest(unittest.TestCase):
         self.assertIn("Exemple", desc)
 
 
-class PrepareDescriptionsTest(unittest.TestCase):
-    """Les prepare_* affichent une clause négative : JAMAIS pour lister/consulter."""
+class PrepareSchemaDisambiguationTest(unittest.TestCase):
+    """Les prepare_* se distinguent par leur schéma, pas par de la prose."""
 
-    def test_negative_clause_everywhere(self) -> None:
+    def _fn(self, name: str) -> dict:
         from app.agent_tools import AGENT_TOOLS
-        by_name = {t["function"]["name"]: t["function"]["description"] for t in AGENT_TOOLS}
-        for name in ("prepare_incident", "prepare_report", "prepare_maintenance_log"):
-            desc = by_name[name]
-            self.assertIn("JAMAIS", desc, name)
-            self.assertIn("lister", desc, name)
-            self.assertIn("list_maintenance_logs", desc, name)
-            self.assertIn("Exemple", desc, name)
+        return next(t["function"] for t in AGENT_TOOLS
+                    if t["function"]["name"] == name)
 
-    def test_prepare_incident_requires_creation_intent(self) -> None:
-        from app.agent_tools import AGENT_TOOLS
-        desc = next(t["function"]["description"] for t in AGENT_TOOLS
-                    if t["function"]["name"] == "prepare_incident")
-        self.assertIn("CREATION", desc)
-        self.assertIn("UNIQUEMENT", desc)
+    def test_kind_discriminator(self) -> None:
+        report = self._fn("prepare_report")["parameters"]
+        incident = self._fn("prepare_incident")["parameters"]
+        self.assertEqual(report["properties"]["kind"].get("const"), "report")
+        self.assertEqual(incident["properties"]["kind"].get("const"), "incident")
+        self.assertIn("kind", report["required"])
+        self.assertIn("kind", incident["required"])
+
+    def test_distinctive_slots_required_and_exclusive(self) -> None:
+        report = self._fn("prepare_report")["parameters"]
+        incident = self._fn("prepare_incident")["parameters"]
+        self.assertIn("description", report["required"])
+        self.assertEqual(report["not"], {"required": ["title"]})
+        self.assertIn("title", incident["required"])
+        self.assertEqual(incident["not"], {"required": ["description"]})
+
+    def test_category_urgency_enums(self) -> None:
+        for name in ("prepare_report", "prepare_incident"):
+            props = self._fn(name)["parameters"]["properties"]
+            self.assertEqual(props["category"].get("enum"),
+                             ["water_point", "toilets_latrines", "handwashing", "sewage_drainage"],
+                             name)
+            self.assertEqual(props["urgency"].get("enum"),
+                             ["low", "medium", "high", "critical"], name)
+
+    def test_neutral_prose_and_short_description(self) -> None:
+        for name in ("prepare_report", "prepare_incident", "prepare_maintenance_log"):
+            fn = self._fn(name)
+            for banned in ("JAMAIS", "STOP", "UNIQUEMENT", "CREATION"):
+                self.assertNotIn(banned, fn["description"], name)
+            short = fn.get("short_description", "")
+            self.assertTrue(short, f"{name} porte short_description")
+            self.assertLessEqual(len(short), 140, name)
+
+    def test_maintenance_log_cost_documented(self) -> None:
+        props = self._fn("prepare_maintenance_log")["parameters"]["properties"]
+        self.assertEqual(props["cost_amount"].get("minimum"), 0)
+        self.assertIn("WASH", props["incident"].get("description", ""))
 
 
 class TolerantSchoolFilterTest(unittest.TestCase):

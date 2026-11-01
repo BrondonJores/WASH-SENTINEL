@@ -216,6 +216,13 @@ def _tool_description(name: str) -> str:
     return ""
 
 
+def _tool_function(name: str) -> dict:
+    for tool in AGENT_TOOLS:
+        if tool.get("function", {}).get("name") == name:
+            return tool["function"]
+    return {}
+
+
 ROUTING_CASES = [
     # -- Interventions passées -> list (list_maintenance_logs présent) --
     {
@@ -386,9 +393,16 @@ class RoutingEvalTest(unittest.TestCase):
         self.assertIn("list_maintenance_logs", names)
 
     def test_05_prepare_incident_desambigue(self) -> None:
-        desc = _tool_description("prepare_incident")
-        self.assertIn("JAMAIS", desc, "clause Ne JAMAIS utiliser présente")
-        self.assertNotIn("Prépare une intervention directe", desc, "ancien libellé supprimé")
+        fn = _tool_function("prepare_incident")
+        params = fn.get("parameters", {})
+        props = params.get("properties", {})
+        self.assertEqual(props.get("kind", {}).get("const"), "incident",
+                         "discriminant kind")
+        self.assertIn("title", params.get("required", []), "titre requis")
+        self.assertEqual(params.get("not"), {"required": ["description"]},
+                         "description exclue")
+        self.assertNotIn("Prépare une intervention directe",
+                         fn.get("description", ""), "ancien libellé supprimé")
 
 
 # ---------------------------------------------------------------------------

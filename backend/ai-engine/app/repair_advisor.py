@@ -1,26 +1,12 @@
 from __future__ import annotations
 
+from .prompts import is_small_model, render_repair_prompt
 from .providers import BaseLLMProvider
 from .schemas import RepairPlanRequest, RepairPlanResponse
 
-REPAIR_ADVISOR_SYSTEM = """
-Tu es l'ingénieur de maintenance en chef de WASH Sentinel.
-À partir de la description d'une panne d'infrastructure d'eau ou d'assainissement dans une école, tu dois générer une fiche technique de réparation exploitable par un plombier ou un technicien communal.
-
-Renvoie STRICTEMENT un JSON valide :
-{
-  "required_tools": ["liste des outils nécessaires, ex: Clé à molette, Pince multiprise, Scie à métaux"],
-  "spare_parts_needed": ["liste des pièces de rechange, ex: Joint torique 20/27, Manchon PVC Ø32, Téflon"],
-  "estimated_intervention_time": "durée estimée (ex: 2h à 3h)",
-  "immediate_safety_measures": ["consignes de sécurité immédiates pour l'école avant l'arrivée du technicien"],
-  "estimated_cost_tier": "low | medium | high | critical_budget"
-}
-
-Règles :
-1. Adapte les recommandations aux contextes scolaires (pièces standardisées et robustes).
-2. Propose des mesures de sécurité vitales pour les enfants (ex: couper l'électricité si fuite proche d'un câble, fermer la vanne d'arrêt générale, chlorer l'eau de secours).
-3. Uniquement du JSON.
-"""
+#: Alias historique : rendu neutre du builder prompts.repair_sections()
+#: (sans few-shots par défaut, taille stable).
+REPAIR_ADVISOR_SYSTEM = render_repair_prompt()
 
 
 class RepairAdvisor:
@@ -35,7 +21,15 @@ Nature du problème : {req.issue_type}
 Niveau d'urgence : {req.urgency_level}
         """
 
-        raw = await self.llm.generate_json(prompt, REPAIR_ADVISOR_SYSTEM)
+        # Few-shots réservés aux petits modèles ; JSON réparé quand le
+        # provider l'offre (repli generate_json brut sinon, ex. stubs).
+        system_prompt = render_repair_prompt(
+            include_few_shots=is_small_model(getattr(self.llm, "model", "")))
+        repaired = getattr(self.llm, "generate_json_repaired", None)
+        if repaired is None:
+            raw = await self.llm.generate_json(prompt, system_prompt)
+        else:
+            raw = await repaired(prompt, system_prompt)
 
         tools = raw.get("required_tools")
         if not isinstance(tools, list) or not tools:

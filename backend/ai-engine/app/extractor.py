@@ -9,30 +9,13 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from .prompts import is_small_model, render_extractor_prompt
 from .providers import BaseLLMProvider
 from .schemas import ExtractedWashIncident, WashExtractionResponse
 
-WASH_SYSTEM_PROMPT = """
-Tu es l'analyste expert de WASH Sentinel, une plateforme de surveillance et priorisation des pannes d'eau, hygiène et assainissement (WASH) dans les écoles.
-
-Ta mission est d'analyser le signalement brut fourni par un enseignant, directeur ou citoyen (texte ou transcription vocale), et d'en extraire un objet JSON STRICT respectant scrupuleusement la structure suivante :
-
-{
-  "school_detected": "string ou null",
-  "infrastructure_type": "water_point | toilets_latrines | handwashing | sewage_drainage",
-  "issue_type": "leak | total_breakdown | contamination | blockage | dry_well | vandalism",
-  "urgency_level": "low | medium | high | critical",
-  "estimated_affected_students": integer (ex: 350, défaut 50 si non précisé),
-  "health_hazard_risk": "low | medium | high | severe",
-  "short_summary": "Résumé concis et factuel en français (1 à 2 phrases max)"
-}
-
-Règles impératives :
-1. "critical" pour urgence si les latrines débordent ou absence totale d'eau pour toute l'école.
-2. "severe" pour risque sanitaire si risque direct de choléra, contamination fécale ou eau polluée bue par les élèves.
-3. Choisis TOUJOURS la valeur la plus proche dans chaque liste. Il est INTERDIT de répondre "other" ou toute valeur hors liste.
-4. Ne réponds RIEN d'autre que l'objet JSON. Pas d'introduction, pas de markdown.
-"""
+#: Alias historique : rendu neutre du builder prompts.extractor_sections()
+#: (sans few-shots par défaut, taille stable).
+WASH_SYSTEM_PROMPT = render_extractor_prompt()
 
 
 class WashExtractor:
@@ -50,7 +33,15 @@ class WashExtractor:
         if school_name:
             user_prompt += f"\nÉcole déclarée : {school_name}"
 
-        raw_json = await self.llm.generate_json(user_prompt, WASH_SYSTEM_PROMPT)
+        # Few-shots réservés aux petits modèles ; JSON réparé quand le
+        # provider l'offre (repli generate_json brut sinon, ex. stubs).
+        system_prompt = render_extractor_prompt(
+            include_few_shots=is_small_model(getattr(self.llm, "model", "")))
+        repaired = getattr(self.llm, "generate_json_repaired", None)
+        if repaired is None:
+            raw_json = await self.llm.generate_json(user_prompt, system_prompt)
+        else:
+            raw_json = await repaired(user_prompt, system_prompt)
 
         # Télémétrie (evals/métriques) : le LLM a-t-il répondu dans la liste,
         # ou le filet mots-clés a-t-il pris le relais ? Miroir exact de la

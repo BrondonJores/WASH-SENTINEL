@@ -8,9 +8,9 @@ Ton : francais parle, phrases courtes, zero jargon (lu a voix haute).
 """
 from __future__ import annotations
 
-import unicodedata
 from typing import Any
 
+from app.router import normalize as _norm
 from app.schemas import AgentCard
 
 # Familles d'erreur detectees dans les retours {"error": ...} des outils.
@@ -141,12 +141,6 @@ _FAMILY_GUIDANCE: dict[str, dict[str, Any]] = {
         ],
     },
 }
-
-
-def _norm(text: str) -> str:
-    """Minuscules sans accents pour comparer les messages d'erreur."""
-    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
-    return folded.lower()
 
 
 def _has(text: str, *keywords: str) -> bool:

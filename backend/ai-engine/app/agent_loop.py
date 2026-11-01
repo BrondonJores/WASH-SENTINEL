@@ -10,27 +10,15 @@ from typing import Any, Literal
 from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ONLY, TOOL_EXECUTORS
 from .guidance import build_guidance_card
 from .place_suggest import suggest_places
+from .prompts import render_agent_prompt
 from .providers import BaseLLMProvider
+from .router import is_data_question
+from .router import route as router_route
 from .schemas import AgentCard, AgentChatRequest, AgentChatResponse
 
-SYSTEM_PROMPT = """Tu es Sentinel, l'agent omniprésent de WASH Sentinel, plateforme de surveillance
-de l'eau et de l'assainissement dans les écoles du Cameroun.
-
-Règles impératives :
-- Réponds de façon concise (2 à 4 phrases).
-- Ne devine jamais : utilise tes outils pour obtenir les faits (écoles, incidents, chiffres).
-- Si l'utilisateur nomme une école ou un incident, appelle directement l'outil avec ce nom même approximatif : ne demande JAMAIS un identifiant, un coût ou un historique, les outils les retrouvent seuls.
-- N'invente jamais d'identifiant : utilise exactement ceux renvoyés par les outils.
-- Si l'utilisateur veut créer (signaler une panne, créer une intervention, journaliser des travaux) : appelle IMMÉDIATEMENT l'outil prepare_* adapté même si le dossier est partiel (zéro ou un seul argument suffit — l'outil retourne missing + questions pré-formulées) ; ne pose JAMAIS de questions avant ce premier appel. Rassemble ensuite TOUJOURS le dossier complet — école, description ou titre, catégorie, urgence, élèves affectés (ou incident et coût pour un journal) — en posant les questions courtes retournées (2 éléments maximum par message) jusqu'au dossier complet. Si l'utilisateur répond par un mot seul ou un nom (chip cliquable), reprends le dossier en cours avec cette valeur au lieu de reposer la même question. Exemple : « enregistre une intervention » → appelle prepare_maintenance_log({}) sans attendre, puis demande « Quel incident concerné ? » et « Quel coût en XAF ? ». Seul l'humain confirme via la carte Confirmer : n'annonce jamais un enregistrement effectué.
-- Quand un outil prepare_* répond complete=true, présente le récapitulatif et demande de cliquer Confirmer (ou de répondre « oui »). N'annonce jamais un enregistrement effectué : seul l'humain valide, y compris pour préciser une école introuvable ou plusieurs incidents possibles (propose les choix fournis — school_choices, incident_choices — au lieu d'inventer ; si une carte de choix s'affiche, invite à cliquer sur le bon incident).
-- Pour tout historique, tendance ou comparaison chiffrée : appelle repair_trends (les graphiques sont générés en cartes).\n- Pour toute carte, visualisation géographique ou question 'où' : appelle territory_overview (la carte interactive est générée).\n- Pour tout briefing, dossier, diaporama ou synthèse exécutive : appelle build_briefing (la présentation est générée).
-- Reste strictement dans le domaine eau/assainissement scolaires : jamais de pédagogie, formation, cantine ou autre hors sujet.
-- Si un outil renvoie une erreur, corrige tes arguments avec les valeurs exactes fournies et réessaie au lieu d'abandonner.
-- N'appelle jamais deux fois le même outil avec les mêmes arguments : quand tu as le résultat, réponds.
-- Les données détaillées sont affichées dans des cartes séparées : ne recopie pas tout dans ta réponse.
-- Réponds toujours dans la langue du dernier message (français par défaut) ; termes techniques WASH traduisibles, références/codes inchangés ; si l'utilisateur écrit en langue locale, réponds en français simple et propose de reformuler.
-- N'affirme jamais une absence (« aucun », « rien », « zéro ») sans observation d'un tool de liste (list_maintenance_logs, summarize_district, rank_schools_by_need, repair_trends, explain_incident, territory_overview, analyze_school, build_briefing) ; si aucun outil ne couvre la question, dis-le et propose tes capacités.
-"""
+#: Prompt système : rendu neutre des sections prompts.agent_sections()
+#: (mêmes règles comportementales, une phrase par règle).
+SYSTEM_PROMPT = render_agent_prompt()
 
 MAX_ITERATIONS = 5
 # Budget wall-clock d'un run (surtout CPU local) : au-delà, on conclut
@@ -51,75 +39,23 @@ REPEAT_NUDGE = (
 )
 
 NO_TOOL_NUDGE = (
-    "STOP. Tu as répondu à une question de données SANS appeler d'outil, "
-    "c'est strictement interdit : tu dois appeler l'outil adapté MAINTENANT "
+    "Tu as répondu à une question de données sans appeler d'outil : "
+    "appelle l'outil adapté maintenant "
     "(rank_schools_by_need, summarize_district, analyze_school, repair_trends, "
     "explain_incident, territory_overview, build_briefing, list_maintenance_logs"
     + "".join(f", {n}" for n in sorted(PLUGIN_READ_ONLY)) +
     "). N'écris aucun texte, appelle juste l'outil."
 )
 
-DATA_QUESTION_HINTS = (
-    "quel", "combien", "liste", "montre", "affiche", "carte",
-    "tendance", "analyse", "résume", "resume", "briefing", "diaporama",
-    "où", "ou ", "état", "etat", "besoin", "aide", "panne",
-    "incident", "école", "ecole", "district", "graphique", "graphe",
-    "coût", "cout", "budget", "intervention", "répar", "remplac",
-    "signal", "cré", "cree", "ajoute", "enregistre", "journalis",
-    "déclare", "declare",
-)
-
-
-# Routeur déterministe liste/création : indices en minuscules, comparaison par
-# sous-chaîne sur la question. Les formes sans accent doublent les accentuées.
-LIST_INTENT_HINTS = (
-    "réalisé", "realise", "aujourd'hui", "aujourd’hui", "aujourdhui",
-    "hier", "semaine", "mois", "liste", "lister", "combien",
-    "quels travaux", "historique", "passé", "passe", "affiche", "montre",
-    "voir", "date", "autre date", "quel jour",
-)
-
-CREATE_INTENT_HINTS = (
-    "crée", "créer", "cree", "creer", "création", "creation",
-    "ajoute", "ajout", "ajouté", "ajouter",
-    "nouveau", "nouvelle",
-    "journalise", "journaliser", "journalisé",
-    "enregistre", "enregistrer", "enregistré", "enregistrement",
-    "signale", "signaler", "signalé",
-    "déclare", "declare",
-    "prépare", "prepare", "planifie",
-    "note", "noté",
-    # Formes impératives nues avec objet direct.
-    "enregistre une", "enregistre des", "enregistre l'", "enregistre la", "enregistre le",
-    "note une", "note les", "note des", "note la", "note le",
-    "ajoute une", "ajoute des", "ajoute la", "ajoute le",
-    "crée une", "cree une", "signale une", "déclare une", "declare une",
-    "journalise une", "journalise des",
-    # Mise à jour du journal (formulation complète, sans ambiguïté).
-    "mets à jour le journal", "mets a jour le journal",
-    "met à jour le journal", "met a jour le journal",
-    "mettre à jour le journal", "mettre a jour le journal",
-    "mise à jour du journal", "mise a jour du journal",
-    "actualise le journal", "actualiser le journal", "maj le journal",
-)
-
 
 def route_intent(question: str) -> Literal["list", "create", "other"]:
     """Route la question : consultation du passé, création, ou autre (fonction pure).
 
-    « create » seulement si un indice de création est présent SANS aucun indice
-    de liste ; sinon « list » dès qu'un indice de liste est présent.
+    Fine couche de compatibilité : délégation au routeur calibré (app.router) avec les
+    indices plugins. « create » seulement sans indice de liste ; « list » dès
+    qu'un indice de liste est présent ; sinon « other » (jeu complet).
     """
-    lowered = (question or "").lower()
-    has_list = any(h in lowered for h in LIST_INTENT_HINTS)
-    has_list = has_list or any(
-        h in lowered for hints in PLUGIN_HINTS.values() for h in hints)
-    has_create = any(h in lowered for h in CREATE_INTENT_HINTS)
-    if has_create and not has_list:
-        return "create"
-    if has_list:
-        return "list"
-    return "other"
+    return router_route(question or "", PLUGIN_HINTS)["intent"]
 
 
 def tools_for_intent(intent: str) -> list[dict[str, Any]]:
@@ -133,7 +69,8 @@ def tools_for_intent(intent: str) -> list[dict[str, Any]]:
 def compact_tools(tools: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
     """Descriptions raccourcies pour les petits modèles (prompt allégé).
 
-    Ne garde que la clause d'usage (avant "Exemple :" / "Ne JAMAIS").
+    Prend short_description quand l'outil en porte une, sinon repli sur la
+    coupe historique (avant "Exemple :" / "Ne JAMAIS").
     Modèles non reconnus comme petits : jeu inchangé.
     """
     if not SMALL_MODEL_RE.search(model or ""):
@@ -142,7 +79,9 @@ def compact_tools(tools: list[dict[str, Any]], model: str) -> list[dict[str, Any
     for tool in tools:
         fn = tool.get("function", {})
         desc = str(fn.get("description", ""))
-        short = re.split(r"Exemple\s*:|Ne JAMAIS", desc)[0].strip()
+        short = str(fn.get("short_description") or "").strip()
+        if not short:
+            short = re.split(r"Exemple\s*:|Ne JAMAIS", desc)[0].strip()
         out.append({**tool, "function": {**fn, "description": short or desc}})
     return out
 
@@ -211,8 +150,8 @@ READ_TOOLS = frozenset({
 ABSENCE_RE = re.compile(r"aucun|aucune|pas d|rien|zéro|zero", re.IGNORECASE)
 
 ABSENCE_CORRECTION_NUDGE = (
-    "STOP. Tu viens d'affirmer une absence (aucun/aucune/rien/zéro) SANS avoir "
-    "observé un outil de lecture, c'est strictement interdit : appelle MAINTENANT "
+    "Tu viens d'affirmer une absence (aucun/aucune/rien/zéro) sans avoir "
+    "observé un outil de lecture : appelle maintenant "
     "l'outil de liste adapté (list_maintenance_logs pour les interventions passées, "
     "sinon summarize_district, rank_schools_by_need, repair_trends, explain_incident, "
     "territory_overview, analyze_school ou build_briefing) puis réponds à partir de "
@@ -242,13 +181,13 @@ def _has_read_tool(executed: list[tuple[str, dict[str, Any]]]) -> bool:
 WASH_REF_RE = re.compile(r"WASH-\d{4}-[A-Z0-9]+")
 
 CONTRADICTION_CORRECTION_NUDGE = (
-    "STOP. Tu cites une référence précise puis affirmes une absence "
+    "Tu cites une référence précise puis affirmes une absence "
     "(aucun/aucune/rien/zéro) alors que ton observation de liste adossée a "
     "un total de 0 : c'est contradictoire. Relis tes observations : si une "
     "référence WASH-AAAA-XXXX existe vraiment, décris-la sans affirmer "
     "d'absence ; si le total est vraiment 0, ne cite aucune référence. "
-    "Rappelle MAINTENANT l'outil de liste adapté (list_maintenance_logs pour "
-    "les interventions passées) SANS filtre école parasite, puis réponds de "
+    "Rappelle maintenant l'outil de liste adapté (list_maintenance_logs pour "
+    "les interventions passées) sans filtre école parasite, puis réponds de "
     "façon cohérente à partir de son observation. N'écris aucun texte, "
     "appelle juste l'outil."
 )
@@ -298,6 +237,38 @@ _FR_TOOL_WORDS = frozenset(
 
 _TOKEN_RE = re.compile(r"[a-zàâäéèêëîïôöùûüç]+")
 
+#: Mots-outils normalisés (sans accents, cf. _norm) pour la détection de langue.
+_EN_TOOL_WORDS_NORM = frozenset(
+    "".join(c for c in unicodedata.normalize("NFKD", w) if not unicodedata.combining(c))
+    for w in _EN_TOOL_WORDS
+)
+_FR_TOOL_WORDS_NORM = frozenset(
+    "".join(c for c in unicodedata.normalize("NFKD", w) if not unicodedata.combining(c))
+    for w in _FR_TOOL_WORDS
+)
+
+#: Preuve minimale : 2 mots-outils ou 4 tokens, sinon français par défaut.
+_LANG_MIN_HITS = 2
+_LANG_MIN_TOKENS = 4
+
+
+def detect_lang_details(message: str) -> dict[str, Any]:
+    """Scores de détection FR/EN : {lang, en, fr, tokens, defaulted}.
+
+    Tokens normalisés (accents repliés), mots de 1-2 lettres ignorés.
+    Sans preuve suffisante (>= 2 mots-outils ou >= 4 tokens) : 'fr'.
+    Sinon le score le plus élevé gagne, égalité -> 'fr'.
+    """
+    tokens = [t for t in _TOKEN_RE.findall(_norm(message or "")) if len(t) > 2]
+    en_score = sum(1 for token in tokens if token in _EN_TOOL_WORDS_NORM)
+    fr_score = sum(1 for token in tokens if token in _FR_TOOL_WORDS_NORM)
+    if en_score + fr_score < _LANG_MIN_HITS and len(tokens) < _LANG_MIN_TOKENS:
+        return {"lang": "fr", "en": en_score, "fr": fr_score,
+                "tokens": len(tokens), "defaulted": True}
+    lang = "en" if en_score > fr_score else "fr"
+    return {"lang": lang, "en": en_score, "fr": fr_score,
+            "tokens": len(tokens), "defaulted": False}
+
 
 def _detect_lang(message: str) -> Literal["fr", "en"]:
     """Détecte la langue du message : 'fr' ou 'en'.
@@ -309,12 +280,7 @@ def _detect_lang(message: str) -> Literal["fr", "en"]:
     arrivent via le contexte école (transcription STT) et restent acceptées en
     entrée — le prompt demande alors une réponse en français simple.
     """
-    tokens = _TOKEN_RE.findall((message or "").lower())
-    en_score = sum(1 for token in tokens if token in _EN_TOOL_WORDS)
-    fr_score = sum(1 for token in tokens if token in _FR_TOOL_WORDS)
-    if en_score > fr_score:
-        return "en"
-    return "fr"
+    return detect_lang_details(message)["lang"]
 
 
 def _normalize_lang(value: Any) -> Literal["fr", "en"] | None:
@@ -696,9 +662,9 @@ class AgentLoop:
 
         Les salutations, remerciements et confirmations (« oui », « merci »)
         ne correspondent à aucun indice et passent sans recadrage.
+        Score calibré du routeur (intent list/create ou vocabulaire données).
         """
-        lowered = message.lower()
-        return any(h in lowered for h in DATA_QUESTION_HINTS)
+        return is_data_question(message or "", PLUGIN_HINTS)
 
     async def _force_tool_pass(
         self,

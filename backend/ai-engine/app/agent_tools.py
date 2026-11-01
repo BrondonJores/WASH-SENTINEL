@@ -573,29 +573,40 @@ def _proposal(action: str, slots: dict[str, Any], missing: list[str]) -> dict[st
     }
 
 
-def tool_prepare_report(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    """Prépare un signalement COMPLET (sans rien écrire) : école, description, catégorie, urgence, élèves."""
-    school = _resolve_school(context, args.get("school", args.get("school_hint")))
-    hint = str(args.get("school", args.get("school_hint")) or "").strip()
-    description = str(args.get("description") or "").strip()
+def _prepare_creation(kind: str, args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Coeur commun report/incident : slots partagés + slot distinctif.
+
+    kind="report" : signalement (description libre, school_hint accepté).
+    kind="incident" : intervention directe (titre court). Observations
+    identiques aux anciennes implémentations séparées.
+    """
+    if kind == "report":
+        school = _resolve_school(context, args.get("school", args.get("school_hint")))
+        hint = str(args.get("school", args.get("school_hint")) or "").strip()
+        action, slot = "create_report", "description"
+    else:
+        school = _resolve_school(context, args.get("school"))
+        hint = str(args.get("school") or "").strip()
+        action, slot = "create_incident", "title"
+    text = str(args.get(slot) or "").strip()
     category = _norm_enum(args.get("category"), CATEGORY_ALIASES)
     urgency = _norm_enum(args.get("urgency"), URGENCY_ALIASES)
     affected = _norm_int(args.get("affected_students"))
     missing = []
     if not school:
         missing.append("school")
-    if not description:
-        missing.append("description")
+    if not text:
+        missing.append(slot)
     if not category:
         missing.append("category")
     if not urgency:
         missing.append("urgency")
     if affected is None:
         missing.append("affected_students")
-    obs = _proposal("create_report", {
+    obs = _proposal(action, {
         "school_id": school["school_id"] if school else None,
         "school_name": school.get("school_name") if school else None,
-        "description": description or None,
+        slot: text or None,
         "category": category,
         "urgency": urgency,
         "affected_students": affected,
@@ -604,39 +615,16 @@ def tool_prepare_report(args: dict[str, Any], context: dict[str, Any]) -> dict[s
         obs["hint_unmatched"] = hint
         obs["school_choices"] = _school_choices(context)
     return obs
+
+
+def tool_prepare_report(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Prépare un signalement COMPLET (sans rien écrire) : école, description, catégorie, urgence, élèves."""
+    return _prepare_creation("report", args, context)
 
 
 def tool_prepare_incident(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Prépare une intervention directe COMPLETE (sans rien écrire) : école, titre, catégorie, urgence, élèves."""
-    school = _resolve_school(context, args.get("school"))
-    hint = str(args.get("school") or "").strip()
-    title = str(args.get("title") or "").strip()
-    category = _norm_enum(args.get("category"), CATEGORY_ALIASES)
-    urgency = _norm_enum(args.get("urgency"), URGENCY_ALIASES)
-    affected = _norm_int(args.get("affected_students"))
-    missing = []
-    if not school:
-        missing.append("school")
-    if not title:
-        missing.append("title")
-    if not category:
-        missing.append("category")
-    if not urgency:
-        missing.append("urgency")
-    if affected is None:
-        missing.append("affected_students")
-    obs = _proposal("create_incident", {
-        "school_id": school["school_id"] if school else None,
-        "school_name": school.get("school_name") if school else None,
-        "title": title or None,
-        "category": category,
-        "urgency": urgency,
-        "affected_students": affected,
-    }, missing)
-    if hint and not school:
-        obs["hint_unmatched"] = hint
-        obs["school_choices"] = _school_choices(context)
-    return obs
+    return _prepare_creation("incident", args, context)
 
 
 def tool_prepare_maintenance_log(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -1113,6 +1101,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "analyze_school",
             "description": "Analyse complète d'une école (nom approximatif accepté) : pannes ouvertes, coûts de maintenance et arbitrage réparer-remplacer.",
+            "short_description": "Analyse une école : pannes ouvertes, coûts, arbitrage réparer-remplacer.",
             "parameters": {
                 "type": "object",
                 "properties": {"school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"}},
@@ -1125,6 +1114,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "rank_schools_by_need",
             "description": "Classe les écoles avec pannes ouvertes par besoin objectif (urgences, élèves affectés, ancienneté).",
+            "short_description": "Classe les écoles par besoin (urgences, élèves, ancienneté).",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -1133,6 +1123,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "summarize_district",
             "description": "Synthèse chiffrée des incidents ouverts : urgences, catégories, élèves affectés.",
+            "short_description": "Synthèse chiffrée : urgences, catégories, élèves affectés.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -1141,6 +1132,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "explain_incident",
             "description": "Récupère le détail factuel d'un incident pour l'expliquer simplement.",
+            "short_description": "Détail factuel d'un incident (id, référence ou titre).",
             "parameters": {
                 "type": "object",
                 "properties": {"incident_id": {"description": "Id numérique OU référence (WASH-2026-XXXX) OU fragment du titre"}},
@@ -1153,6 +1145,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "list_maintenance_logs",
             "description": "Liste les interventions DEJA réalisées et journalisées (lecture seule) : filtres date AAAA-MM-JJ défaut aujourd'hui, école, limite. Pour toute question sur les interventions passées. Ne crée rien. Exemple : « donne-moi les interventions réalisées aujourd'hui » → list_maintenance_logs avec la date du jour.",
+            "short_description": "Liste les interventions réalisées (lecture seule) : date, école, limite.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1168,6 +1161,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "repair_trends",
             "description": "Tendances mensuelles sur N mois : pannes, coûts de réparation, jours sans service, heatmap 90 jours, comparatif budget. Avec school : une école. Avec district seul (ex: Mvila) : TOUT le district agrégé. À utiliser pour tout historique, tendance ou graphique.",
+            "short_description": "Tendances mensuelles : pannes, coûts, jours sans service (école ou district).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1184,6 +1178,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "build_briefing",
             "description": "Génère un mini-dossier de briefing (diaporama) : couverture chiffrée, priorités, actions recommandées.",
+            "short_description": "Génère un briefing (diaporama) : chiffres, priorités, actions.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1197,6 +1192,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "territory_overview",
             "description": "Vue géographique du territoire : écoles géolocalisées avec urgences et incidents ouverts. À utiliser pour toute carte ou question 'où'.",
+            "short_description": "Vue carte du territoire : écoles géolocalisées et urgences.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1209,16 +1205,20 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_report",
-            "description": "Prépare la CREATION d'un SIGNALEMENT (nouvelle panne signalée), dossier (complet ou partiel) sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Accepte tout sous-ensemble d'arguments, même vide, et retourne missing + questions courtes (2 max). Exemple : « je signale une fuite aux latrines » → prepare_report ; « liste les signalements » → outils de lecture, pas cet outil.",
+            "description": "Prépare la création d'un signalement (nouvelle panne signalée par un usager), dossier complet ou partiel sans rien écrire.",
+            "short_description": "Prépare un signalement (création) : école, description, catégorie, urgence, élèves.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "kind": {"const": "report", "description": "Discriminant : toujours 'report' pour cet outil"},
                     "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"},
                     "description": {"type": "string", "description": "Description libre de la panne"},
-                    "category": {"type": "string", "description": "water_point, toilets_latrines, handwashing ou sewage_drainage"},
-                    "urgency": {"type": "string", "description": "low, medium, high ou critical"},
+                    "category": {"type": "string", "enum": ["water_point", "toilets_latrines", "handwashing", "sewage_drainage"]},
+                    "urgency": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                     "affected_students": {"type": "integer", "description": "Nombre d'élèves affectés"},
                 },
+                "required": ["kind", "description"],
+                "not": {"required": ["title"]},
             },
         },
     },
@@ -1226,16 +1226,20 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_incident",
-            "description": "Prépare la CREATION d'un INCIDENT (nouvelle panne), dossier (complet ou partiel) sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Accepte tout sous-ensemble d'arguments, même vide, et retourne missing + questions courtes (2 max). Exemple : « signale une panne de pompe à Ngok » → prepare_incident ; « montre les interventions réalisées » → list_maintenance_logs, pas cet outil.",
+            "description": "Prépare la création d'une intervention directe (nouvelle panne prise en charge), dossier complet ou partiel sans rien écrire.",
+            "short_description": "Prépare une intervention (création) : école, titre, catégorie, urgence, élèves.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "kind": {"const": "incident", "description": "Discriminant : toujours 'incident' pour cet outil"},
                     "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école"},
                     "title": {"type": "string", "description": "Titre court de l'intervention"},
-                    "category": {"type": "string", "description": "water_point, toilets_latrines, handwashing ou sewage_drainage"},
-                    "urgency": {"type": "string", "description": "low, medium, high ou critical"},
+                    "category": {"type": "string", "enum": ["water_point", "toilets_latrines", "handwashing", "sewage_drainage"]},
+                    "urgency": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
                     "affected_students": {"type": "integer", "description": "Nombre d'élèves affectés"},
                 },
+                "required": ["kind", "title"],
+                "not": {"required": ["description"]},
             },
         },
     },
@@ -1243,12 +1247,13 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_maintenance_log",
-            "description": "Prépare la CREATION d'un JOURNAL d'intervention (travaux à consigner), dossier (complet ou partiel) sans rien écrire. UNIQUEMENT quand l'utilisateur veut CREER ou journaliser. Ne JAMAIS utiliser pour lister/consulter/résumer (voir list_maintenance_logs, explain_incident, summarize_district). Accepte tout sous-ensemble d'arguments, même vide (incident seul, coût seul, notes seules), et retourne missing + questions courtes (2 max). Exemple : « journalise des travaux à 50000 XAF » → prepare_maintenance_log ; « quelles interventions réalisées ? » → list_maintenance_logs, pas cet outil.",
+            "description": "Prépare la création d'un journal d'intervention (travaux à consigner), dossier complet ou partiel sans rien écrire.",
+            "short_description": "Prépare un journal d'intervention (création) : incident, coût XAF, notes.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "incident": {"type": "string", "description": "Titre même approximatif, identifiant ou référence (WASH-...) de l'incident"},
-                    "cost_amount": {"type": "number", "description": "Coût de l'intervention en XAF"},
+                    "incident": {"type": "string", "description": "Incident concerné : titre (même approximatif), identifiant ou référence (WASH-...) — l'un des trois suffit"},
+                    "cost_amount": {"type": "number", "minimum": 0, "description": "Coût de l'intervention en XAF"},
                     "notes": {"type": "string", "description": "Notes sur les travaux effectués"},
                     "days_without_service": {"type": "integer", "description": "Jours sans service comptabilisés"},
                 },

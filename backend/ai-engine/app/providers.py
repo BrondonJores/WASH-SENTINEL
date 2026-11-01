@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -41,6 +42,52 @@ def parse_json_response(raw: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         cleaned = raw.strip().removeprefix("```json").removesuffix("```").strip()
         return json.loads(cleaned)
+
+
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def _strip_fences(raw: str) -> str:
+    """Contenu du premier bloc markdown clôturé, ou le texte inchangé."""
+    match = _FENCE_RE.search(raw)
+    return match.group(1).strip() if match else raw
+
+
+def repair_json_response(raw: str) -> dict[str, Any]:
+    """Parse JSON tolérant : fences, prose autour, virgules traînantes.
+
+    Répare uniquement la syntaxe (jamais de défauts sémantiques) : JSON
+    direct, puis contenu des fences markdown, puis premier bloc équilibré
+    {...}, puis suppression des virgules traînantes. En échec, relève
+    l'erreur d'origine (pas de JSON plausible-mais-faux).
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as original:
+        fenced = _strip_fences(raw)
+        if fenced != raw:
+            try:
+                return json.loads(fenced)
+            except json.JSONDecodeError:
+                pass
+        for block in _iter_json_blocks(raw):
+            try:
+                return json.loads(block)
+            except json.JSONDecodeError:
+                continue
+        scrubbed = _TRAILING_COMMA_RE.sub(r"\1", raw)
+        if scrubbed != raw:
+            try:
+                return json.loads(scrubbed)
+            except json.JSONDecodeError:
+                pass
+            for block in _iter_json_blocks(scrubbed):
+                try:
+                    return json.loads(block)
+                except json.JSONDecodeError:
+                    continue
+        raise original
 
 
 def raise_for_ollama(response: httpx.Response, model: str) -> None:
@@ -97,6 +144,27 @@ def _iter_json_blocks(text: str) -> list[str]:
     return blocks
 
 
+def _run_validator(validator: Any, data: dict[str, Any]) -> tuple[bool, Exception | None]:
+    """Valide un JSON réparé : classe pydantic (model_validate) ou callable."""
+    checker = getattr(validator, "model_validate", None)
+    try:
+        if callable(checker):
+            checker(data)
+            return True, None
+        if callable(validator):
+            return (True, None) if validator(data) else (
+                False, ValueError("contenu rejeté par le validateur"))
+        return True, None
+    except Exception as exc:
+        return False, exc
+
+
+def _attach_raw(exc: json.JSONDecodeError, raw: str) -> json.JSONDecodeError:
+    """Attache le brut à l'erreur pour la réparation (parse inchangé)."""
+    exc.raw_content = raw  # type: ignore[attr-defined]
+    return exc
+
+
 def extract_text_tool_calls(content: str, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Repli poor-man's tool calling : certains petits modèles (ex. qwen 3B)
     émettent l'appel d'outil en JSON texte au lieu du champ natif `tool_calls`.
@@ -114,7 +182,10 @@ def extract_text_tool_calls(content: str, tools: list[dict[str, Any]]) -> list[d
         try:
             data = json.loads(candidate)
         except json.JSONDecodeError:
-            continue
+            try:
+                data = repair_json_response(candidate)
+            except json.JSONDecodeError:
+                continue
         items = data if isinstance(data, list) else [data]
         calls: list[dict[str, Any]] = []
         for item in items:
@@ -242,6 +313,54 @@ class BaseLLMProvider:
     async def generate_json(self, prompt: str, system: str = "") -> dict[str, Any]:
         raise NotImplementedError
 
+    async def generate_json_repaired(
+        self,
+        prompt: str,
+        system: str = "",
+        validator: Any = None,
+        retries: int = 1,
+    ) -> dict[str, Any]:
+        """generate_json + réparation syntaxique + validation optionnelle.
+
+        Sur JSON malformé, répare le brut (fences/prose/virgules) au lieu
+        d'échouer ; `validator` (classe pydantic ou callable) peut rejeter
+        le contenu. Un seul réessai LLM avec consigne « JSON only » en cas
+        d'échec persistant, puis l'erreur honnête remonte (jamais de
+        contenu inventé). `repair_used` est journalisé pour le suivi.
+        """
+        suffix = "\n(reply with JSON only, no prose)"
+        current = prompt
+        last_error: Exception | None = None
+        for _ in range(1 + max(0, int(retries))):
+            data: dict[str, Any] | None = None
+            try:
+                data = await self.generate_json(current, system)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                raw = getattr(exc, "raw_content", None)
+                if raw is not None:
+                    try:
+                        data = repair_json_response(raw)
+                    except json.JSONDecodeError:
+                        data = None
+                    else:
+                        print(f"[{self.provider_name}] JSON réparé (repair_used).")
+                        last_error = None
+            if data is not None and validator is not None:
+                ok, detail = _run_validator(validator, data)
+                if not ok:
+                    last_error = detail
+                    data = None
+            if data is not None:
+                return data
+            current = prompt + suffix
+        if isinstance(last_error, json.JSONDecodeError):
+            raise last_error
+        raise RuntimeError(
+            f"LLM '{self.model}' ({self.provider_name}) : réponse JSON inexploitable "
+            f"après réessai ({last_error}). Reformulez ou changez de modèle."
+        )
+
     async def generate_vision_json(self, prompt: str, image_base64: str, system: str = "") -> dict[str, Any]:
         raise NotImplementedError
 
@@ -336,7 +455,11 @@ class OllamaProvider(BaseLLMProvider):
             },
         )
         raise_for_ollama(response, self.model)
-        return parse_json_response(response.json().get("response", "{}"))
+        content = response.json().get("response", "{}")
+        try:
+            return parse_json_response(content)
+        except json.JSONDecodeError as exc:
+            raise _attach_raw(exc, content) from exc
 
     async def generate_vision_json(self, prompt: str, image_base64: str, system: str = "") -> dict[str, Any]:
         """Vision Ollama : lève une erreur FR actionnable, jamais de score inventé.
@@ -555,7 +678,10 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         )
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
-        return parse_json_response(content)
+        try:
+            return parse_json_response(content)
+        except json.JSONDecodeError as exc:
+            raise _attach_raw(exc, content) from exc
 
     async def generate_vision_json(self, prompt: str, image_base64: str, system: str = "") -> dict[str, Any]:
         messages: list[dict[str, Any]] = []
