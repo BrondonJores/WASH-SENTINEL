@@ -8,9 +8,13 @@ use App\Models\Incident;
 use App\Models\MaintenanceLog;
 use App\Models\School;
 use App\Contracts\AiEngineClient;
+use App\Exceptions\ProposalGuidanceException;
 use App\Models\AgentProposal;
 use App\Models\User;
 use App\Services\AgentProposalService;
+use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use Illuminate\Http\Request;
@@ -147,12 +151,30 @@ class WashAgentController extends Controller
     }
     public function converse(Request $request, AiEngineClient $ai, AgentProposalService $proposals)
     {
+        // Rate-limit doux : répond en guidage 200 avant le throttle:30,1 dur (429).
+        if ($soft = $this->softThrottleResponse($request)) {
+            return response()->json($soft);
+        }
+
         $validated = $request->validate([
             'message' => ['required', 'string', 'max:2000'],
             'history' => ['nullable', 'array', 'max:20'],
             'history.*.role' => ['required_with:history', 'in:user,assistant,tool'],
             'history.*.content' => ['required_with:history', 'string', 'max:2000'],
             'district' => ['nullable', 'string', 'max:128'],
+        ], [
+            'message.required' => "Dites-moi en quelques mots ce dont vous avez besoin, par exemple « Signale une fuite au forage ».",
+            'message.string' => 'Votre message doit être un texte simple.',
+            'message.max' => 'Votre message est un peu long (2000 caractères maximum) : essayez de le raccourcir.',
+            'history.array' => "L'historique de conversation doit être une liste de messages.",
+            'history.max' => "L'historique est limité aux 20 derniers messages.",
+            'history.*.role.required_with' => "Chaque message d'historique doit préciser son rôle (user, assistant ou tool).",
+            'history.*.role.in' => "Le rôle d'un message d'historique doit être user, assistant ou tool.",
+            'history.*.content.required_with' => "Chaque message d'historique doit avoir un contenu.",
+            'history.*.content.string' => "Le contenu d'un message d'historique doit être un texte.",
+            'history.*.content.max' => 'Un message d’historique dépasse 2000 caractères.',
+            'district.string' => 'Le district doit être un texte.',
+            'district.max' => 'Le nom du district est trop long (128 caractères maximum).',
         ]);
 
         $user = $this->optionalUser($request);
@@ -160,16 +182,25 @@ class WashAgentController extends Controller
             return response()->json($vote);
         }
 
-        $response = $ai->agentChat(
-            $validated['message'],
-            $validated['history'] ?? [],
-            [
-                'schools' => $this->maintenanceProfiles($validated['district'] ?? null),
-                'incidents' => $this->openIncidentSnapshots($validated['district'] ?? null),
-                'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
-                'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
-            ],
-        );
+        // Jamais de 500 brut : moteur IA injoignable => 200 + guidage chaleureux.
+        try {
+            $response = $ai->agentChat(
+                $validated['message'],
+                $validated['history'] ?? [],
+                [
+                    'schools' => $this->maintenanceProfiles($validated['district'] ?? null),
+                    'incidents' => $this->openIncidentSnapshots($validated['district'] ?? null),
+                    'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
+                    'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
+                ],
+            );
+        } catch (ConnectionException|GuzzleConnectException $e) {
+            return response()->json($this->degradedGuidance());
+        } catch (\Throwable $e) {
+            report($e);
+
+            return response()->json($this->degradedGuidance());
+        }
 
         $response = $this->persistProposals($user, $response, $proposals);
 
@@ -180,6 +211,38 @@ class WashAgentController extends Controller
         ]);
 
         return response()->json($response);
+    }
+
+    protected function softThrottleResponse(Request $request): ?array
+    {
+        $key = 'wash.converse.soft:' . ($request->ip() ?? 'unknown');
+        if (RateLimiter::tooManyAttempts($key, 20)) {
+            $retryAfter = RateLimiter::availableIn($key);
+
+            return [
+                'answer' => "Trop de questions d'un coup — marquez une pause de {$retryAfter} secondes puis réessayez. Votre conversation est gardée.",
+                'tools_executed' => [],
+                'cards' => [],
+                'model_used' => '',
+                'follow_ups' => ['Voir les incidents ouverts ?'],
+                'degraded' => true,
+            ];
+        }
+        RateLimiter::hit($key, 60);
+
+        return null;
+    }
+
+    protected function degradedGuidance(): array
+    {
+        return [
+            'answer' => "Le moteur Sentinel met trop longtemps à répondre. Réessayez dans un instant — si ça persiste, reposez votre question plus simplement, par exemple « Résume le district Mvila ».",
+            'tools_executed' => [],
+            'cards' => [],
+            'model_used' => '',
+            'follow_ups' => ['Réessayer ?', 'Voir les incidents ouverts ?'],
+            'degraded' => true,
+        ];
     }
 
     protected function optionalUser(Request $request): ?User
@@ -216,6 +279,11 @@ class WashAgentController extends Controller
             }
             $result = $service->cancel($user, $pending->first());
             return $this->voteResponse(false, null, $result);
+        } catch (ProposalGuidanceException $e) {
+            return $this->voteResponse($confirm, $e->getMessage(), [
+                'guidance_status' => $e->guidanceStatus(),
+                'next_action' => $e->nextAction(),
+            ]);
         } catch (\Throwable $e) {
             return $this->voteResponse($confirm, $e->getMessage(), []);
         }
