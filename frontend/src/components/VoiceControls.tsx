@@ -99,23 +99,52 @@ function drawWaveform(canvas: HTMLCanvasElement, analyser: AnalyserNode | null, 
   }
 }
 
-function micErrorMessage(err: unknown): string {
+/**
+ * Guidage affiché après une panne d’enregistrement : jamais un simple
+ * « échec », toujours un message FR + une action (réessayer et/ou aide).
+ */
+interface RecorderGuidance {
+  message: string;
+  /** Bouton « Réessayer » qui relance l’enregistrement. */
+  retry: boolean;
+  /** Texte d’aide via le bouton « Aide » (absent = pas de bouton). */
+  help?: string;
+}
+
+function micErrorGuidance(err: unknown): RecorderGuidance {
   if (err instanceof DOMException || err instanceof Error) {
     switch (err.name) {
       case 'NotAllowedError':
       case 'SecurityError':
-        return 'Micro refusé : autorisez l’accès au microphone dans votre navigateur, puis réessayez.';
+        return {
+          message: 'Micro refusé. Autorisez le micro dans le navigateur, puis réessayez.',
+          retry: false,
+          help: 'Cliquez sur l’icône du micro (ou le cadenas) dans la barre d’adresse, autorisez le microphone pour ce site, puis réessayez. Sur mobile : réglages du navigateur > autorisations > microphone.',
+        };
       case 'NotFoundError':
       case 'OverconstrainedError':
-        return 'Aucun microphone détecté sur cet appareil.';
+        return {
+          message: 'Aucun microphone détecté sur cet appareil.',
+          retry: true,
+          help: 'Branchez ou activez un microphone, vérifiez qu’il n’est pas coupé, puis réessayez.',
+        };
       case 'NotReadableError':
-        return 'Microphone déjà utilisé par une autre application.';
+        return {
+          message: 'Microphone déjà utilisé par une autre application. Fermez-la, puis réessayez.',
+          retry: true,
+        };
       case 'AbortError':
-        return 'Enregistrement interrompu.';
+        return { message: 'Enregistrement interrompu. Réessayez quand vous êtes prêt.', retry: true };
     }
   }
-  return 'Impossible d’accéder au microphone.';
+  return { message: 'Impossible d’accéder au microphone. Vérifiez votre micro, puis réessayez.', retry: true };
 }
+
+/** Enregistrement sans aucun son capturé : guider vers une dictée audible. */
+const SILENCE_GUIDANCE: RecorderGuidance = {
+  message: 'On n’a rien entendu. Parlez plus près du micro, dans un endroit calme, puis réessayez.',
+  retry: true,
+};
 
 /**
  * Convertit la réponse TTS (WAV base64, voir contrat ci-dessus) en URL locale
@@ -179,7 +208,12 @@ export interface VoiceRecorderProps {
 export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [guidance, setGuidanceState] = useState<RecorderGuidance | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const setGuidance = useCallback((g: RecorderGuidance | null) => {
+    setShowHelp(false);
+    setGuidanceState(g);
+  }, []);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -244,24 +278,36 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
   }, [cleanup]);
 
   const start = useCallback(async () => {
-    setError(null);
+    setGuidance(null);
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setError('Navigateur incompatible : l’enregistrement audio n’est pas pris en charge.');
+      setGuidance({
+        message: 'Navigateur incompatible : l’enregistrement audio n’est pas pris en charge.',
+        retry: false,
+        help: 'Utilisez une version récente de Chrome, Edge, Firefox ou Safari pour dicter un message.',
+      });
       return;
     }
     if (typeof MediaRecorder === 'undefined') {
-      setError('Navigateur incompatible : MediaRecorder n’est pas disponible.');
+      setGuidance({
+        message: 'Navigateur incompatible : l’enregistrement audio n’est pas disponible.',
+        retry: false,
+        help: 'Utilisez une version récente de Chrome, Edge, Firefox ou Safari pour dicter un message.',
+      });
       return;
     }
     if (typeof window !== 'undefined' && !window.isSecureContext) {
-      setError('L’enregistrement audio exige une connexion sécurisée (HTTPS) ou localhost.');
+      setGuidance({
+        message: 'L’enregistrement audio exige une connexion sécurisée (HTTPS) ou localhost.',
+        retry: false,
+        help: 'Ouvrez la page en HTTPS (ou sur localhost) : les navigateurs bloquent le micro sur les pages non sécurisées.',
+      });
       return;
     }
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      setError(micErrorMessage(err));
+      setGuidance(micErrorGuidance(err));
       return;
     }
     const mimeType = pickMimeType();
@@ -270,7 +316,10 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
       recorder = mimeType !== '' ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     } catch {
       stream.getTracks().forEach((t) => t.stop());
-      setError('Navigateur incompatible : impossible de démarrer l’enregistrement.');
+      setGuidance({
+        message: 'L’enregistrement n’a pas démarré. Vérifiez votre micro, puis réessayez.',
+        retry: true,
+      });
       return;
     }
     streamRef.current = stream;
@@ -290,7 +339,7 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
       setElapsedMs(0);
       if (wasCancelled) return;
       if (blob.size === 0) {
-        setError('Enregistrement vide : aucun son capturé.');
+        setGuidance(SILENCE_GUIDANCE);
         return;
       }
       onAudioRef.current(blob);
@@ -298,13 +347,19 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
     recorder.onerror = () => {
       cleanup();
       setRecording(false);
-      setError('Erreur pendant l’enregistrement.');
+      setGuidance({
+        message: 'L’enregistrement a été interrompu. Vérifiez votre micro, puis réessayez.',
+        retry: true,
+      });
     };
     try {
       recorder.start(250);
     } catch {
       cleanup();
-      setError('Impossible de démarrer l’enregistrement.');
+      setGuidance({
+        message: 'L’enregistrement n’a pas démarré. Vérifiez votre micro, puis réessayez.',
+        retry: true,
+      });
       return;
     }
     startedAtRef.current = Date.now();
@@ -342,7 +397,7 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
       };
       rafRef.current = window.requestAnimationFrame(tick);
     }
-  }, [cleanup, stop]);
+  }, [cleanup, stop, setGuidance]);
 
   const toggle = () => {
     if (disabled) return;
@@ -392,8 +447,41 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
           </button>
         </span>
       )}
-      {error !== null && !recording && (
-        <span role="alert" className="max-w-60 text-xs text-danger">{error}</span>
+      {guidance !== null && !recording && (
+        <span role="alert" className="max-w-60 text-xs text-danger">
+          {guidance.message}
+          {guidance.retry && (
+            <>
+              {' '}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!disabled) void start();
+                }}
+                disabled={disabled}
+                className="rounded px-1 py-0.5 font-medium text-danger underline underline-offset-2 hover:opacity-80 focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Réessayer
+              </button>
+            </>
+          )}
+          {guidance.help !== undefined && (
+            <>
+              {' '}
+              <button
+                type="button"
+                onClick={() => setShowHelp((v) => !v)}
+                aria-expanded={showHelp}
+                className="rounded px-1 py-0.5 font-medium text-ink-soft underline underline-offset-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                Aide
+              </button>
+            </>
+          )}
+          {showHelp && guidance.help !== undefined && (
+            <span className="mt-1 block text-ink-soft">{guidance.help}</span>
+          )}
+        </span>
       )}
     </span>
   );
