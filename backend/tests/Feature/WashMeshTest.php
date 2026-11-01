@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\MeshBundle;
 use App\Models\Report;
 use App\Models\School;
+use App\Services\MeshSignature;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -100,7 +101,6 @@ class WashMeshTest extends TestCase
             'copies_remaining' => 4,
             'priority' => 'high',
             'custody_requested' => true,
-            'signature' => str_repeat('a', 128),
         ])]])->assertCreated();
 
         $bundle = MeshBundle::first();
@@ -204,5 +204,38 @@ class WashMeshTest extends TestCase
             ->assertCreated()->assertJsonPath('summary.quota_exceeded', 1);
 
         $this->assertEquals(1, MeshBundle::count());
+    }
+
+    public function test_signed_bundle_is_accepted_and_pubkey_stored(): void
+    {
+        $school = School::create(['name' => 'EP Yokadouma', 'code' => 'CM-EST-42', 'district' => 'Boumba-et-Ngoko']);
+        $pair = MeshSignature::generateKeypair();
+        $unsigned = $this->bundlePayload($school);
+        unset($unsigned['received_via_node_id']);
+        $signed = MeshSignature::signBundle($unsigned, $pair['secret']);
+        $signed['received_via_node_id'] = 'node-C-bertoua';
+
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$signed]])
+            ->assertCreated()->assertJsonPath('summary.accepted', 1);
+
+        $this->assertDatabaseHas('mesh_bundles', [
+            'bundle_id' => $signed['bundle_id'],
+            'node_pubkey' => $pair['public'],
+        ]);
+    }
+
+    public function test_tampered_signed_bundle_is_rejected(): void
+    {
+        $school = School::create(['name' => 'EP Yokadouma', 'code' => 'CM-EST-42', 'district' => 'Boumba-et-Ngoko']);
+        $pair = MeshSignature::generateKeypair();
+        $unsigned = $this->bundlePayload($school);
+        unset($unsigned['received_via_node_id']);
+        $signed = MeshSignature::signBundle($unsigned, $pair['secret']);
+        $signed['message'] = 'Message modifié après signature';
+
+        $this->postJson('/api/v1/mesh/bundles', ['bundles' => [$signed]])
+            ->assertCreated()->assertJsonPath('summary.rejected', 1);
+
+        $this->assertEquals(0, MeshBundle::count());
     }
 }

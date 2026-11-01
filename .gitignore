@@ -8,3 +8,8 @@ mesh/android/.gradle/
 mesh/android/build/
 mesh/android/app/build/
 mesh/android/local.properties
+desktop/dist/
+desktop/resources/
+desktop/node_modules/
+desktop/.tmp/
+desktop/bin/

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/neutralinojs/neutralinojs/main/schemas/neutralino.config.schema.json",
+  "applicationId": "cm.washsentinel.relai",
+  "version": "0.1.0",
+  "defaultMode": "window",
+  "documentRoot": "/resources/",
+  "url": "/index.html#/m",
+  "enableHTTPServer": true,
+  "enableNativeAPI": true,
+  "tokenSecurity": "one-time",
+  "window": {
+    "title": "WASH Relai — signalement terrain",
+    "width": 480,
+    "height": 860,
+    "minWidth": 360,
+    "minHeight": 600,
+    "center": true,
+    "resizable": true
+  },
+  "nativeAllowList": [
+    "app.*",
+    "window.*",
+    "os.open",
+    "debug.log"
+  ],
+  "modes": {
+    "window": {
+      "useSavedState": false
+    }
+  },
+  "cli": {
+    "binaryName": "wash-relai",
+    "resourcesPath": "/resources/",
+    "extensionsPath": "/extensions/",
+    "clientLibrary": "/resources/js/neutralino.js"
+  }
+}

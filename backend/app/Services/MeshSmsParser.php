@@ -72,13 +72,56 @@ class MeshSmsParser
         return Str::limit("WASH OK {$school->code} {$type} {$ticket} Merci!", 160, '');
     }
 
-    private function findSchool(string $code): ?School
+    /**
+     * Extensions USSD (chantier V2) : le menu saisit le code école puis un
+     * choix numérique, sans la grammaire « WASH CODE TYPE » complète.
+     */
+    public const USSD_TYPE_CHOICES = ['1' => 'P', '2' => 'L', '3' => 'E', '4' => 'H'];
+
+    public function findSchoolByCode(string $code): ?School
     {
         $code = strtoupper(trim($code));
+        if ($code === '') {
+            return null;
+        }
 
         return School::where('code', $code)->first()
             ?? School::where('code', str_replace('-', '', $code))->first()
             ?? School::whereRaw('UPPER(REPLACE(code, ?, ?)) = ?', ['-', '', str_replace('-', '', $code)])->first();
+    }
+
+    /**
+     * Choix numérique USSD (1-4) ou lettre/mot-clé SMS (P, L, E, H…).
+     */
+    public function ussdChoiceToType(string $input): ?string
+    {
+        $token = strtoupper(trim($input));
+
+        return self::USSD_TYPE_CHOICES[$token] ?? $this->matchType($token);
+    }
+
+    /**
+     * Texte normalisé d'un signalement USSD (même forme que le SMS,
+     * préfixe [USSD] + mention (URGENT) le cas échéant).
+     */
+    public function buildUssdMessage(School $school, string $type, ?string $urgency, ?string $detail): string
+    {
+        $label = self::TYPES[$type]['label'] ?? $type;
+        $message = "[USSD] {$school->name} : {$label}";
+        if ($urgency === 'urgente') {
+            $message .= ' (URGENT)';
+        }
+        $detail = trim((string) ($detail ?? ''));
+        if ($detail !== '') {
+            $message .= " — {$detail}";
+        }
+
+        return $message;
+    }
+
+    private function findSchool(string $code): ?School
+    {
+        return $this->findSchoolByCode($code);
     }
 
     private function matchType(string $token): ?string

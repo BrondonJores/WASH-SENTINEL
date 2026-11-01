@@ -13,7 +13,7 @@ class MeshBundle extends Model
         'received_via_node_id', 'status', 'report_id', 'expires_at', 'delivered_at',
         'destination_eid', 'report_to_eid', 'lifetime_seconds', 'previous_node_id',
         'copies_remaining', 'fragment_offset', 'fragment_total',
-        'custody_requested', 'priority', 'signature',
+        'custody_requested', 'priority', 'signature', 'node_pubkey',
         'sealed_payload', 'sealed_alg',
     ];
 

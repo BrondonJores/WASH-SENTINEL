@@ -1,0 +1,13 @@
+{
+  "name": "wash-relai-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WASH Relai — binaire desktop (Neutralino) embarquant la page terrain /m offline-first.",
+  "scripts": {
+    "bundle": "bash build.sh",
+    "build": "neu build --release"
+  },
+  "devDependencies": {
+    "@neutralinojs/neu": "11.2.0"
+  }
+}
