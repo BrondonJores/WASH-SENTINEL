@@ -1,0 +1,201 @@
+{
+  "_meta": {
+    "description": "Lexique WASH ghomala' (bbj) -> français pour le pont déterministe bbj_bridge.py. TOUTES les entrées sont NON vérifiées : à faire remplir/valider par un locuteur natif à partir de transcriptions réelles Meta Omnilingual ASR. Ne jamais inventer de faux ghomala'.",
+    "language": "bbj (ghomala', Cameroun, région Ouest)",
+    "license_note": "Données lexicales à valider — usage interne WASH-SENTINEL.",
+    "status": "UNVALIDATED — locuteur natif requis",
+    "version": "0.1.0"
+  },
+  "entries": [
+    {
+      "bbj": [],
+      "fr": "eau",
+      "id": "water",
+      "maps_to": "water_point",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "pas d'eau / plus d'eau / coupure d'eau",
+      "id": "no_water",
+      "maps_to": "dry_well",
+      "note": "à valider par locuteur natif",
+      "slot": "issue",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "robinet",
+      "id": "tap",
+      "maps_to": "water_point",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "fuite / coule / goutte",
+      "id": "leak",
+      "maps_to": "leak",
+      "note": "à valider par locuteur natif",
+      "slot": "issue",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "cassé / en panne / hors service / ne marche pas",
+      "id": "broken",
+      "maps_to": "total_breakdown",
+      "note": "à valider par locuteur natif",
+      "slot": "issue",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "pompe",
+      "id": "pump",
+      "maps_to": "water_point",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "forage",
+      "id": "borehole",
+      "maps_to": "water_point",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "puits",
+      "id": "well",
+      "maps_to": "water_point",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "toilettes / latrines / WC",
+      "id": "toilets",
+      "maps_to": "toilets_latrines",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "bouché / engorgé / déborde",
+      "id": "blocked",
+      "maps_to": "blockage",
+      "note": "à valider par locuteur natif",
+      "slot": "issue",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "savon",
+      "id": "soap",
+      "maps_to": "handwashing",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "se laver les mains / lavage des mains",
+      "id": "handwash",
+      "maps_to": "handwashing",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "école",
+      "id": "school",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "élèves / enfants",
+      "id": "students",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "depuis plusieurs jours / depuis X jours",
+      "id": "duration",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "urgent / danger / vite",
+      "id": "urgent",
+      "maps_to": "high",
+      "note": "à valider par locuteur natif",
+      "slot": "urgency",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "eau sale / eau jaune / eau trouble",
+      "id": "dirty_water",
+      "maps_to": "contamination",
+      "note": "à valider par locuteur natif",
+      "slot": "issue",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "diarrhée / malade (ventre) / vomissements",
+      "id": "sick",
+      "maps_to": "contamination",
+      "note": "à valider par locuteur natif",
+      "slot": "issue",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "caniveau / égout / fosse",
+      "id": "drain",
+      "maps_to": "sewage_drainage",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    }
+  ]
+}
