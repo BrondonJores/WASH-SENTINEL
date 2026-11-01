@@ -16,6 +16,7 @@ import { DetailDrawer } from '../components/DetailDrawer';
 import { VoicePlayer, VoiceRecorder } from '../components/VoiceControls';
 import { VoicePreview } from '../components/VoicePreview';
 import { VoiceMode, VoiceModeToggle } from '../components/VoiceMode';
+import { WelcomeScreen } from '../components/WelcomeScreen';
 import type { DetailKind, DetailTarget } from '../components/DetailDrawer';
 import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
@@ -796,8 +797,12 @@ export default function ConsolePage() {
             </p>
           )}
           <div className="stage-in stage-4 mt-8 w-full">{composer(true)}</div>
-          <div className="mt-2 flex justify-center">
-            <VoiceModeToggle size="lg" onOpen={() => setVoiceOpen(true)} />
+          <div className="stage-in stage-4 mt-6 w-full">
+            <WelcomeScreen
+              count={pulse?.open_incidents ?? 0}
+              onAsk={ask}
+              onSpeak={() => setVoiceOpen(true)}
+            />
           </div>
           {errorBox}
           {preview !== null && (
