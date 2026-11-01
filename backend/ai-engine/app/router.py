@@ -13,18 +13,34 @@ Règle conservée : en ambiguïté liste+création, la consultation gagne
 """
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from typing import Any, Literal
 
 IntentLabel = Literal["list", "create", "other"]
 
+
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 #: Écart minimal top1-top2 exigé pour un routage franc (sinon tiebreak/autre).
-MARGIN_MIN = 0.15
+#: Override ENV : ROUTER_MARGIN_MIN (défaut historique 0.15).
+MARGIN_MIN = _env_float("ROUTER_MARGIN_MIN", 0.15)
 #: Score minimal pour router « create » (évite les routages sur un indice faible).
-CREATE_MIN_SCORE = 1.0
+#: Override ENV : ROUTER_CREATE_MIN_SCORE (défaut historique 1.0).
+CREATE_MIN_SCORE = _env_float("ROUTER_CREATE_MIN_SCORE", 1.0)
 #: Score minimal pour considérer un message « question de données ».
-DATA_MIN_SCORE = 1.0
+#: Override ENV : ROUTER_DATA_MIN_SCORE (défaut historique 1.0).
+DATA_MIN_SCORE = _env_float("ROUTER_DATA_MIN_SCORE", 1.0)
 #: Marqueurs de temps passé : forcent le tiebreak vers la consultation.
 PAST_TIME_MARKERS = frozenset({
     "hier", "semaine", "semaines", "mois", "historique", "realise",
@@ -53,6 +69,12 @@ def _joined(tokens: list[str]) -> str:
 # --- Tables de traits : (forme normalisée, poids, multi-mot ?) ---
 # Vocabulaire migré des LIST/CREATE/DATA_QUESTION_HINTS historiques
 # d'agent_loop (minuscules, accents repliés) + bigrammes explicites.
+#
+# DOC — CONTRAT TESTÉ : LIST_FEATURES / CREATE_FEATURES / DATA_FEATURES et
+# _STEM_GAP_MAX sont épinglés par tests/test_router_calibrated.py (31 cas :
+# labels, marges, confusables) et tests/test_prompt_eval.py. Ne pas modifier
+# formes ni poids sans mettre à jour ces suites : toute dérive casse le
+# routage calibré (cf. app/thresholds.py, inventaire AXE 8).
 
 def _phrase(form: str) -> str:
     return " ".join(tokenize(form))
@@ -140,7 +162,8 @@ CREATE_FEATURES: tuple[tuple[str, float], ...] = tuple(
 )
 
 #: Poids des indices plugins (consultation) : un seul suffit à router « list ».
-PLUGIN_FEATURE_WEIGHT = 2.0
+#: Override ENV : ROUTER_PLUGIN_FEATURE_WEIGHT (défaut historique 2.0).
+PLUGIN_FEATURE_WEIGHT = _env_float("ROUTER_PLUGIN_FEATURE_WEIGHT", 2.0)
 
 DATA_FEATURES: tuple[tuple[str, float], ...] = tuple(
     (form, weight)

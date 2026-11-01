@@ -72,15 +72,32 @@ compris depuis schemas.py, sans cycle).
 """
 from __future__ import annotations
 
+import os
+
+
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 #: Décision doublon sur similarité cosinus (chemin nominal, embeddings).
 #: Hérité, NON calibré : aucun seed ne fournit de vrais vecteurs (les tests
 #: mockent les embeddings). Cohérent avec l'appelant Laravel (threshold=0.80).
-DUPLICATE_DECISION_THRESHOLD = 0.80
+#: Override ENV : DUPLICATE_DECISION_THRESHOLD (défaut historique 0.80).
+DUPLICATE_DECISION_THRESHOLD = _env_float("DUPLICATE_DECISION_THRESHOLD", 0.80)
 
 #: Inscription en liste ``matches`` (cosinus). Hérité, NON calibré (idem).
 #: Les matches sous le seuil de décision sont marqués "moderate".
-DUPLICATE_MATCH_CUTOFF = 0.70
+#: Override ENV : DUPLICATE_MATCH_CUTOFF (défaut historique 0.70).
+DUPLICATE_MATCH_CUTOFF = _env_float("DUPLICATE_MATCH_CUTOFF", 0.70)
 
 #: Repli textuel Jaccard (embeddings indisponibles). CALIBRÉ AXE 8 :
 #: 0.50 -> 0.25 (P=1.00 R=0.625 F1=0.77 sur n=179 paires, vs R=0.00 avant).
-DUPLICATE_JACCARD_FALLBACK = 0.25
+#: Override ENV : DUPLICATE_JACCARD_FALLBACK (défaut historique 0.25).
+DUPLICATE_JACCARD_FALLBACK = _env_float("DUPLICATE_JACCARD_FALLBACK", 0.25)

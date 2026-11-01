@@ -10,12 +10,35 @@ pour un suivi mécanique.
 """
 from __future__ import annotations
 
+import os
 import re
 from datetime import date, datetime, timezone
 from difflib import SequenceMatcher
 from typing import Any
 
 from .router import normalize as _router_normalize
+
+
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def fold(text: Any) -> str:
@@ -121,7 +144,21 @@ def find_keyword_spans(
 
 # ---------------------------------------------------------------------------
 # Négation à portée (~3 tokens à droite, reset de proposition).
+# Constantes ancrées par tests/test_textnorm.py (ne pas changer les défauts).
 # ---------------------------------------------------------------------------
+
+#: Fenêtre de négation : tokens neutralisés à droite du négateur.
+#: Override ENV : TEXTNORM_NEGATION_WINDOW (défaut historique 3).
+NEGATION_WINDOW_TOKENS = _env_int("TEXTNORM_NEGATION_WINDOW", 3)
+
+#: Fenêtre de recherche du fermant "ne ... X" (tokens après l'ouvrant).
+#: Override ENV : TEXTNORM_NEGATION_NE_WINDOW (défaut historique 5).
+NEGATION_NE_CLOSER_WINDOW = _env_int("TEXTNORM_NEGATION_NE_WINDOW", 5)
+
+#: Longueur minimale (car.) pour les appariements districts tolérants
+#: (préfixe gardé, sous-chaîne). "oua" ne matche plus "Douala".
+#: Override ENV : TEXTNORM_DISTRICT_MIN_LEN (défaut historique 4).
+DISTRICT_MIN_LEN = _env_int("TEXTNORM_DISTRICT_MIN_LEN", 4)
 
 #: Négateurs simples (token unique replié).
 _NEGATORS_SINGLE = frozenset({
@@ -163,7 +200,7 @@ def negation_spans(text_folded: str) -> list[tuple[int, int]]:
                 break
             muted.append((start, end))
             taken += 1
-            if taken >= 3:
+            if taken >= NEGATION_WINDOW_TOKENS:
                 break
 
     for i, (word, _s, _e) in enumerate(tokens):
@@ -178,7 +215,7 @@ def negation_spans(text_folded: str) -> list[tuple[int, int]]:
                 # construction côté extracteur) → ignoré ici aussi.
                 continue
         elif word in _NEGATOR_OPEN:
-            window = [t[0] for t in tokens[i + 1:i + 6]]
+            window = [t[0] for t in tokens[i + 1:i + 1 + NEGATION_NE_CLOSER_WINDOW]]
             if any(w in _NEGATOR_CLOSE for w in window):
                 closer = next(
                     j for j in range(i + 1, i + 1 + len(window))
@@ -272,9 +309,9 @@ def district_match(
             item_tokens <= wanted_tokens or wanted_tokens <= item_tokens):
         return True
     short, long = sorted((item_folded, wanted_folded), key=len)
-    if len(short) >= 4 and long.startswith(short):
+    if len(short) >= DISTRICT_MIN_LEN and long.startswith(short):
         return True
-    if allow_substring and len(wanted_folded) >= 4:
+    if allow_substring and len(wanted_folded) >= DISTRICT_MIN_LEN:
         return wanted_folded in item_folded or item_folded in wanted_folded
     return False
 
@@ -304,7 +341,8 @@ def dedup_incidents(*pools: Any) -> list[dict[str, Any]]:
 #: Seuil flou lieux, balayé 0.40-0.80 sur tests/fixtures_places.py
 #: (optimum ex æquo 0.70/0.75, tie-break précision → 0.75 ; voir
 #: tests/test_place_threshold.py qui échoue si ce choix dérive).
-PLACE_CUTOFF = 0.75
+#: Override ENV : TEXTNORM_PLACE_CUTOFF (défaut historique 0.75).
+PLACE_CUTOFF = _env_float("TEXTNORM_PLACE_CUTOFF", 0.75)
 
 #: Tokens génériques ignorés du score par mot (ex-place_suggest._GENERIC_TOKENS).
 GENERIC_PLACE_TOKENS = frozenset({
