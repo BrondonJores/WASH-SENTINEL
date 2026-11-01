@@ -192,6 +192,9 @@ class WashAgentController extends Controller
             'district' => ['nullable', 'string', 'max:128'],
         ]);
 
+        // Le relais SSE peut durer (LLM froid) : pas de couperet PHP,
+        // les heartbeats amont maintiennent nginx en vie entre les chunks.
+        set_time_limit(300);
         $user = $this->optionalUser($request);
         $vote = $user ? $this->interceptVote($user, $validated['message'], $proposals) : null;
         $context = [
@@ -202,9 +205,16 @@ class WashAgentController extends Controller
         ];
 
         return response()->stream(function () use ($validated, $context, $user, $vote, $ai, $proposals) {
-            $emit = function (string $event, array $data): void {
-                echo "event: {$event}\ndata: " . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+            $relayed = 0;
+            $flush = function (): void {
+                if (ob_get_level() > 0) {
+                    ob_flush();
+                }
                 flush();
+            };
+            $emit = function (string $event, array $data) use ($flush): void {
+                echo "event: {$event}\ndata: " . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+                $flush();
             };
             // Repli honnête : une réponse complète réémise en events SSE.
             $emitFull = function (array $full) use ($emit): void {
@@ -238,16 +248,26 @@ class WashAgentController extends Controller
                 ]);
                 $body = $upstream->getBody();
                 while (! $body->eof()) {
-                    echo $body->read(1024);
-                    flush();
+                    $chunk = $body->read(1024);
+                    $relayed += strlen($chunk);
+                    echo $chunk;
+                    $flush();
                 }
-            } catch (\Throwable) {
-                $full = $this->persistProposals($user, $ai->agentChat(
-                    $validated['message'],
-                    $validated['history'] ?? [],
-                    $context,
-                ), $proposals);
-                $emitFull($full);
+            } catch (\Throwable $e) {
+                if ($relayed === 0) {
+                    // Rien n'est parti : un seul run complet réémis, pas de doublon.
+                    $full = $this->persistProposals($user, $ai->agentChat(
+                        $validated['message'],
+                        $validated['history'] ?? [],
+                        $context,
+                    ), $proposals);
+                    $emitFull($full);
+                } else {
+                    // Coupure en cours de route : on finalise le partiel
+                    // plutôt que de rejouer un second run complet.
+                    report($e);
+                    $emit('done', ['event' => 'done', 'model' => '', 'follow_ups' => []]);
+                }
             }
         }, 200, [
             'Content-Type' => 'text/event-stream',

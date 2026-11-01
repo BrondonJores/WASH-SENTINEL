@@ -59,16 +59,35 @@ async def _collect(loop: AgentLoop, message: str = "résume") -> list[dict]:
 
 
 class AgentStreamOrderTest(unittest.IsolatedAsyncioTestCase):
-    async def test_order_is_tools_cards_deltas_done(self) -> None:
+    async def test_order_is_started_tools_cards_deltas_done(self) -> None:
         events = await _collect(AgentLoop(StubLLM([CALL_DISTRICT, FINAL])))
         kinds = [e["event"] for e in events]
-        self.assertGreaterEqual(len(events), 3)
-        self.assertEqual(kinds[0], "tools")
-        self.assertEqual(kinds[1], "cards")
+        self.assertGreaterEqual(len(events), 4)
+        self.assertEqual(kinds[0], "started")
+        self.assertEqual(kinds[1], "tools")
+        self.assertEqual(kinds[2], "cards")
         self.assertEqual(kinds[-1], "done")
-        middle = kinds[2:-1]
+        middle = kinds[3:-1]
         self.assertTrue(middle, "la réponse doit être découpée en deltas")
         self.assertTrue(all(k == "delta" for k in middle))
+
+    async def test_heartbeat_while_loop_runs(self) -> None:
+        import asyncio
+        from types import SimpleNamespace
+
+        async def slow_chat(req):  # noqa: ANN001, ANN202
+            await asyncio.sleep(0.05)
+            return SimpleNamespace(tools_executed=[], cards=[],
+                                   answer="ok", model_used="slow",
+                                   follow_ups=[])
+
+        req = AgentChatRequest(message="x", context=CONTEXT)
+        events = [e async for e in stream_agent_events(
+            SimpleNamespace(chat=slow_chat), req, heartbeat_s=0.01)]
+        kinds = [e["event"] for e in events]
+        self.assertEqual(kinds[0], "started")
+        self.assertIn("_comment", kinds)
+        self.assertEqual(kinds[-1], "done")
 
     async def test_tools_cards_and_done_payloads(self) -> None:
         events = await _collect(AgentLoop(StubLLM([CALL_DISTRICT, FINAL])))
@@ -98,6 +117,10 @@ class AgentStreamContentTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(frame.startswith("event: delta\n"))
         self.assertIn('"text": "abc"', frame)
         self.assertTrue(frame.endswith("\n\n"))
+
+    async def test_format_sse_comment(self) -> None:
+        frame = format_sse({"event": "_comment", "text": "ping"})
+        self.assertEqual(frame, ": ping\n\n")
 
 
 if __name__ == "__main__":

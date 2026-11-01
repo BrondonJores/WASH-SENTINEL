@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { api, converseStream } from '../lib/api';
+import { renderRichText } from '../lib/richtext';
 import type { ChatHistoryMessage, TerritoryPulse , AgentCard } from '../lib/api';
 import type { DialogueMessage as Msg } from '../lib/dialogues';
 import { useAuth } from '../auth/AuthContext';
@@ -696,10 +697,10 @@ export default function ConsolePage() {
               <div key={i} className="msg-in flex gap-3">
                 <SentinelAvatar className="mt-1 h-7 w-7 shrink-0" />
                 <div className="min-w-0 flex-1 space-y-2">
-                  <p className="whitespace-pre-wrap text-[15px] leading-7">
-                  {streamId === i ? m.content.slice(0, visible) : m.content}
+                  <div className="space-y-1.5 text-[15px] leading-7">
+                  {renderRichText(streamId === i ? m.content.slice(0, visible) : m.content)}
                   {streamId === i && <span className="stream-caret" aria-hidden="true" />}
-                </p>
+                </div>
                 {streamId !== i && (
                   <>
                     <div className="flex items-center gap-3">

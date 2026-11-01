@@ -104,6 +104,10 @@ services:
     ollama:
         image: 'ollama/ollama:latest'
         restart: unless-stopped
+        environment:
+            # Garde le modèle chargé 24h : sans ça, Ollama décharge après
+            # 5 min d'inactivité et chaque reprise coûte un rechargement froid.
+            OLLAMA_KEEP_ALIVE: '${OLLAMA_KEEP_ALIVE:-24h}'
         ports:
             - '${FORWARD_OLLAMA_PORT:-11434}:11434'
         volumes:
