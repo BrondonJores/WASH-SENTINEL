@@ -241,6 +241,34 @@ class WashWhatsAppTest extends TestCase
         $this->assertTrue((new MetaWhatsAppService())->verifySignature('{}', null));
     }
 
+    public function test_download_media_survives_dns_blips(): void
+    {
+        config([
+            'whatsapp.simulator' => false,
+            'whatsapp.token' => 'test-token',
+            'whatsapp.base_url' => 'https://graph.facebook.com/v21.0',
+        ]);
+        $attempts = 0;
+        Http::fake(function ($request) use (&$attempts) {
+            if (str_contains($request->url(), 'graph.facebook.com/v21.0/MEDIA123')) {
+                $attempts++;
+                if ($attempts < 3) {
+                    throw new \Illuminate\Http\Client\ConnectionException('Could not resolve host');
+                }
+
+                return Http::response(['url' => 'https://cdn.test/MEDIA123', 'mime_type' => 'audio/ogg'], 200);
+            }
+
+            return Http::response('OGG-BYTES', 200);
+        });
+
+        $media = (new MetaWhatsAppService())->downloadMedia('MEDIA123');
+
+        $this->assertEquals(3, $attempts);
+        $this->assertEquals('OGG-BYTES', $media['bytes']);
+        $this->assertEquals('audio/ogg', $media['mime']);
+    }
+
     public function test_receive_records_last_webhook_at(): void
     {
         $this->seedContact();

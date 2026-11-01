@@ -54,11 +54,13 @@ class MetaWhatsAppService implements WhatsAppClient
 
     /**
      * Client HTTP vers Graph API avec retries (le DNS Docker flanche par
-     * intermittence : cURL error 6). 3 tentatives, 300 ms d'intervalle.
+     * intermittence : cURL error 6, parfois plusieurs secondes). 5 tentatives,
+     * 1 s d'intervalle. Ne rejoue que les erreurs de connexion, jamais les
+     * rejets Meta (401/4xx partent en exception immédiate).
      */
     protected function http(): \Illuminate\Http\Client\PendingRequest
     {
-        return Http::withToken($this->token())->retry(3, 300);
+        return Http::withToken($this->token())->retry(5, 1000);
     }
 
     public function isSimulator(): bool
