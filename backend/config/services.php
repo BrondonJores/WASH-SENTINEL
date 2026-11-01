@@ -38,6 +38,17 @@ return [
     'ai_engine' => [
         'url' => env('AI_ENGINE_URL', 'http://ai-engine:8000'),
         'timeout' => env('AI_ENGINE_TIMEOUT', 120),
+        // LOT 7 — sondes admin + cache profils (WashAiEngineService).
+        // Replis : constantes TIMEOUT_* / PROFILE_CACHE_TTL du service.
+        'timeout_health' => env('AI_ENGINE_TIMEOUT_HEALTH', 10),
+        'timeout_provider_types' => env('AI_ENGINE_TIMEOUT_PROVIDER_TYPES', 15),
+        'timeout_test_profile' => env('AI_ENGINE_TIMEOUT_TEST_PROFILE', 45),
+        'timeout_test_stt' => env('AI_ENGINE_TIMEOUT_TEST_STT', 120),
+        'profile_cache_ttl' => env('AI_ENGINE_PROFILE_CACHE_TTL', 60),
+        // Seuil cosinus décision doublon. MIROIR de DUPLICATE_DECISION_THRESHOLD
+        // (ai-engine/app/thresholds.py, 0.80 hérité AXE 8) : même nom
+        // d'ENV des deux côtés, changer l'un exige de changer l'autre.
+        'duplicate_threshold' => env('DUPLICATE_DECISION_THRESHOLD', 0.80),
     ],
 
     'mesh' => [
@@ -58,6 +69,10 @@ return [
         'seal_secret' => env('MESH_SEAL_SECRET', ''),
     ],
 
+    // LOT 7 — LEGACY DÉPRÉCIÉ MAIS FONCTIONNEL : la source unique est
+    // config/whatsapp.php. Conservé pour compat ascendante : lu en repli
+    // par MetaWhatsAppService::cfg() et WashWhatsAppController quand
+    // whatsapp.* est vide. Ne plus y ajouter de clés.
     'whatsapp' => [
         'base_url' => env('WHATSAPP_BASE_URL', 'https://graph.facebook.com/v21.0'),
         'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID', ''),

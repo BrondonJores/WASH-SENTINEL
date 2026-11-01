@@ -66,8 +66,16 @@ class MeshSignature
 {
     public const ALG = 'ed25519';
 
+    /**
+     * LOT 7 — noms des champs signature (CONTRAT avec les implémentations
+     * sœurs TS/Python + portage Kotlin : ne jamais renommer, voir l'en-tête).
+     */
+    public const FIELD_SIGNATURE = 'signature';
+
+    public const FIELD_NODE_PUBKEY = 'node_pubkey';
+
     /** Champs exclus des octets signés (mutables de routage + témoins). */
-    public const SIGN_EXCLUDED = ['checksum', 'hops', 'previous_node', 'copies_remaining', 'signature'];
+    public const SIGN_EXCLUDED = ['checksum', 'hops', 'previous_node', 'copies_remaining', self::FIELD_SIGNATURE];
 
     /**
      * Forme canonique signée. null si le bundle n'est pas sérialisable
@@ -143,13 +151,13 @@ class MeshSignature
         if ($secret === false || strlen($secret) !== SODIUM_CRYPTO_SIGN_SECRETKEYBYTES) {
             return null;
         }
-        $bundle['node_pubkey'] = base64_encode(sodium_crypto_sign_publickey_from_secretkey($secret));
-        unset($bundle['signature']);
+        $bundle[self::FIELD_NODE_PUBKEY] = base64_encode(sodium_crypto_sign_publickey_from_secretkey($secret));
+        unset($bundle[self::FIELD_SIGNATURE]);
         $signature = self::sign($bundle, $secretKeyB64);
         if ($signature === null) {
             return null;
         }
-        $bundle['signature'] = $signature;
+        $bundle[self::FIELD_SIGNATURE] = $signature;
 
         return $bundle;
     }
@@ -162,8 +170,8 @@ class MeshSignature
     public static function verify(array $bundle, ?string $publicKeyB64 = null): bool
     {
         try {
-            $keyB64 = $publicKeyB64 ?? ($bundle['node_pubkey'] ?? null);
-            $sigB64 = $bundle['signature'] ?? null;
+            $keyB64 = $publicKeyB64 ?? ($bundle[self::FIELD_NODE_PUBKEY] ?? null);
+            $sigB64 = $bundle[self::FIELD_SIGNATURE] ?? null;
             if (! is_string($keyB64) || $keyB64 === '' || ! is_string($sigB64) || $sigB64 === '') {
                 return false;
             }

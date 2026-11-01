@@ -10,18 +10,53 @@ use Illuminate\Support\Facades\Http;
 
 class WashAiEngineService implements AiEngineClient
 {
+    /**
+     * LOT 7 — sources uniques des constantes client (valeurs inchangées,
+     * configurables via config/services.php 'ai_engine', voir ce fichier).
+     */
+    /** Timeout HTTP générique (secondes) : triage/extract/chat/voix. */
+    public const DEFAULT_TIMEOUT = 120;
+
+    /** Timeout (secondes) du health-check. */
+    public const TIMEOUT_HEALTH = 10;
+
+    /** Timeout (secondes) de la liste des types de providers LLM/STT. */
+    public const TIMEOUT_PROVIDER_TYPES = 15;
+
+    /** Timeout (secondes) du test d'un profil LLM. */
+    public const TIMEOUT_TEST_PROFILE = 45;
+
+    /** Timeout (secondes) du test d'un profil STT. */
+    public const TIMEOUT_TEST_STT = 120;
+
+    /** TTL (secondes) du cache profils actif LLM/STT. */
+    public const PROFILE_CACHE_TTL = 60;
+
+    /**
+     * Seuil de similarité cosinus par défaut pour la décision doublon.
+     *
+     * MIROIR DOCUMENTÉ avec ai-engine/app/thresholds.py :
+     * DUPLICATE_DECISION_THRESHOLD (défaut historique 0.80, hérité AXE 8 —
+     * aucun seed ne fournit de vrais vecteurs). Les deux côtés partagent
+     * aussi la variable d'environnement DUPLICATE_DECISION_THRESHOLD
+     * (config services.ai_engine.duplicate_threshold) : changer la valeur
+     * d'un côté exige de changer l'autre. Quand l'appelant ne précise pas
+     * de seuil, la valeur de config gagne (repli : cette constante).
+     */
+    public const DEFAULT_DUPLICATE_THRESHOLD = 0.80;
+
     public function __construct(
         protected string $baseUrl = '',
-        protected int $timeout = 120,
+        protected int $timeout = self::DEFAULT_TIMEOUT,
     ) {
         $this->baseUrl = $baseUrl ?: (string) config('services.ai_engine.url', 'http://ai-engine:8000');
-        $this->timeout = (int) config('services.ai_engine.timeout', 120);
+        $this->timeout = (int) config('services.ai_engine.timeout', self::DEFAULT_TIMEOUT);
     }
 
     public function activeProfile(): ?AiModelProfile
     {
         try {
-            return Cache::remember(AiModelProfile::CACHE_KEY, 60, fn () => AiModelProfile::active());
+            return Cache::remember(AiModelProfile::CACHE_KEY, $this->profileCacheTtl(), fn () => AiModelProfile::active());
         } catch (\Throwable) {
             return null;
         }
@@ -35,7 +70,7 @@ class WashAiEngineService implements AiEngineClient
     public function activeSttProfile(): ?AiSttProfile
     {
         try {
-            return Cache::remember(AiSttProfile::CACHE_KEY, 60, fn () => AiSttProfile::active());
+            return Cache::remember(AiSttProfile::CACHE_KEY, $this->profileCacheTtl(), fn () => AiSttProfile::active());
         } catch (\Throwable) {
             return null;
         }
@@ -51,29 +86,40 @@ class WashAiEngineService implements AiEngineClient
         return Http::withHeaders([...$this->profileHeaders(), ...$this->sttHeaders()])->timeout($this->timeout);
     }
 
+    /** Timeout configuré d'une sonde admin (repli : constante LOT 7). */
+    protected function adminTimeout(string $key, int $fallback): int
+    {
+        return (int) config("services.ai_engine.{$key}", $fallback);
+    }
+
+    protected function profileCacheTtl(): int
+    {
+        return (int) config('services.ai_engine.profile_cache_ttl', self::PROFILE_CACHE_TTL);
+    }
+
     public function health(): array
     {
-        return Http::timeout(10)->get($this->baseUrl . '/health')->throw()->json();
+        return Http::timeout($this->adminTimeout('timeout_health', self::TIMEOUT_HEALTH))->get($this->baseUrl . '/health')->throw()->json();
     }
 
     public function providerTypes(): array
     {
-        return Http::timeout(15)->get($this->baseUrl . '/v1/admin/provider-types')->throw()->json();
+        return Http::timeout($this->adminTimeout('timeout_provider_types', self::TIMEOUT_PROVIDER_TYPES))->get($this->baseUrl . '/v1/admin/provider-types')->throw()->json();
     }
 
     public function testProfile(array $profile): array
     {
-        return Http::timeout(45)->post($this->baseUrl . '/v1/admin/test-provider', $profile)->throw()->json();
+        return Http::timeout($this->adminTimeout('timeout_test_profile', self::TIMEOUT_TEST_PROFILE))->post($this->baseUrl . '/v1/admin/test-provider', $profile)->throw()->json();
     }
 
     public function sttTypes(): array
     {
-        return Http::timeout(15)->get($this->baseUrl . '/v1/admin/stt-types')->throw()->json();
+        return Http::timeout($this->adminTimeout('timeout_provider_types', self::TIMEOUT_PROVIDER_TYPES))->get($this->baseUrl . '/v1/admin/stt-types')->throw()->json();
     }
 
     public function testSttProfile(array $payload): array
     {
-        return Http::timeout(120)->post($this->baseUrl . '/v1/admin/test-stt', $payload)->throw()->json();
+        return Http::timeout($this->adminTimeout('timeout_test_stt', self::TIMEOUT_TEST_STT))->post($this->baseUrl . '/v1/admin/test-stt', $payload)->throw()->json();
     }
 
     public function triage(?string $text, ?string $audioPath, ?string $schoolName, ?string $language = null): array
@@ -100,12 +146,18 @@ class WashAiEngineService implements AiEngineClient
         ])->throw()->json();
     }
 
-    public function checkDuplicates(string $incomingSummary, array $activeIncidents, float $threshold = 0.80): array
+    public function checkDuplicates(string $incomingSummary, array $activeIncidents, float $threshold = self::DEFAULT_DUPLICATE_THRESHOLD): array
     {
+        // Seuil explicite > config > constante (miroir thresholds.py).
+        // Comportement inchangé sans config : 0.80 des deux côtés.
+        $effective = $threshold === self::DEFAULT_DUPLICATE_THRESHOLD
+            ? (float) config('services.ai_engine.duplicate_threshold', self::DEFAULT_DUPLICATE_THRESHOLD)
+            : $threshold;
+
         return $this->client()->post($this->baseUrl . '/v1/wash/check-duplicates', [
             'incoming_summary' => $incomingSummary,
             'active_incidents' => $activeIncidents,
-            'similarity_threshold' => $threshold,
+            'similarity_threshold' => $effective,
         ])->throw()->json();
     }
 

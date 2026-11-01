@@ -15,6 +15,15 @@ use Illuminate\Support\Str;
  */
 class MeshSmsParser
 {
+    /**
+     * CONTRAT GSM (LOT 7 — valeurs intouchables, volontairement en CONST et
+     * PAS en config) :
+     * - ACK_MAX_LENGTH = 160 : un accusé tient dans UN segment GSM 7-bit.
+     *   L'augmenter casserait les modems SMSSync et doublerait les coûts.
+     * - HELP : texte d'aide historique, repris tel quel dans les erreurs et
+     *   renvoyé par SMS aux expéditeurs. Ne jamais reformuler sans valider
+     *   avec les relais terrain (même grammaire en USSD et bundle mesh).
+     */
     public const KEYWORDS = ['WASH', 'EAU'];
 
     public const TYPES = [
@@ -26,6 +35,40 @@ class MeshSmsParser
 
     public const HELP = 'Envoyez: WASH CODE TYPE. Ex: WASH DOU-BON-001 P (P=panne, L=latrine, E=eau, H=hygiene).';
 
+    /** Longueur max du détail libre (caractères, troncature silencieuse). */
+    public const DETAIL_MAX_LENGTH = 100;
+
+    /** Longueur max de l'accusé (1 segment GSM 7-bit, voir contrat). */
+    public const ACK_MAX_LENGTH = 160;
+
+    /** Gabarit de l'accusé : code école, type, ticket (ordre inchangé). */
+    public const ACK_TEMPLATE = 'WASH OK %s %s %s Merci!';
+
+    /** Nombre min de mots : « WASH CODE TYPE » (détail optionnel). */
+    public const MIN_TOKENS = 3;
+
+    /** Séparateur de mots (espaces, tabulations, retours chariot). */
+    public const TOKEN_SPLIT_PATTERN = '/\s+/';
+
+    /** Gabarits d'erreur (HELP concaténé par l'appelant, inchangé). */
+    public const UNKNOWN_SCHOOL_ERROR = "Code ecole '%s' inconnu. ";
+
+    public const UNKNOWN_TYPE_ERROR = "Type '%s' inconnu (P, L, E ou H). ";
+
+    /** Préfixes de normalisation (même forme SMS et USSD). */
+    public const PREFIX_SMS = '[SMS]';
+
+    public const PREFIX_USSD = '[USSD]';
+
+    /** Séparateur école/label — détail dans le texte normalisé. */
+    public const NORMALIZED_SEPARATOR = ' — ';
+
+    /** Valeur d'urgence déclenchant la mention (URGENT) en USSD. */
+    public const URGENT_URGENCY = 'urgente';
+
+    /** Mention accolée au libellé quand l'urgence est 'urgente'. */
+    public const URGENT_TAG = ' (URGENT)';
+
     /**
      * @return array{ok: bool, school: ?School, type: ?string, type_label: ?string, detail: ?string, normalized: ?string, error: ?string}
      */
@@ -36,10 +79,10 @@ class MeshSmsParser
             'detail' => null, 'normalized' => null, 'error' => $error,
         ];
 
-        $tokens = preg_split('/\s+/', trim(Str::ascii(strtoupper($raw)))) ?: [];
+        $tokens = preg_split(self::TOKEN_SPLIT_PATTERN, trim(Str::ascii(strtoupper($raw)))) ?: [];
         $tokens = array_values(array_filter($tokens));
 
-        if (count($tokens) < 3) {
+        if (count($tokens) < self::MIN_TOKENS) {
             return $fail(self::HELP);
         }
         if (! in_array($tokens[0], self::KEYWORDS, true)) {
@@ -48,16 +91,16 @@ class MeshSmsParser
 
         $school = $this->findSchool($tokens[1]);
         if (! $school) {
-            return $fail("Code ecole '{$tokens[1]}' inconnu. ".self::HELP);
+            return $fail(sprintf(self::UNKNOWN_SCHOOL_ERROR, $tokens[1]).self::HELP);
         }
 
         $type = $this->matchType($tokens[2]);
         if (! $type) {
-            return $fail("Type '{$tokens[2]}' inconnu (P, L, E ou H). ".self::HELP);
+            return $fail(sprintf(self::UNKNOWN_TYPE_ERROR, $tokens[2]).self::HELP);
         }
 
-        $detail = Str::limit(trim(implode(' ', array_slice($tokens, 3))), 100, '');
-        $normalized = "[SMS] {$school->name} : ".self::TYPES[$type]['label'].($detail !== '' ? " — {$detail}" : '');
+        $detail = Str::limit(trim(implode(' ', array_slice($tokens, 3))), self::DETAIL_MAX_LENGTH, '');
+        $normalized = self::PREFIX_SMS." {$school->name} : ".self::TYPES[$type]['label'].($detail !== '' ? self::NORMALIZED_SEPARATOR.$detail : '');
 
         return [
             'ok' => true, 'school' => $school, 'type' => $type,
@@ -69,7 +112,7 @@ class MeshSmsParser
 
     public function acknowledge(School $school, string $type, string $ticket): string
     {
-        return Str::limit("WASH OK {$school->code} {$type} {$ticket} Merci!", 160, '');
+        return Str::limit(sprintf(self::ACK_TEMPLATE, $school->code, $type, $ticket), self::ACK_MAX_LENGTH, '');
     }
 
     /**
@@ -107,13 +150,13 @@ class MeshSmsParser
     public function buildUssdMessage(School $school, string $type, ?string $urgency, ?string $detail): string
     {
         $label = self::TYPES[$type]['label'] ?? $type;
-        $message = "[USSD] {$school->name} : {$label}";
-        if ($urgency === 'urgente') {
-            $message .= ' (URGENT)';
+        $message = self::PREFIX_USSD." {$school->name} : {$label}";
+        if ($urgency === self::URGENT_URGENCY) {
+            $message .= self::URGENT_TAG;
         }
         $detail = trim((string) ($detail ?? ''));
         if ($detail !== '') {
-            $message .= " — {$detail}";
+            $message .= self::NORMALIZED_SEPARATOR.$detail;
         }
 
         return $message;

@@ -5,6 +5,16 @@
  * ProposalGuidanceException). Extraction pure : textes strictement identiques
  * aux littéraux d'origine. Lus avec locale 'fr' forcée (comportement inchangé
  * quelle que soit la locale applicative). Miroir EN : lang/en/wash.php.
+ *
+ * LOT 7 — canaux WhatsApp/mesh/notifications (WashWhatsAppService,
+ * WashWhatsAppPersonality, CriticalIncidentNotification,
+ * WashRelanceNotification). Extraction pure : textes strictement identiques
+ * aux littéraux d'origine. Clés 'whatsapp.*' lues avec locale forcée
+ * ('fr' ou 'en' selon la langue détectée du message) ; clés
+ * 'personality.*' et 'notifications.*' en 'fr' forcé par défaut.
+ * Les messages FR-only (erreur technique, médias illisibles, hors-sujet,
+ * école inconnue, surpoids, placeholder vocal) n'ont pas de variante EN :
+ * comportement inchangé, locale 'fr' forcée.
  */
 return [
 
@@ -78,6 +88,93 @@ return [
         'refused_label' => 'Voir mes actions possibles',
         'refused_prompt' => 'Que puis-je faire avec mon rôle ?',
         'owner_mismatch' => "Cette proposition appartient à un autre utilisateur. Rien n'a été créé sur votre compte.",
+    ],
+
+    // LOT 7 — réponses WhatsApp (WashWhatsAppService). Textes identiques
+    // aux littéraux d'origine ; :ref :summary :urgency :school :human
+    // :since :next :date sont interpolés par le service.
+    'whatsapp' => [
+        'error_technical' => 'Oups, un problème technique nous empêche de traiter votre message. Réessayez dans quelques minutes, merci !',
+        'unreadable_audio' => "On n'a pas compris votre note vocale. Réenregistrez au calme, près du micro : dites votre école + la panne (ex. robinet cassé au bloc A). Merci !",
+        'unreadable_photo' => "La photo n'est pas arrivée jusqu'à nous. Renvoyez-la avec une phrase : école + panne (ex. fuite au bloc A). Merci !",
+        'confirmed_stale' => 'Merci ! Votre signalement est bien enregistré. Pour un autre problème, envoyez une note vocale ou décrivez-le en une phrase.',
+        'confirmed' => "Parfait, c'est confirmé ! Incident :ref suivi par nos équipes. On vous écrit ici dès que ça avance.",
+        'clarify_ask' => 'Désolé ! Que dois-je corriger ? Répondez en une phrase : quoi + où.',
+        'clarify_applied' => "Merci ! J'ai corrigé : :summary. C'est bien ça ?",
+        'stale_note' => "Je n'ai pas retrouvé votre signalement précédent, je traite votre message comme un nouveau signalement. ",
+        'buttons_body' => "C'est bien ça ? Touchez Oui ou Non.",
+        'button_yes' => 'Oui',
+        'button_no' => 'Non',
+        'tts_confirm' => "Merci ! Incident :ref enregistré : :summary. On vous tient au courant.",
+        'unknown_school_ecole' => "Merci ! On a bien noté « :school ». Mais ce numéro n'est rattaché à aucune école pour l'instant : demandez au directeur de l'enregistrer, puis réécrivez-nous.",
+        'unknown_school' => "Bonjour ! Ce numéro n'est rattaché à aucune école WASH Sentinel. De quelle école parlez-vous ? Envoyez : ECOLE Nom de votre école. On vous aidera à l'enregistrer.",
+        'off_topic' => "Merci pour votre message ! Ici on signale l'eau et l'hygiène à l'école : ex. robinet qui fuit, toilettes bouchées, plus de savon. Décrivez votre panne en une phrase.",
+        'created' => "Merci ! Incident :ref enregistré : :summary. Priorité :urgency. La suite : notre équipe est notifiée, on vous écrit ici dès que ça avance.",
+        'duplicate' => "Déjà reçu ! Incident :ref suivi par nos équipes. Merci, pas besoin de renvoyer. On vous tient au courant ici.",
+        'oversized_audio' => 'Note trop lourde, renvoie plus court : réenregistre ta note vocale au calme, près du micro — école + panne en une phrase (ex. robinet cassé au bloc A). Merci !',
+        'oversized_photo' => 'Photo trop lourde, renvoie une photo plus légère avec une phrase : école + panne (ex. fuite au bloc A). Merci !',
+        'voice_placeholder' => '[message vocal]',
+
+        // Priorités inline (minuscules, flux WhatsApp) — distinctes de
+        // 'urgencies' (capitalisées, récapitulatifs agent LOT 6).
+        'urgency' => [
+            'low' => 'basse',
+            'medium' => 'moyenne',
+            'high' => 'haute',
+            'critical' => 'critique',
+        ],
+
+        'suivi' => [
+            'card' => ":ref — :summary. Statut : :human:since. Prochaine étape : :next.",
+            'since' => ' depuis le :date',
+            'status' => [
+                'reported' => 'bien reçu, en attente de tri',
+                'triaged' => 'pris en compte par notre équipe',
+                'assigned' => 'technicien assigné',
+                'in_progress' => 'équipe en intervention',
+                'resolved' => 'résolu — merci de confirmer que tout marche',
+                'closed' => 'clôturé',
+            ],
+            'next' => [
+                'reported' => "tri par notre équipe, on vous écrit ici dès que ça avance",
+                'triaged' => "assignation d'un technicien, on vous écrit ici dès que ça avance",
+                'assigned' => "intervention du technicien prévue, on vous écrit ici dès que c'est fini",
+                'in_progress' => "réparation en cours, on vous écrit ici dès que c'est fini",
+                'resolved' => 'confirmez ici que tout marche, merci',
+                'closed' => 'rien à faire, merci',
+            ],
+            'next_fallback' => "on vous écrit ici dès que ça avance",
+            'empty' => "Aucun signalement pour l'instant pour votre école, décrivez votre panne en une phrase : quoi + où (ex. robinet qui fuit au bloc A).",
+            'unknown_reference' => "On ne retrouve pas la référence :ref. Vérifiez le code ou décrivez votre panne en une phrase : quoi + où.",
+        ],
+    ],
+
+    // LOT 7 — personnalité conversationnelle (WashWhatsAppPersonality).
+    'personality' => [
+        'greeting' => 'Bonjour ! Je suis Sentinel, l’assistant eau et hygiène de votre école. Ici vous pouvez : 1) signaler une panne (robinet qui fuit, toilettes bouchées, plus de savon...) en une phrase ou note vocale ; 2) suivre votre dossier (« où en est mon dossier ? »).',
+        'identity' => 'Je suis Sentinel, l’assistant eau et hygiène de votre école. Je reçois vos signalements : robinet qui fuit, pompe cassée, toilettes bouchées, plus de savon... Décrivez la panne en une phrase ou envoyez une note vocale, puis suivez votre dossier ici.',
+        'capabilities' => 'Je suis Sentinel, l’assistant eau et hygiène de votre école. Je peux : 1) enregistrer vos pannes (eau, toilettes, savon...) ; 2) suivre vos dossiers. Envoyez « où en est mon dossier ? » ou votre référence WASH-... pour le suivi.',
+        'thanks' => 'Avec plaisir ! Je suis Sentinel, l’assistant eau et hygiène de votre école. Autre panne ? Décrivez-la en une phrase (robinet, toilettes, savon...) et je m’en occupe. Pour suivre : « où en est mon dossier ? ».',
+    ],
+
+    // LOT 7 — notifications mail (locale 'fr' forcée, comportement inchangé).
+    'notifications' => [
+        'critical' => [
+            'subject' => 'Incident CRITIQUE : :school (:ref)',
+            'intro' => "Un incident critique vient d'être signalé et trié par l'IA.",
+            'school' => 'École : :school (:district)',
+            'summary' => 'Résumé : :summary',
+            'priority' => 'Élèves affectés : :affected — Priorité IA : :priority/100',
+            'action' => "Voir l'incident",
+        ],
+        'relance' => [
+            'subject' => 'Relance incident dormant : :ref (:school)',
+            'stale' => "L'incident :ref est sans activité depuis :days jour(s).",
+            'school' => 'École : :school (:district)',
+            'title' => 'Titre : :title',
+            'status' => 'Statut : :status — Priorité IA : :priority/100',
+            'action' => "Voir l'incident",
+        ],
     ],
 
 ];

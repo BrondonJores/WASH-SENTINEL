@@ -9,6 +9,23 @@ use Illuminate\Support\Facades\Log;
 class MetaWhatsAppService implements WhatsAppClient
 {
     /**
+     * Repli ultime si AUCUNE config ne fournit base_url (ni whatsapp.base_url
+     * ni legacy services.whatsapp) : n'arrive qu'en test pur sans config.
+     * Source unique en exploitation : config/whatsapp.php 'base_url'.
+     */
+    protected const FALLBACK_BASE_URL = 'https://graph.facebook.com/v21.0';
+
+    /** Retries HTTP Graph API : 5 tentatives, 1 s d'intervalle (inchangés). */
+    protected const RETRY_TIMES = 5;
+
+    protected const RETRY_SLEEP_MS = 1000;
+
+    /** Timeouts HTTP (secondes) : 30 s par défaut, 60 s pour les médias. */
+    protected const TIMEOUT_DEFAULT = 30;
+
+    protected const TIMEOUT_MEDIA = 60;
+
+    /**
      * Lit config/whatsapp.php en priorité, avec repli sur l'ancien
      * config/services.php ['whatsapp'] (compat ascendante).
      */
@@ -39,7 +56,7 @@ class MetaWhatsAppService implements WhatsAppClient
 
     protected function baseUrl(): string
     {
-        return rtrim((string) $this->cfg('base_url', 'https://graph.facebook.com/v21.0'), '/');
+        return rtrim((string) $this->cfg('base_url', self::FALLBACK_BASE_URL), '/');
     }
 
     protected function token(): string
@@ -60,7 +77,7 @@ class MetaWhatsAppService implements WhatsAppClient
      */
     protected function http(): \Illuminate\Http\Client\PendingRequest
     {
-        return Http::withToken($this->token())->retry(5, 1000);
+        return Http::withToken($this->token())->retry(self::RETRY_TIMES, self::RETRY_SLEEP_MS);
     }
 
     public function isSimulator(): bool
@@ -138,13 +155,13 @@ class MetaWhatsAppService implements WhatsAppClient
         }
 
         $meta = $this->http()
-            ->timeout(30)
+            ->timeout(self::TIMEOUT_DEFAULT)
             ->get("{$this->baseUrl()}/{$mediaId}")
             ->throw()
             ->json();
 
         $response = $this->http()
-            ->timeout(60)
+            ->timeout(self::TIMEOUT_MEDIA)
             ->get($meta['url'] ?? '');
         $response->throw();
 
@@ -162,7 +179,7 @@ class MetaWhatsAppService implements WhatsAppClient
         }
 
         return $this->http()
-            ->timeout(30)
+            ->timeout(self::TIMEOUT_DEFAULT)
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/messages", [
                 'messaging_product' => 'whatsapp',
                 'to' => $to,
@@ -193,7 +210,7 @@ class MetaWhatsAppService implements WhatsAppClient
         }
 
         return $this->http()
-            ->timeout(30)
+            ->timeout(self::TIMEOUT_DEFAULT)
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/messages", [
                 'messaging_product' => 'whatsapp',
                 'to' => $to,
@@ -215,7 +232,7 @@ class MetaWhatsAppService implements WhatsAppClient
         }
 
         $response = $this->http()
-            ->timeout(60)
+            ->timeout(self::TIMEOUT_MEDIA)
             ->attach('file', $bytes, $filename ?? 'whatsapp-media', ['ContentType' => $mime])
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/media", [
                 'messaging_product' => 'whatsapp',
@@ -235,7 +252,7 @@ class MetaWhatsAppService implements WhatsAppClient
         }
 
         return $this->http()
-            ->timeout(30)
+            ->timeout(self::TIMEOUT_DEFAULT)
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/messages", [
                 'messaging_product' => 'whatsapp',
                 'to' => $to,
@@ -274,7 +291,7 @@ class MetaWhatsAppService implements WhatsAppClient
         }
 
         return $this->http()
-            ->timeout(30)
+            ->timeout(self::TIMEOUT_DEFAULT)
             ->post("{$this->baseUrl()}/{$this->phoneNumberId()}/messages", $payload)
             ->throw()
             ->json();

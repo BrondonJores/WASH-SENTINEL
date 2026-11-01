@@ -10,6 +10,9 @@ class MeshSeal
 {
     public const ALG = 'nacl-sealed-box';
 
+    /** Clé config du secret box serveur (base64, 32 octets). */
+    public const CONFIG_KEY = 'services.mesh.seal_secret';
+
     public static function publicKeyB64(): ?string
     {
         $secret = self::secretKey();
@@ -46,7 +49,7 @@ class MeshSeal
 
     private static function secretKey(): ?string
     {
-        $secret = base64_decode((string) config('services.mesh.seal_secret'), true);
+        $secret = base64_decode((string) config(self::CONFIG_KEY), true);
 
         return $secret !== false && strlen($secret) === SODIUM_CRYPTO_BOX_SECRETKEYBYTES ? $secret : null;
     }

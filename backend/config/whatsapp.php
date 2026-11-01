@@ -47,6 +47,8 @@
 return [
     'enabled' => (bool) env('WHATSAPP_ENABLED', true),
 
+    // LOT 7 — SOURCE UNIQUE du base_url Graph API (legacy déprécié :
+    // services.whatsapp.base_url, lu en repli uniquement).
     'base_url' => env('WHATSAPP_BASE_URL', 'https://graph.facebook.com/v21.0'),
 
     'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID', ''),
