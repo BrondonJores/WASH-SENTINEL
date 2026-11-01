@@ -132,21 +132,29 @@ class WashAgentController extends Controller
 
     public function synthesize(Request $request, AiEngineClient $ai)
     {
-        $validated = $request->validate(['text' => ['required', 'string', 'max:1000']]);
+        $validated = $request->validate([
+            'text' => ['required', 'string', 'max:1000'],
+            'voice' => ['nullable', 'string', 'max:64'],
+            'language' => ['nullable', 'string', 'max:16', 'in:fr,dua_Latn,bassa,ewondo'],
+        ]);
 
-        return response()->json($ai->synthesize($validated['text']));
+        return response()->json($ai->synthesize(
+            $validated['text'],
+            $validated['voice'] ?? 'fr_FR-upmc-medium',
+            $validated['language'] ?? 'fr',
+        ));
     }
 
     public function transcribe(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate([
             'audio' => 'required|file|max:10240',
-            'language' => 'nullable|string|max:16',
+            'language' => 'nullable|string|max:16|in:fr,dua_Latn,bassa,ewondo',
         ]);
 
         return response()->json($ai->transcribe(
             $validated['audio']->getRealPath(),
-            $validated['language'] ?? 'fr',
+            $validated['language'] ?? null,
         ));
     }
     public function converse(Request $request, AiEngineClient $ai, AgentProposalService $proposals)

@@ -25,6 +25,8 @@ class VoiceServiceTest(unittest.TestCase):
         res = VoiceService().transcribe(b"RIFFfake", "t.wav", "fr", stt=OkStt())
         self.assertEqual(res.transcript, "bonjour école")
         self.assertEqual(res.language, "fr")
+        self.assertEqual(res.language_effective, "fr")
+        self.assertEqual(res.driver, "base")
 
     def test_transcribe_propagates_error_never_fabricates(self) -> None:
         """Non-régression : plus jamais de faux '[Transcription locale : Fuite...]'."""
@@ -52,7 +54,7 @@ class VoiceServiceTest(unittest.TestCase):
                 with open(out, "wb") as f:
                     f.write(wav)
 
-            def communicate(self, input: str | None = None) -> tuple:
+            def communicate(self, input: str | None = None, timeout: float | None = None) -> tuple:
                 return ("", "")
 
         svc = VoiceService()
@@ -74,9 +76,13 @@ class VoiceServiceTest(unittest.TestCase):
                 svc._resolve_voice_model("fr_FR-siwis-medium"),
                 "/models/piper/fr_FR-siwis-medium.onnx",
             )
-            # Voix inconnue -> voix par défaut ; traversal -> ignoré.
+            # Appel implicite : voix inconnue -> voix par défaut ; traversal -> ignoré.
             self.assertEqual(svc._resolve_voice_model("voix-absente"), svc.piper_model)
             self.assertEqual(svc._resolve_voice_model("../../etc/passwd"), svc.piper_model)
+            # Appel explicite : voix inconnue -> erreur guidée, jamais de repli silencieux.
+            with self.assertRaises(RuntimeError) as ctx:
+                svc._resolve_voice_model("voix-absente", explicit=True)
+            self.assertIn("[TTS_VOICE_UNAVAILABLE]", str(ctx.exception))
 
 
 if __name__ == "__main__":

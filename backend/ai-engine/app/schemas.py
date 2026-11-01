@@ -233,12 +233,15 @@ class FairnessDispatchRequest(BaseModel):
 class VoiceTranscriptionResponse(BaseModel):
     transcript: str
     language: str = "fr"
+    language_effective: str = "fr"
+    driver: str | None = None
     duration_seconds: float | None = None
 
 
 class VoiceSynthesisRequest(BaseModel):
     text: str
     voice: str = "fr_FR-upmc-medium"
+    language: str = "fr"
 
 
 class VoiceSynthesisResponse(BaseModel):

@@ -158,6 +158,22 @@ export interface MessagePayload {
   follow_ups: string[];
 }
 
+export type VoiceLanguage = 'fr' | 'dua_Latn' | 'bassa' | 'ewondo';
+
+export interface TranscriptionResult {
+  transcript: string;
+  language: string;
+  language_effective?: string;
+  driver?: string | null;
+  duration_seconds?: number | null;
+}
+
+export interface SynthesisResult {
+  audio_base64: string;
+  mime_type: string;
+  text?: string;
+}
+
 const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost/api';
 
 let token: string | null = localStorage.getItem('wash_admin_token');
@@ -265,38 +281,58 @@ async function readDegraded<T>(res: Response): Promise<T | undefined> {
   return undefined;
 }
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await guardedFetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (res.status === 401) handle401();
-  if (!res.ok) {
-    const degraded = await readDegraded<T>(res);
-    if (degraded !== undefined) return degraded;
-    await parseError(res, `Erreur ${res.status}`);
+async function req<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  const ctrl = timeoutMs !== undefined && init?.signal === undefined ? new AbortController() : null;
+  const timer =
+    ctrl !== null && timeoutMs !== undefined
+      ? window.setTimeout(() => ctrl.abort(), timeoutMs)
+      : null;
+  try {
+    const res = await guardedFetch(`${baseUrl}${path}`, {
+      ...init,
+      ...(ctrl !== null ? { signal: ctrl.signal } : {}),
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(init?.headers ?? {}),
+      },
+    });
+    if (res.status === 401) handle401();
+    if (!res.ok) {
+      const degraded = await readDegraded<T>(res);
+      if (degraded !== undefined) return degraded;
+      await parseError(res, `Erreur ${res.status}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
   }
-  return (await res.json()) as T;
 }
 
-async function reqMultipart<T>(path: string, form: FormData): Promise<T> {
-  const res = await guardedFetch(`${baseUrl}${path}`, {
-    method: 'POST',
-    headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: form,
-  });
-  if (res.status === 401) handle401();
-  if (!res.ok) {
-    const degraded = await readDegraded<T>(res);
-    if (degraded !== undefined) return degraded;
-    await parseError(res, `Erreur ${res.status}`);
+async function reqMultipart<T>(path: string, form: FormData, timeoutMs?: number): Promise<T> {
+  const ctrl = timeoutMs !== undefined ? new AbortController() : null;
+  const timer =
+    ctrl !== null && timeoutMs !== undefined
+      ? window.setTimeout(() => ctrl.abort(), timeoutMs)
+      : null;
+  try {
+    const res = await guardedFetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      ...(ctrl !== null ? { signal: ctrl.signal } : {}),
+      body: form,
+    });
+    if (res.status === 401) handle401();
+    if (!res.ok) {
+      const degraded = await readDegraded<T>(res);
+      if (degraded !== undefined) return degraded;
+      await parseError(res, `Erreur ${res.status}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
   }
-  return (await res.json()) as T;
 }
 
 export const api = {
@@ -311,16 +347,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ message, history }),
     }),
-  transcribeVoice: (blob: Blob) => {
+  transcribeVoice: (blob: Blob, language?: string) => {
     const form = new FormData();
     form.append('audio', blob, 'dictation.webm');
-    return reqMultipart<{ transcript: string }>('/v1/wash/agent/transcribe', form);
+    if (language) form.append('language', language);
+    return reqMultipart<TranscriptionResult>('/v1/wash/agent/transcribe', form, 90_000);
   },
-  synthesizeVoice: (text: string) =>
-    req<{ audio_base64: string; mime_type: string }>('/v1/wash/agent/synthesize', {
-      method: 'POST',
-      body: JSON.stringify({ text: text.slice(0, 1000) }),
-    }),
+  synthesizeVoice: (text: string, opts?: { voice?: string; language?: string }) =>
+    req<SynthesisResult>(
+      '/v1/wash/agent/synthesize',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          text: text.slice(0, 1000),
+          ...(opts?.voice ? { voice: opts.voice } : {}),
+          ...(opts?.language ? { language: opts.language } : {}),
+        }),
+      },
+      60_000,
+    ),
   overview: () => req<TerritoryPulse>('/v1/wash/overview'),
   library: () => req<LibraryPayload>('/v1/wash/library'),
   createProject: (name: string) =>

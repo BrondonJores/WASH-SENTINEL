@@ -166,19 +166,29 @@ class WashAiEngineService implements AiEngineClient
         ])->throw()->json();
     }
 
-    public function synthesize(string $text, string $voice = 'fr_FR-upmc-medium'): array
+    public function synthesize(string $text, string $voice = 'fr_FR-upmc-medium', string $language = 'fr'): array
     {
         return $this->client()->post($this->baseUrl . '/v1/voice/synthesize', [
             'text' => $text,
             'voice' => $voice,
+            'language' => $language,
         ])->throw()->json();
     }
 
-    public function transcribe(string $audioPath, string $language = 'fr'): array
+    public function transcribe(string $audioPath, ?string $language = null): array
     {
-        return $this->client()
+        // Demande explicite > profil actif : sans langue explicite on garde le
+        // header X-STT-Language du profil (repli), sinon on le retire pour que
+        // le champ de requête gagne (le moteur applique requête > profil > fr).
+        $headers = $this->sttHeaders();
+        if ($language) {
+            unset($headers['X-STT-Language']);
+        }
+        $request = Http::withHeaders([...$this->profileHeaders(), ...$headers])->timeout($this->timeout);
+
+        return $request
             ->attach('audio', file_get_contents($audioPath), basename($audioPath))
-            ->post($this->baseUrl . '/v1/voice/transcribe', ['language' => $language])
+            ->post($this->baseUrl . '/v1/voice/transcribe', array_filter(['language' => $language]))
             ->throw()->json();
     }
 }

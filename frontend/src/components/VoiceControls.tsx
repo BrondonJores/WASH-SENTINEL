@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { getCachedTtsUrl } from '../lib/ttsCache';
 
 /* ============================================================================
  * Contrôles vocaux Sentinel — dicter (STT) + écouter (TTS).
  * Composants autonomes, zéro dépendance, FR, dark-mode, motion-reduce.
  *
  * CONTRAT STT CONSTATÉ (backend/ai-engine/app/main.py → POST /v1/voice/transcribe)
- *   Requête  : multipart/form-data { audio: <fichier>, language: "fr" }
- *              (le header x-stt-language a priorité sur le champ language)
- *   Réponse  : JSON { transcript: string, language: string,
- *                      duration_seconds: number | null }
+ *   Requête  : multipart/form-data { audio: <fichier>, language?: "fr"|"dua_Latn"|"bassa"|"ewondo" }
+ *              (précédence : champ language > header x-stt-language du profil > "fr")
+ *   Réponse  : JSON { transcript: string, language: string, language_effective: string,
+ *                      driver: string | null, duration_seconds: number | null }
  *   Relais Laravel : POST /v1/wash/agent/transcribe { audio, language? }.
  *
  * CONTRAT TTS CONSTATÉ (main.py → POST /v1/voice/synthesize, relais Laravel
  * POST /v1/wash/agent/synthesize { text } → passthrough JSON identique)
- *   Requête  : JSON { text: string, voice?: string } (défaut "fr_FR-upmc-medium")
+ *   Requête  : JSON { text: string, voice?: string, language?: string } (défaut "fr_FR-upmc-medium" / "fr")
  *   Réponse  : JSON { audio_base64: string, mime_type: "audio/wav", text: string }
  *   L'audio est un WAV encodé en base64 (pas d'URL). Le helper
  *   `ttsBase64ToObjectUrl` ci-dessous le convertit en URL locale pour
@@ -22,6 +23,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 /** Durée maximale d'une dictée avant arrêt automatique (2 minutes). */
 const MAX_RECORD_MS = 120_000;
+
+/** Poids maximal d'une dictée acceptée (10 Mo, miroir de la validation Laravel). */
+const MAX_RECORD_BYTES = 10 * 1024 * 1024;
+
+/** Dictée trop lourde : guider vers un message plus court. */
+const TOO_HEAVY_GUIDANCE_MESSAGE =
+  'Enregistrement trop lourd : dictez un message plus court, puis réessayez.';
 
 /** Types MIME préférés pour MediaRecorder, du plus au moins souhaité. */
 const PREFERRED_MIME_TYPES = [
@@ -203,9 +211,11 @@ export interface VoiceRecorderProps {
   /** Appelé avec l’audio capturé (webm/opus si possible, sinon type supporté). */
   onAudio: (blob: Blob) => void;
   disabled?: boolean;
+  /** Libellé de langue pour l’accessibilité (ex. « douala »). */
+  languageLabel?: string;
 }
 
-export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps) {
+export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: VoiceRecorderProps) {
   const [recording, setRecording] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [guidance, setGuidanceState] = useState<RecorderGuidance | null>(null);
@@ -342,6 +352,10 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
         setGuidance(SILENCE_GUIDANCE);
         return;
       }
+      if (blob.size > MAX_RECORD_BYTES) {
+        setGuidance({ message: TOO_HEAVY_GUIDANCE_MESSAGE, retry: true });
+        return;
+      }
       onAudioRef.current(blob);
     };
     recorder.onerror = () => {
@@ -411,9 +425,21 @@ export function VoiceRecorder({ onAudio, disabled = false }: VoiceRecorderProps)
         type="button"
         onClick={toggle}
         disabled={disabled}
-        aria-label={recording ? 'Arrêter l’enregistrement' : 'Dicter un message'}
+        aria-label={
+          recording
+            ? 'Arrêter l’enregistrement'
+            : languageLabel
+              ? `Dicter un message en ${languageLabel}`
+              : 'Dicter un message'
+        }
         aria-pressed={recording}
-        title={recording ? 'Arrêter l’enregistrement' : 'Dicter un message'}
+        title={
+          recording
+            ? 'Arrêter l’enregistrement'
+            : languageLabel
+              ? `Dicter un message en ${languageLabel}`
+              : 'Dicter un message'
+        }
         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${
           recording
             ? 'border-danger/50 bg-danger-soft text-danger'
@@ -496,16 +522,24 @@ export interface VoicePlayerProps {
   onRequestAudio?: () => Promise<string | null>;
   disabled?: boolean;
   className?: string;
+  /**
+   * Clé du cache TTS (voir ttsCache). Si fournie : le cache est consulté avant
+   * onRequestAudio, et les URL jouées sont partagées (jamais révoquées, elles
+   * appartiennent au cache). Sans clé : comportement historique inchangé.
+   */
+  cacheKey?: string | null;
 }
 
 type PlayerStatus = 'idle' | 'loading' | 'playing';
 
-export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false, className = '' }: VoicePlayerProps) {
+export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false, className = '', cacheKey = null }: VoicePlayerProps) {
   const [status, setStatus] = useState<PlayerStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ownedUrlRef = useRef<string | null>(null);
+  const sharedRef = useRef(false);
   const mountedRef = useRef(true);
+  const shared = cacheKey !== null && cacheKey !== undefined;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -521,6 +555,10 @@ export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false,
   }, []);
 
   const releaseOwned = useCallback(() => {
+    if (sharedRef.current) {
+      sharedRef.current = false; // URL du cache : ne jamais révoquer
+      return;
+    }
     if (ownedUrlRef.current !== null) {
       URL.revokeObjectURL(ownedUrlRef.current);
       ownedUrlRef.current = null;
@@ -544,7 +582,7 @@ export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false,
   // Si la source fournie par le parent change, arrêter la lecture en cours.
   useEffect(() => {
     stop();
-  }, [audioUrl, stop]);
+  }, [audioUrl, cacheKey, stop]);
 
   const ensureAudio = useCallback(() => {
     let el = audioRef.current;
@@ -573,14 +611,29 @@ export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false,
     try {
       let src = audioUrl;
       if (src === null || src === undefined || src === '') {
-        if (!onRequestAudio) throw new Error('Aucune source audio configurée pour ce message.');
-        const provided = await onRequestAudio();
-        if (!mountedRef.current) return;
-        if (provided === null || provided === '') {
-          throw new Error('Aucun audio disponible pour ce message.');
+        const cached = shared && cacheKey !== null && cacheKey !== undefined
+          ? getCachedTtsUrl(cacheKey)
+          : undefined;
+        if (cached !== undefined) {
+          releaseOwned();
+          sharedRef.current = true;
+          src = cached;
+        } else {
+          if (!onRequestAudio) throw new Error('Aucune source audio configurée pour ce message.');
+          const provided = await onRequestAudio();
+          if (!mountedRef.current) return;
+          if (provided === null || provided === '') {
+            throw new Error('Aucun audio disponible pour ce message.');
+          }
+          releaseOwned();
+          if (shared) {
+            // Fournisseur adossé au cache (getSynthesizedUrl) : URL partagée.
+            sharedRef.current = true;
+            src = provided;
+          } else {
+            ownedUrlRef.current = src = provided;
+          }
         }
-        releaseOwned();
-        ownedUrlRef.current = src = provided;
       }
       const el = ensureAudio();
       el.src = src;
@@ -592,7 +645,7 @@ export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false,
       setStatus('idle');
       setError(err instanceof Error ? err.message : 'Lecture impossible.');
     }
-  }, [audioUrl, onRequestAudio, ensureAudio, releaseOwned]);
+  }, [audioUrl, cacheKey, shared, onRequestAudio, ensureAudio, releaseOwned]);
 
   const toggle = () => {
     if (disabled || status === 'loading') return;

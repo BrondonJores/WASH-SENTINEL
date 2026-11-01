@@ -102,6 +102,8 @@ class VoiceGuidanceTest(unittest.TestCase):
         self.assertIsNotNone(res.duration_seconds)
         assert res.duration_seconds is not None
         self.assertAlmostEqual(res.duration_seconds, 1.5, places=1)
+        self.assertEqual(res.language_effective, "fr")
+        self.assertEqual(res.driver, "base")
 
     def test_tts_empty_text_guided(self) -> None:
         for text in ("", "   "):

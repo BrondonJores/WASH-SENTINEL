@@ -1,5 +1,13 @@
 import { Button } from './ui';
 
+const VOICE_LANGUAGE_LABELS: Record<string, string> = {
+  fr: 'français',
+  dua_Latn: 'douala',
+  bassa: 'bassa',
+  ewondo: 'ewondo',
+  auto: 'détection auto',
+};
+
 export interface VoicePreviewProps {
   /** Transcription à relire avant envoi. */
   transcript: string;
@@ -11,6 +19,10 @@ export interface VoicePreviewProps {
   onDiscard: () => void;
   /** Désactive Envoyer / Corriger pendant l’envoi ou le streaming. */
   disabled?: boolean;
+  /** Langue effective renvoyée par le moteur (ex. "dua_Latn", "auto"). */
+  languageEffective?: string | null;
+  /** URL de l’enregistrement d’origine pour réécoute (optionnelle). */
+  audioUrl?: string | null;
 }
 
 function countWords(text: string): number {
@@ -22,14 +34,22 @@ function countWords(text: string): number {
  * Bulle de prévisualisation d’une dictée : relecture + compte de mots.
  * Sobre, FR, style maison teal/stone. Sans synthèse vocale.
  */
-export function VoicePreview({ transcript, onSend, onEdit, onDiscard, disabled = false }: VoicePreviewProps) {
+export function VoicePreview({ transcript, onSend, onEdit, onDiscard, disabled = false, languageEffective = null, audioUrl = null }: VoicePreviewProps) {
   const count = countWords(transcript);
+  const langLabel =
+    languageEffective !== null && languageEffective !== ''
+      ? (VOICE_LANGUAGE_LABELS[languageEffective] ?? languageEffective)
+      : null;
   return (
     <div role="group" aria-label="Aperçu de la dictée" className="mt-3 rounded-xl border border-line bg-card px-4 py-3">
       <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
         Dictée · {count} mot{count > 1 ? 's' : ''}
+        {langLabel !== null ? ` · Transcrit en ${langLabel}` : ''}
       </p>
       <p className="mt-1 whitespace-pre-wrap text-[15px] leading-relaxed text-ink">{transcript}</p>
+      {audioUrl !== null && audioUrl !== '' && (
+        <audio controls preload="none" src={audioUrl} aria-label="Réécouter l’enregistrement" className="mt-2 h-8 w-full" />
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button type="button" variant="primary" size="sm" onClick={onSend} disabled={disabled}>
           Envoyer

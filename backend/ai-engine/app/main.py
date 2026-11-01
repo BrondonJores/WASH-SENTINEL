@@ -238,12 +238,15 @@ def evaluate_replace_vs_repair(request: Request, school: SchoolMaintenanceHistor
 async def transcribe_audio(
     request: Request,
     audio: UploadFile = File(...),
-    language: str = Form("fr"),
+    language: str | None = Form(None),
 ) -> VoiceTranscriptionResponse:
-    """Transcrit une note vocale via le provider STT actif (Whisper, Omnilingual ou cloud)."""
+    """Transcrit une note vocale via le provider STT actif (Whisper, Omnilingual ou cloud).
+
+    Précédence de langue : requête explicite > profil (header X-STT-Language) > fr.
+    """
     try:
         audio_bytes = await audio.read()
-        stt_language = request.headers.get("x-stt-language") or language
+        stt_language = language or request.headers.get("x-stt-language") or "fr"
         return voice_service.transcribe(
             audio_bytes=audio_bytes,
             filename=audio.filename or "audio.wav",
@@ -260,7 +263,7 @@ async def transcribe_audio(
 def synthesize_voice(payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
     """Génère un message audio de confirmation via Piper TTS."""
     try:
-        return voice_service.synthesize(payload.text, payload.voice)
+        return voice_service.synthesize(payload.text, payload.voice, payload.language)
     except Exception as exc:
         raise HTTPException(
             status_code=500,

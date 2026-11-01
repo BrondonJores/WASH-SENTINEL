@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -9,16 +10,48 @@ from typing import Any
 import httpx
 
 
-def normalize_to_wav(audio_bytes: bytes, filename: str, workdir: str) -> str:
+#: Langues vocales prises en charge de bout en bout (console -> relais -> moteur).
+SUPPORTED_VOICE_LANGUAGES: set[str] = {"fr", "dua_Latn", "bassa", "ewondo"}
+
+#: Code langue réellement envoyé au binaire whisper.cpp (-l). Whisper.cpp ne
+#: fournit aucun modèle dua/bassa/ewondo : "auto" est un choix délibéré et
+#: documenté (pas une substitution silencieuse), exposé via language_effective.
+WHISPER_LANG_MAP: dict[str, str] = {
+    "fr": "fr",
+    "dua_Latn": "auto",
+    "bassa": "auto",
+    "ewondo": "auto",
+}
+
+#: Valeur renvoyée quand un driver ne peut pas honorer la langue demandée.
+LANGUAGE_AUTO_EFFECTIVE = "auto"
+
+#: Garde-fou avant écriture disque : refuse les blobs démesurés sans lancer FFmpeg.
+MAX_STT_INPUT_BYTES = 12 * 1024 * 1024
+
+
+def normalize_to_wav(
+    audio_bytes: bytes,
+    filename: str,
+    workdir: str,
+    timeout: float = 30.0,
+) -> str:
     """Normalise n'importe quel audio en WAV PCM 16kHz mono via FFmpeg."""
+    if len(audio_bytes) > MAX_STT_INPUT_BYTES:
+        raise RuntimeError("Audio trop volumineux pour la normalisation (limite 12 Mo).")
     input_file = os.path.join(workdir, filename)
     with open(input_file, "wb") as f:
         f.write(audio_bytes)
     wav_file = os.path.join(workdir, "normalized.wav")
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", input_file, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_file],
-        capture_output=True, check=False,
-    )
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", input_file, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_file],
+            capture_output=True, check=False, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Normalisation audio trop lente (délai FFmpeg dépassé).") from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError("FFmpeg introuvable (normalisation 16kHz impossible).") from exc
     if not os.path.isfile(wav_file):
         raise RuntimeError("FFmpeg introuvable ou audio illisible (normalisation 16kHz impossible).")
     return wav_file
@@ -81,12 +114,13 @@ class WhisperCppProvider(BaseSTTProvider):
     def transcribe(self, audio_bytes: bytes, filename: str, language: str) -> dict[str, Any]:
         if not os.path.isfile(self.binary) or not os.path.isfile(self.model):
             raise RuntimeError(f"Whisper indisponible (binaire ou modèle introuvable : {self.model}).")
+        effective = WHISPER_LANG_MAP.get(language, LANGUAGE_AUTO_EFFECTIVE)
         with tempfile.TemporaryDirectory(prefix="wash-stt-") as tmpdir:
             wav_file = normalize_to_wav(audio_bytes, filename, tmpdir)
             out_base = os.path.join(tmpdir, "output")
             res = subprocess.run(
                 [self.binary, "-m", self.model, "-f", wav_file,
-                 "-l", language if len(language) <= 3 else "auto",
+                 "-l", effective,
                  "-otxt", "-of", out_base],
                 capture_output=True, text=True, check=False, timeout=self.timeout,
             )
@@ -95,7 +129,11 @@ class WhisperCppProvider(BaseSTTProvider):
             if os.path.isfile(txt_file):
                 with open(txt_file, encoding="utf-8") as tf:
                     transcript = tf.read().strip()
-            return {"transcript": transcript or res.stdout.strip(), "language": language}
+            return {
+                "transcript": transcript or res.stdout.strip(),
+                "language": language,
+                "language_effective": effective,
+            }
 
 
 class OmnilingualOnnxProvider(BaseSTTProvider):
@@ -150,6 +188,10 @@ class OmnilingualOnnxProvider(BaseSTTProvider):
 
         import numpy as np
 
+        # Le modèle CTC est agnostique à la langue, mais un code inconnu est
+        # un typo : échouer bruyamment plutôt que transcrire en langue mystère.
+        if language not in SUPPORTED_VOICE_LANGUAGES:
+            raise ValueError(f"Langue vocale non prise en charge : {language!r}.")
         recognizer = self._load()
         with tempfile.TemporaryDirectory(prefix="wash-omni-") as tmpdir:
             wav_file = normalize_to_wav(audio_bytes, filename, tmpdir)
@@ -160,7 +202,11 @@ class OmnilingualOnnxProvider(BaseSTTProvider):
         stream = recognizer.create_stream()
         stream.accept_waveform(16000, samples)
         recognizer.decode_stream(stream)
-        return {"transcript": (stream.result.text or "").strip(), "language": language}
+        return {
+            "transcript": (stream.result.text or "").strip(),
+            "language": language,
+            "language_effective": language,
+        }
 
 
 class CloudWhisperProvider(BaseSTTProvider):
@@ -192,8 +238,13 @@ class CloudWhisperProvider(BaseSTTProvider):
     def transcribe(self, audio_bytes: bytes, filename: str, language: str) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         data: dict[str, str] = {"model": self.model, "response_format": "json"}
-        if len(language) == 2:
+        # L'API cloud n'accepte que des ISO-639-1 : pour dua_Latn/bassa/ewondo
+        # on omet le champ (défaut provider) et on l'expose honnêtement.
+        if re.fullmatch(r"[a-z]{2}", language or ""):
             data["language"] = language
+            effective = language
+        else:
+            effective = LANGUAGE_AUTO_EFFECTIVE
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(
                 f"{self.base_url}/audio/transcriptions",
@@ -202,7 +253,11 @@ class CloudWhisperProvider(BaseSTTProvider):
                 data=data,
             )
             response.raise_for_status()
-            return {"transcript": response.json().get("text", ""), "language": language}
+            return {
+                "transcript": response.json().get("text", ""),
+                "language": language,
+                "language_effective": effective,
+            }
 
 
 STT_REGISTRY: dict[str, type[BaseSTTProvider]] = {
@@ -251,6 +306,7 @@ STT_PROVIDER_TYPES: list[dict[str, Any]] = [
         "label": "Whisper local (français)",
         "description": "Whisper.cpp sur CPU : rapide et léger, idéal pour le français.",
         "api_key_required": False,
+        "local_languages": False,
         "fields": [
             {"name": "model", "label": "Modèle Whisper (.bin)", "type": "text", "default": "/models/whisper/ggml-base.bin", "required": True},
             {"name": "timeout", "label": "Timeout (s)", "type": "number", "default": "120", "required": False},
@@ -261,6 +317,7 @@ STT_PROVIDER_TYPES: list[dict[str, Any]] = [
         "label": "Omnilingual Meta (langues locales)",
         "description": "Meta Omnilingual ASR en ONNX int8 : 1600+ langues dont douala (dua_Latn), bassa, ewondo. CPU OK.",
         "api_key_required": False,
+        "local_languages": True,
         "fields": [
             {"name": "model", "label": "Modèle ONNX (.onnx)", "type": "text", "default": "/models/omnilingual/model.int8.onnx", "required": True},
             {"name": "tokens", "label": "Fichier tokens (tokens.txt)", "type": "text", "default": "/models/omnilingual/tokens.txt", "required": True},
@@ -273,6 +330,7 @@ STT_PROVIDER_TYPES: list[dict[str, Any]] = [
         "label": "API cloud (OpenAI / Groq)",
         "description": "Endpoint /audio/transcriptions compatible OpenAI. Nécessite une clé API.",
         "api_key_required": True,
+        "local_languages": False,
         "fields": [
             {"name": "base_url", "label": "URL de base (/v1)", "type": "url", "default": "https://api.openai.com/v1", "required": True},
             {"name": "model", "label": "Modèle (ex: whisper-1)", "type": "text", "default": "whisper-1", "required": True},

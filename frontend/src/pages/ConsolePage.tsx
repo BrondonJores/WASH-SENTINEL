@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { api } from '../lib/api';
 import { renderRichText } from '../lib/richtext';
-import type { ChatHistoryMessage, TerritoryPulse , AgentCard } from '../lib/api';
+import type { ChatHistoryMessage, TerritoryPulse , AgentCard, VoiceLanguage } from '../lib/api';
+import { getSynthesizedUrl, ttsCacheKey } from '../lib/ttsCache';
 import type { DialogueMessage as Msg } from '../lib/dialogues';
 import { useAuth } from '../auth/AuthContext';
 import { useDialogues } from '../dialogues/context';
@@ -51,6 +52,45 @@ const PLACEHOLDER_EXAMPLES = [
   'Essaie : montre-moi la carte du territoire',
   'Essaie : r\u00e9sume la situation du district',
 ];
+
+const VOICE_LANGS: { code: VoiceLanguage; label: string }[] = [
+  { code: 'fr', label: 'Français' },
+  { code: 'dua_Latn', label: 'Douala' },
+  { code: 'bassa', label: 'Bassa' },
+  { code: 'ewondo', label: 'Ewondo' },
+];
+
+const VOICE_LANG_KEY = 'wash_voice_lang';
+
+function readVoiceLang(): VoiceLanguage {
+  try {
+    const v = localStorage.getItem(VOICE_LANG_KEY);
+    if (v === 'fr' || v === 'dua_Latn' || v === 'bassa' || v === 'ewondo') return v;
+  } catch {
+    /* stockage indisponible : français par défaut */
+  }
+  return 'fr';
+}
+
+function VoiceLangSelector({ value, onChange }: { value: VoiceLanguage; onChange: (v: VoiceLanguage) => void }) {
+  return (
+    <label className="inline-flex items-center gap-2 font-mono text-[11px] text-ink-faint">
+      <span aria-hidden="true">Voix</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as VoiceLanguage)}
+        aria-label="Langue de dictée et de lecture vocale"
+        className="rounded-full border border-line bg-card px-2 py-1 text-ink-soft focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        {VOICE_LANGS.map((l) => (
+          <option key={l.code} value={l.code}>
+            {l.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 const CHIPS_ALERT = ['Qui envoyer sur place ?', 'Voir les d\u00e9tails ?', 'Comparer les \u00e9coles ?'];
 const CHIPS_TREND = ['Voir sur 6 mois ?', 'Comparer avec un autre district ?', 'Voir la carte ?'];
@@ -192,6 +232,9 @@ export default function ConsolePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [previewLang, setPreviewLang] = useState<string | null>(null);
+  const [previewAudio, setPreviewAudio] = useState<string | null>(null);
+  const [voiceLang, setVoiceLang] = useState<VoiceLanguage>(() => readVoiceLang());
   const [streamId, setStreamId] = useState<number | null>(null);
   const [visible, setVisible] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -272,6 +315,14 @@ export default function ConsolePage() {
   }, [input, activeChatId]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(VOICE_LANG_KEY, voiceLang);
+    } catch {
+      /* navigation privée : langue non persistée */
+    }
+  }, [voiceLang]);
+
+  useEffect(() => {
     if (messages.length === 0) return;
     syncMessages(messages);
   }, [messages, syncMessages]);
@@ -334,19 +385,35 @@ export default function ConsolePage() {
     [send],
   );
 
+  const clearPreview = useCallback(() => {
+    setPreviewAudio((prev) => {
+      if (prev !== null) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setPreview(null);
+    setPreviewLang(null);
+  }, []);
+
   const dictate = useCallback(async (blob: Blob) => {
     try {
       setError(null);
-      const { transcript } = await api.transcribeVoice(blob);
-      if (transcript.trim() === '') {
+      const res = await api.transcribeVoice(blob, voiceLang);
+      if (res.transcript.trim() === '') {
         setError('Transcription vide : aucun mot reconnu.');
         return;
       }
-      setPreview(transcript);
+      setPreviewAudio((prev) => {
+        if (prev !== null) URL.revokeObjectURL(prev);
+        return URL.createObjectURL(blob);
+      });
+      setPreviewLang(res.language_effective ?? res.language ?? voiceLang);
+      setPreview(res.transcript);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transcription impossible.');
     }
-  }, []);
+  }, [voiceLang]);
+
+  const voiceLangLabel = VOICE_LANGS.find((l) => l.code === voiceLang)?.label.toLowerCase();
 
   const [detail, setDetail] = useState<DetailTarget | null>(null);
 
@@ -393,6 +460,10 @@ export default function ConsolePage() {
 
   const composer = (large: boolean) =>
     large ? (
+      <div>
+        <div className="mb-2 flex justify-end">
+          <VoiceLangSelector value={voiceLang} onChange={setVoiceLang} />
+        </div>
       <form
         onSubmit={submit}
         className="composer-hero glass flex items-center gap-3 rounded-2xl p-2 pl-5 text-left"
@@ -432,7 +503,7 @@ export default function ConsolePage() {
           onBlur={() => setComposerFocus(false)}
           className="h-12 w-full bg-transparent text-[16px] caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
         />
-        <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} />
+        <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} languageLabel={voiceLangLabel} />
         <Button
           type="submit"
           variant="primary"
@@ -443,7 +514,12 @@ export default function ConsolePage() {
           <Icon name="send" className="h-5 w-5 -rotate-45" />
         </Button>
       </form>
+      </div>
     ) : (
+      <div>
+        <div className="mb-2 flex justify-end">
+          <VoiceLangSelector value={voiceLang} onChange={setVoiceLang} />
+        </div>
       <form
         onSubmit={submit}
         className="composer-hero glass flex items-center gap-2 rounded-xl p-1.5 pl-4 text-left"
@@ -460,7 +536,7 @@ export default function ConsolePage() {
           autoFocus
           className="h-10 w-full bg-transparent text-sm caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
         />
-        <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} />
+        <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} languageLabel={voiceLangLabel} />
         <Button
           type="submit"
           variant="primary"
@@ -471,6 +547,7 @@ export default function ConsolePage() {
           <Icon name="send" className="h-4 w-4 -rotate-45" />
         </Button>
       </form>
+      </div>
     );
 
   const lastModel = [...messages].reverse().find((m) => m.role === 'assistant' && m.model !== '')?.model ?? '';
@@ -602,17 +679,19 @@ export default function ConsolePage() {
             <div className="w-full text-left">
               <VoicePreview
                 transcript={preview}
+                languageEffective={previewLang}
+                audioUrl={previewAudio}
                 onSend={() => {
                   const p = preview;
-                  setPreview(null);
+                  clearPreview();
                   void send(p);
                 }}
                 onEdit={() => {
                   setInput(preview);
-                  setPreview(null);
+                  clearPreview();
                   inputRef.current?.focus();
                 }}
-                onDiscard={() => setPreview(null)}
+                onDiscard={() => clearPreview()}
                 disabled={busy || streaming}
               />
             </div>
@@ -685,17 +764,12 @@ export default function ConsolePage() {
                       </span>
                       <CopyAnswer text={m.content} />
                       <VoicePlayer
-                        onRequestAudio={async () => {
-                          try {
-                            const res = await api.synthesizeVoice(m.content);
-                            const bin = atob(res.audio_base64);
-                            const bytes = new Uint8Array(bin.length);
-                            for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
-                            return URL.createObjectURL(new Blob([bytes], { type: res.mime_type }));
-                          } catch {
-                            return null;
-                          }
-                        }}
+                        cacheKey={ttsCacheKey(m.content, { language: voiceLang })}
+                        onRequestAudio={() =>
+                          getSynthesizedUrl(m.content, { language: voiceLang }, () =>
+                            api.synthesizeVoice(m.content, { language: voiceLang }),
+                          )
+                        }
                       />
                     </div>
                     {m.tools.length > 0 && (
@@ -747,17 +821,19 @@ export default function ConsolePage() {
         {preview !== null && (
           <VoicePreview
             transcript={preview}
+            languageEffective={previewLang}
+            audioUrl={previewAudio}
             onSend={() => {
               const p = preview;
-              setPreview(null);
+              clearPreview();
               void send(p);
             }}
             onEdit={() => {
               setInput(preview);
-              setPreview(null);
+              clearPreview();
               inputRef.current?.focus();
             }}
-            onDiscard={() => setPreview(null)}
+            onDiscard={() => clearPreview()}
             disabled={busy || streaming}
           />
         )}
