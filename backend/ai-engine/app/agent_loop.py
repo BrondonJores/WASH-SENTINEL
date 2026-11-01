@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ONLY, TOOL_EXECUTORS
 from .guidance import build_guidance_card
+from .place_suggest import suggest_places
 from .providers import BaseLLMProvider
 from .schemas import AgentCard, AgentChatRequest, AgentChatResponse
 
@@ -661,10 +662,21 @@ class AgentLoop:
             else:
                 answer = self._fallback_answer(executed, context)
 
+        cards = self._build_cards(executed)
+        if not cards:
+            # Aucune carte (échec ou lieu inconnu) : suggestions cliquables.
+            suggest = suggest_places(req.message, context)
+            if suggest.get("suggestions") or (
+                    suggest.get("fragment") and suggest.get("from_marker")):
+                cards.append(AgentCard(
+                    type="place_suggestions",
+                    title="Quel lieu vouliez-vous dire ?",
+                    data=suggest,
+                ))
         return AgentChatResponse(
             answer=answer.strip(),
             tools_executed=[name for name, _ in executed],
-            cards=self._build_cards(executed),
+            cards=cards,
             model_used=self.llm.model,
             follow_ups=_follow_ups(req.message, executed, context),
         )

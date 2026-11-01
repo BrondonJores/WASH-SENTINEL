@@ -2346,6 +2346,49 @@ function GuidanceCard({ title, data, onAsk }: { title: string; data: Record<stri
   );
 }
 
+function PlaceSuggestionsCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const suggestions = asArray<Record<string, unknown>>(data.suggestions);
+  const ecoles = asArray<unknown>(data.ecoles_sample).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
+  const districts = asArray<unknown>(data.districts_sample).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
+  const insight = fmtOpt(data.insight) ?? '';
+  if (suggestions.length === 0 && ecoles.length === 0 && districts.length === 0) return null;
+  return (
+    <CardShell title={title} listenText={speak(insight)}>
+      <InsightLine text={insight} />
+      {suggestions.length > 0 && (
+        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          {suggestions.map((s, i) => {
+            const label = fmtOpt(s.label) ?? `Lieu ${i + 1}`;
+            const question = fmtOpt(s.question);
+            return (
+              <button
+                key={`${label}-${i}`}
+                type="button"
+                disabled={onAsk === undefined || question === undefined}
+                onClick={() => question !== undefined && onAsk?.(question)}
+                className="rounded-lg border border-line bg-card px-3 py-2 text-left text-sm font-semibold transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.98] disabled:cursor-default disabled:hover:border-line motion-reduce:transition-none motion-reduce:active:scale-100"
+              >
+                {label}
+                {fmtOpt(s.kind) !== undefined && (
+                  <span className="ml-1.5 font-mono text-[11px] font-normal text-stone-500 dark:text-stone-400">
+                    {s.kind === 'district' ? 'district' : 'école'}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {(ecoles.length > 0 || districts.length > 0) && (
+        <p className="mt-2.5 text-[13px] leading-relaxed text-stone-500 dark:text-stone-400">
+          {districts.length > 0 && <>Districts suivis : {districts.join(', ')}. </>}
+          {ecoles.length > 0 && <>Écoles : {ecoles.join(' · ')}.</>}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void }) {
   const data = asRecord(card.data);
   switch (card.type) {
@@ -2407,6 +2450,8 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <ObservatoireCard title={card.title} data={data} onAsk={onAsk} />;
     case 'guidance':
       return <GuidanceCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'place_suggestions':
+      return <PlaceSuggestionsCard title={card.title} data={data} onAsk={onAsk} />;
     default:
       return <GenericCard card={card} />;
   }
