@@ -194,7 +194,8 @@ class FallbackSummaryTest(unittest.IsolatedAsyncioTestCase):
     def test_no_success_is_honest(self) -> None:
         text = self.loop._fallback_answer([("analyze_school", {"error": "introuvable"})])
         self.assertNotIn("Voici ce que j'ai trouvé", text)
-        self.assertIn("Reformulez", text)
+        self.assertNotIn("Reformulez", text)
+        self.assertIn("Demandez par exemple", text)
         self.assertEqual(self.loop._fallback_answer([]), text)
 
     async def test_stubborn_gets_human_summary(self) -> None:

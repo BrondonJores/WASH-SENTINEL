@@ -219,9 +219,12 @@ ABSENCE_CORRECTION_NUDGE = (
 )
 
 UNVERIFIED_HONEST_ANSWER = (
-    "Je ne peux pas vérifier les interventions pour cette question : aucun outil "
-    "de liste n'a retourné de donnée observable. Précisez une date (AAAA-MM-JJ) "
-    "ou un nom d'école et je consulterai le journal."
+    "Je ne peux pas vérifier les interventions pour cette question, car il me "
+    "manque une précision : la date exacte (par exemple 2026-10-15) ou le nom "
+    "de l'école. Par exemple, demandez-moi : « Quelles interventions ont été "
+    "réalisées le 2026-10-15 ? ». Demandez par exemple : « Montrez les "
+    "interventions d'hier » ou « Quels travaux cette semaine à Bonanjo ? », "
+    "et je consulterai le journal avec plaisir."
 )
 
 
@@ -786,17 +789,32 @@ class AgentLoop:
                     return summarizer(observation)
                 except (TypeError, ValueError, KeyError, IndexError, AttributeError):
                     continue
-            return "J'ai consulté les données, le résultat est dans la carte ci-dessous."
+            return (
+                "Bonne nouvelle, j'ai trouvé vos données : le détail (chiffres "
+                "clés, écoles et incidents concernés) est dans la carte juste "
+                "en dessous. S'il vous manque un détail, dites-moi quelle école "
+                "ou quel district vous intéresse, par exemple : « Résumez le "
+                "district de Wouri ». Demandez par exemple : « Quelles écoles "
+                "ont le plus besoin d'aide ? » ou « Montrez la carte du "
+                "territoire »."
+            )
         districts = known_places(context or {})[1] if context else []
         if districts:
             examples = ", ".join(districts[:4])
             return (
-                "Je n'ai pas pu récupérer de données pour cette question. "
-                f"Précisez une école ou un district — par exemple : {examples}."
+                "Je n'ai pas pu récupérer de données pour cette question, car il "
+                "me manque le nom de l'école ou du district qui vous intéresse. "
+                f"Je connais par exemple : {examples}. "
+                "Par exemple, demandez-moi : « Résumez mon district ». Demandez "
+                "par exemple : « Quelles écoles ont le plus besoin d'aide ? » "
+                "ou « Montrez la carte du territoire »."
             )
         return (
-            "Je n'ai pas pu récupérer de données pour cette question. "
-            "Reformulez-la avec le nom d'une école ou d'un district."
+            "Je n'ai pas pu récupérer de données pour cette question, car il me "
+            "manque le nom de l'école ou du district qui vous intéresse. "
+            "Dites-moi par exemple : « Résumez le district de Wouri ». Demandez "
+            "par exemple : « Quelles écoles ont le plus besoin d'aide ? » "
+            "ou « Montrez la carte du territoire », et je m'en occupe avec plaisir."
         )
 
     def _build_cards(self, executed: list[tuple[str, dict[str, Any]]]) -> list[AgentCard]:
