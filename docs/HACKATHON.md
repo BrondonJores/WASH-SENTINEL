@@ -63,7 +63,7 @@ Seeded accounts (password `password`): `admin@wash.cm` (wash_admin), `tech@wash.
 ## 4. Key features
 
 **Console (role-based, FR):** overview KPIs + map + trends; incidents lifecycle
-(`open → in_progress → resolved → closed`, validated transitions); reports inbox with AI analysis;
+(six statuses: `reported`, `triaged`, `assigned`, `in_progress`, `resolved`, `closed`; validated transitions); reports inbox with AI analysis;
 schools registry; maintenance logs per incident; dormant relaunch (dry-run safe); notifications;
 journal (audit); settings (LLM/STT profiles); mesh monitor (`/admin/mesh`: stats, pending, bundles).
 
