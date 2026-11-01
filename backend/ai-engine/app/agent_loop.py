@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -29,6 +31,17 @@ Règles impératives :
 """
 
 MAX_ITERATIONS = 5
+# Budget wall-clock d'un run (surtout CPU local) : au-delà, on conclut
+# avec le résumé déterministe plutôt que de laisser l'UI pendre.
+RUN_BUDGET_S = 100.0
+# Petits modèles locaux : descriptions d'outils compactées (le prompt
+# complet à 24 outils les noie et ralentit chaque appel).
+SMALL_MODEL_RE = re.compile(r"1b|2b|3b|mini", re.IGNORECASE)
+FOLLOWUP_RE = re.compile(
+    r"(je parle d[e']|il s'agit d[e']|et (?:pour|à|au|en)|celui (?:de|du)|"
+    r"dans (?:le |la |les )?|concernant|pour)\s+(.+)",
+    re.IGNORECASE,
+)
 
 REPEAT_NUDGE = (
     "Tu as déjà appelé cet outil avec ces mêmes arguments : le résultat est plus haut. "
@@ -113,6 +126,77 @@ def tools_for_intent(intent: str) -> list[dict[str, Any]]:
         return [t for t in AGENT_TOOLS
                 if not t.get("function", {}).get("name", "").startswith("prepare_")]
     return list(AGENT_TOOLS)
+
+
+def compact_tools(tools: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
+    """Descriptions raccourcies pour les petits modèles (prompt allégé).
+
+    Ne garde que la clause d'usage (avant "Exemple :" / "Ne JAMAIS").
+    Modèles non reconnus comme petits : jeu inchangé.
+    """
+    if not SMALL_MODEL_RE.search(model or ""):
+        return tools
+    out: list[dict[str, Any]] = []
+    for tool in tools:
+        fn = tool.get("function", {})
+        desc = str(fn.get("description", ""))
+        short = re.split(r"Exemple\s*:|Ne JAMAIS", desc)[0].strip()
+        out.append({**tool, "function": {**fn, "description": short or desc}})
+    return out
+
+
+def _norm(text: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text.lower())
+        if not unicodedata.combining(c))
+
+
+def known_places(context: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """(écoles, districts) connus du contexte, libellés d'affichage."""
+    schools = [str(s.get("school_name") or s.get("name") or "")
+               for s in context.get("schools", [])]
+    districts = {str(s.get("district") or "") for s in context.get("schools", [])}
+    districts |= {str(i.get("district") or "") for i in context.get("incidents", [])}
+    return ([s for s in schools if s],
+            sorted(d for d in districts if d))
+
+
+def resolve_place(message: str, context: dict[str, Any]) -> tuple[str, str] | None:
+    """Lieu connu cité dans le message : ("school"|"district", libellé).
+
+    Plus longue correspondance (nom complet ou mot significatif, >= 4
+    lettres, insensible casse/accents). None si rien de reconnu.
+    """
+    lowered = _norm(message)
+    schools, districts = known_places(context)
+    candidates: list[tuple[str, str, str]] = [
+        ("district", d, _norm(d)) for d in districts]
+    for school in schools:
+        candidates.append(("school", school, _norm(school)))
+        for token in _norm(school).split():
+            if len(token) >= 4:
+                candidates.append(("school", school, token))
+    best: tuple[str, str] | None = None
+    best_len = 0
+    for kind, label, normed in candidates:
+        if len(normed) >= 4 and normed in lowered and len(normed) > best_len:
+            best, best_len = (kind, label), len(normed)
+    return best
+
+
+def followup_hint(message: str, context: dict[str, Any]) -> str:
+    """Précision déterministe pour les suivis vagues ("je parle de X").
+
+    Chaîne vide si le message n'est pas un suivi avec lieu reconnu.
+    """
+    if not FOLLOWUP_RE.search(message):
+        return ""
+    place = resolve_place(message, context)
+    if place is None:
+        return ""
+    kind_fr = "le district" if place[0] == "district" else "l'école"
+    return (f"\n(Précision de suivi : {kind_fr} {place[1]}. "
+            "Reprends ma demande précédente pour ce lieu.)")
 
 
 # Garde-fou abstention : outils de lecture dont l'observation autorise un constat.
@@ -502,18 +586,25 @@ class AgentLoop:
     async def chat(self, req: AgentChatRequest) -> AgentChatResponse:
         context = req.context.model_dump()
         lang = _resolve_lang(req)
-        active_tools = tools_for_intent(route_intent(req.message))
+        intent = route_intent(req.message)
+        active_tools = compact_tools(tools_for_intent(intent), self.llm.model)
         messages: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(lang)}]
         for turn in req.history[-6:]:
             messages.append({"role": turn.role, "content": turn.content})
-        messages.append({"role": "user", "content": req.message})
+        user_content = req.message
+        if req.history and intent == "other":
+            user_content += followup_hint(req.message, context)
+        messages.append({"role": "user", "content": user_content})
 
+        started = time.monotonic()
         executed: list[tuple[str, dict[str, Any]]] = []
         seen: set[tuple[str, str]] = set()
         nudged = False
         answer = ""
         used_iterations = 0
         for _ in range(MAX_ITERATIONS):
+            if time.monotonic() - started > RUN_BUDGET_S:
+                break
             used_iterations += 1
             reply = await self.llm.chat(messages, active_tools)
             messages.append(reply["raw"])
@@ -539,16 +630,19 @@ class AgentLoop:
                     break
                 nudged = True
         else:
-            answer = self._fallback_answer(executed)
+            answer = self._fallback_answer(executed, context)
 
-        if not executed and answer.strip() and self._looks_like_data_question(req.message):
+        over_budget = time.monotonic() - started > RUN_BUDGET_S
+        if (not executed and answer.strip()
+                and self._looks_like_data_question(req.message)
+                and not over_budget):
             answer = await self._force_tool_pass(messages, context, executed, active_tools)
 
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            answer = self._fallback_answer(executed)
+            answer = self._fallback_answer(executed, context)
 
         if answer.strip() and _claims_absence(answer) and not _has_read_tool(executed):
-            if used_iterations < MAX_ITERATIONS:
+            if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
                     messages, context, executed, seen, active_tools)
             else:
@@ -556,12 +650,12 @@ class AgentLoop:
 
         if (answer.strip() and _cites_reference(answer) and _claims_absence(answer)
                 and _has_empty_list_obs(executed)):
-            if used_iterations < MAX_ITERATIONS:
+            if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
                     messages, context, executed, seen, active_tools,
                     nudge=CONTRADICTION_CORRECTION_NUDGE)
             else:
-                answer = self._fallback_answer(executed)
+                answer = self._fallback_answer(executed, context)
 
         return AgentChatResponse(
             answer=answer.strip(),
@@ -613,12 +707,12 @@ class AgentLoop:
             executed.append((name, observation))
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not executed:
-            return self._fallback_answer(executed)
+            return self._fallback_answer(executed, context)
         final = await self.llm.chat(messages, tools)
         messages.append(final["raw"])
         answer = final.get("content", "")
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            return self._fallback_answer(executed)
+            return self._fallback_answer(executed, context)
         return answer
 
     async def _absence_correction_pass(
@@ -658,7 +752,7 @@ class AgentLoop:
         messages.append(final["raw"])
         answer = final.get("content", "")
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            return self._fallback_answer(executed)
+            return self._fallback_answer(executed, context)
         return answer
 
     def _is_bogus_refusal(self, answer: str, executed: list[tuple[str, dict[str, Any]]]) -> bool:
@@ -672,7 +766,11 @@ class AgentLoop:
             return False
         return any("error" not in observation for _, observation in executed)
 
-    def _fallback_answer(self, executed: list[tuple[str, dict[str, Any]]]) -> str:
+    def _fallback_answer(
+        self,
+        executed: list[tuple[str, dict[str, Any]]],
+        context: dict[str, Any] | None = None,
+    ) -> str:
         """Résumé humain déterministe quand le modèle ne conclut pas.
 
         Prend la dernière observation réussie et la raconte en une phrase
@@ -688,6 +786,13 @@ class AgentLoop:
                 except (TypeError, ValueError, KeyError, IndexError, AttributeError):
                     continue
             return "J'ai consulté les données, le résultat est dans la carte ci-dessous."
+        districts = known_places(context or {})[1] if context else []
+        if districts:
+            examples = ", ".join(districts[:4])
+            return (
+                "Je n'ai pas pu récupérer de données pour cette question. "
+                f"Précisez une école ou un district — par exemple : {examples}."
+            )
         return (
             "Je n'ai pas pu récupérer de données pour cette question. "
             "Reformulez-la avec le nom d'une école ou d'un district."
