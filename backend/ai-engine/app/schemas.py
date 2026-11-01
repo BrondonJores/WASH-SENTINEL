@@ -331,6 +331,7 @@ class AgentChatRequest(BaseModel):
     message: str = Field(..., description="Message de l'utilisateur")
     history: list[ChatTurn] = Field(default_factory=list, description="Historique court de conversation")
     context: AgentContext = Field(default_factory=AgentContext, description="Données factuelles fournies par Laravel")
+    guided: bool = Field(False, description="CANAL 3 : dialogue guidé vocal par slots pour les signalements")
 
 
 # Source unique de vérité des types de cartes (AXE 7) : tout type émis

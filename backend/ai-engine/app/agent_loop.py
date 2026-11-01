@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ONLY, TOOL_EXECUTORS
 from .guidance import build_guidance_card
+from .guided_voice import guided_turn, resolve_guided_lang
 from .place_suggest import suggest_places
 from .prompts import render_agent_prompt
 from .providers import BaseLLMProvider
@@ -602,6 +603,22 @@ class AgentLoop:
 
     async def chat(self, req: AgentChatRequest) -> AgentChatResponse:
         context = req.context.model_dump()
+        # CANAL 3 : dialogue guidé vocal (opt-in). Hors signalement, guided_turn
+        # retourne None et le flux normal ci-dessous est strictement inchangé.
+        if getattr(req, "guided", False):
+            turn = guided_turn(
+                req.message, req.history, context, resolve_guided_lang(req))
+            if turn is not None and turn.get("status") == "ask":
+                return AgentChatResponse(
+                    answer=turn["question"],
+                    tools_executed=[],
+                    cards=[],
+                    model_used=self.llm.model,
+                    follow_ups=turn.get("chips", []),
+                )
+            if turn is not None and turn.get("status") == "confirmed":
+                # Bascule sur le flux normal avec le signalement reconstitué.
+                req = req.model_copy(update={"message": turn["report_text"]})
         lang = _resolve_lang(req)
         intent = route_intent(req.message)
         active_tools = compact_tools(tools_for_intent(intent), self.llm.model)
