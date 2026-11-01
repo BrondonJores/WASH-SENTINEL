@@ -1,8 +1,9 @@
 // Rendus graphiques supplémentaires : calendrier des pannes, suivi d'incident, budgets.
 // Thème maison (teal/stone/amber), français simple, chiffres fr-FR, motion réduite respectée.
 import { Icon } from './icons';
+import { LOCALE } from '../lib/locale';
 
-const fmtIntFR = (v: number): string => new Intl.NumberFormat('fr-FR').format(Math.round(v));
+const fmtIntFR = (v: number): string => new Intl.NumberFormat(LOCALE).format(Math.round(v));
 
 /** Date lisible fr-FR depuis AAAA-MM-JJ ou ISO complet ; '—' si absent. */
 function fmtDateFR(v: unknown): string {
@@ -12,7 +13,7 @@ function fmtDateFR(v: unknown): string {
   const d = m !== null ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(v);
   return Number.isNaN(d.getTime())
     ? '—'
-    : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+    : d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 const MONTH_SHORT = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
@@ -325,7 +326,7 @@ export function BudgetCompare({
           <div
             className="flex h-3 w-full overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800"
             role="img"
-            aria-label={`Répartition : ${categories.map((c) => `${c.label} ${shareOf(c).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %`).join(', ')}`}
+            aria-label={`Répartition : ${categories.map((c) => `${c.label} ${shareOf(c).toLocaleString(LOCALE, { maximumFractionDigits: 1 })} %`).join(', ')}`}
           >
             {categories.map((c) => (
               <span
@@ -341,7 +342,7 @@ export function BudgetCompare({
                 <span aria-hidden="true" className={`h-2.5 w-2.5 shrink-0 rounded-full ${CATEGORY_DOT[c.code] ?? CATEGORY_DOT.unknown}`} />
                 <span className="min-w-0 flex-1 truncate text-stone-600 dark:text-stone-400">{c.label}</span>
                 <span className="shrink-0 font-mono text-xs tabular-nums">
-                  {fmtMoney(c.cost, currency)} · {shareOf(c).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %
+                  {fmtMoney(c.cost, currency)} · {shareOf(c).toLocaleString(LOCALE, { maximumFractionDigits: 1 })} %
                 </span>
               </li>
             ))}

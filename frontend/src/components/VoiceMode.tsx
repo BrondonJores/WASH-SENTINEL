@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api } from '../lib/api';
 import type { AgentCard, ChatHistoryMessage, VoiceLanguage } from '../lib/api';
 import { getCachedTtsUrl, getSynthesizedUrl, ttsCacheKey } from '../lib/ttsCache';
+import { ELAPSED_TICK_MS, MAX_RECORD_BYTES, MAX_RECORD_MS, MAX_VOICE_MESSAGE, SPEECH_TEXT_MAX_LEN } from '../lib/voice-limits';
 import { renderRichText } from '../lib/richtext';
 import { SentinelOrb } from './SentinelOrb';
 import type { OrbState } from './SentinelOrb';
@@ -20,15 +21,6 @@ import { Icon } from './icons';
  * re-synthèse). Oui/Non envoie « Oui »/« Non » comme message (dialogue
  * guidé backend, guided:true toujours envoyé). Aucun SSE : converse classique uniquement.
  * ========================================================================== */
-
-/** Durée maximale d'une dictée avant arrêt automatique (2 minutes). */
-const MAX_RECORD_MS = 120_000;
-
-/** Poids maximal d'une dictée acceptée (10 Mo, miroir de la validation Laravel). */
-const MAX_RECORD_BYTES = 10 * 1024 * 1024;
-
-/** Seuil de garde vocal : au-delà, la transcription est coupée proprement (limite backend 2000). */
-const MAX_VOICE_MESSAGE = 1800;
 
 /** Suffixe FR ajouté quand une longue dictée est coupée (une phrase simple, parcours analphabète). */
 const LONG_MESSAGE_SUFFIX = '…(message long, suite coupée : précisez en une phrase)';
@@ -98,7 +90,7 @@ function cleanupForSpeech(text: string): string {
     .replace(/[*_#>`]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 1000);
+    .slice(0, SPEECH_TEXT_MAX_LEN);
 }
 
 function micGuidance(err: unknown): string {
@@ -276,7 +268,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
   // Chrono d'attente (stepper) pendant transcribe + converse.
   useEffect(() => {
     if (!busy || requestStart === null) return;
-    const t = window.setInterval(() => setElapsedMs(Date.now() - requestStart), 500);
+    const t = window.setInterval(() => setElapsedMs(Date.now() - requestStart), ELAPSED_TICK_MS);
     return () => window.clearInterval(t);
   }, [busy, requestStart]);
 

@@ -3,6 +3,7 @@ import { api } from '../lib/api';
 import type { AgentCard, ChatHistoryMessage } from '../lib/api';
 import { DEMO_ASK_PAUSE_MS, DEMO_SCRIPT, DEMO_STEP_PAUSE_MS } from '../lib/demoScript';
 import { renderRichText } from '../lib/richtext';
+import { LOCALE } from '../lib/locale';
 import { AgentCardList } from './AgentCards';
 import { DetailDrawer } from './DetailDrawer';
 import type { DetailKind, DetailTarget } from './DetailDrawer';
@@ -22,7 +23,7 @@ interface DemoMsg {
 type Phase = 'playing' | 'stopped' | 'done';
 
 function fmtTime(at: number): string {
-  return new Date(at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  return new Date(at).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
 }
 
 /**

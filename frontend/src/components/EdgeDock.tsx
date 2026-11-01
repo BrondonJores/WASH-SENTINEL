@@ -14,6 +14,9 @@ import type { ChatItem } from '../lib/dialogues';
 const iconBtn =
   'flex h-8 w-8 items-center justify-center rounded-md text-ink-soft transition-[background-color,transform] duration-150 ease-snap hover:bg-raised active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100';
 
+/** Grâce avant fermeture de l'éventail quand le pointeur le quitte. */
+const FAN_CLOSE_DELAY_MS = 450;
+
 function NameEditor({
   initial,
   placeholder,
@@ -175,7 +178,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
   };
   const scheduleClose = () => {
     cancelClose();
-    closeTimer.current = window.setTimeout(() => setFanOpen(false), 450);
+    closeTimer.current = window.setTimeout(() => setFanOpen(false), FAN_CLOSE_DELAY_MS);
   };
 
   const fanNav = useMemo(() => NAV_ITEMS.filter((n) => !n.adminOnly || isAdmin), [isAdmin]);

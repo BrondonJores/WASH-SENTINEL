@@ -16,17 +16,19 @@ import { SlideDeck } from './SlideDeck';
 import type { DeckSlide } from './SlideDeck';
 import type { TerritoryPoint } from './TerritoryMap';
 import type { DetailKind } from './DetailDrawer';
+import { LOCALE } from '../lib/locale';
+import { STATUS_FR, URGENCY_FR, urgencyTone } from '../lib/wash';
 
 // ---------- Helpers défensifs (les observations tools varient) ----------
 
 const fmtInt = (v: unknown): string => {
-  if (typeof v === 'number' && Number.isFinite(v)) return new Intl.NumberFormat('fr-FR').format(Math.round(v));
+  if (typeof v === 'number' && Number.isFinite(v)) return new Intl.NumberFormat(LOCALE).format(Math.round(v));
   return '—';
 };
 
 const fmtNum1 = (v: unknown): string => {
   if (typeof v === 'number' && Number.isFinite(v))
-    return v.toLocaleString('fr-FR', { maximumFractionDigits: 1 });
+    return v.toLocaleString(LOCALE, { maximumFractionDigits: 1 });
   return '—';
 };
 
@@ -41,7 +43,7 @@ const fmtDate = (v: unknown): string => {
     m !== null ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(v);
   return Number.isNaN(d.getTime())
     ? '—'
-    : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+    : d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 /** Remplace les dates ISO (AAAA-MM-JJ) d'un texte par des dates lisibles. */
@@ -60,18 +62,6 @@ const asArray = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const asRecord = (v: unknown): Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
-const URGENCY_TONE: Record<string, 'danger' | 'warn' | 'info' | 'neutral'> = {
-  critical: 'danger',
-  high: 'warn',
-  medium: 'info',
-  low: 'neutral',
-};
-const URGENCY_LABEL: Record<string, string> = {
-  critical: 'Critique',
-  high: 'Haute',
-  medium: 'Moyenne',
-  low: 'Basse',
-};
 const URGENCY_DOT: Record<string, string> = {
   critical: 'bg-red-500',
   high: 'bg-amber-500',
@@ -84,19 +74,13 @@ const URGENCY_BAR: Record<string, string> = {
   medium: 'bg-sky-500',
   low: 'bg-teal-600 dark:bg-teal-500',
 };
+// DIVERGENCE volontaire conservée : 'Évacuation' (court, badge) vs
+// CATEGORY_FR 'Évacuation / drainage' de lib/wash.ts — rendu identique exigé.
 const CATEGORY_LABEL: Record<string, string> = {
   water_point: "Point d'eau",
   toilets_latrines: 'Toilettes / latrines',
   handwashing: 'Lavage des mains',
   sewage_drainage: 'Évacuation',
-};
-const STATUS_LABEL: Record<string, string> = {
-  reported: 'Signalé',
-  triaged: 'Trié',
-  assigned: 'Assigné',
-  in_progress: 'En cours',
-  resolved: 'Résolu',
-  closed: 'Clôturé',
 };
 const RECOMMENDATION: Record<string, { label: string; tone: 'danger' | 'warn' | 'success' }> = {
   REPLACE_EQUIPMENT: { label: "Remplacer l'équipement", tone: 'danger' },
@@ -210,7 +194,7 @@ function DeltaChip({ pct, invert = false }: { pct: number; invert?: boolean }) {
       {!flat && (
         <span aria-hidden="true">{up ? '▲' : '▼'}</span>
       )}
-      {flat ? 'stable' : `${up ? '+' : ''}${pct.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} %`}
+      {flat ? 'stable' : `${up ? '+' : ''}${pct.toLocaleString(LOCALE, { maximumFractionDigits: 0 })} %`}
     </span>
   );
 }
@@ -285,6 +269,9 @@ function NeedBar({ value, max, bar = 'bg-teal-600 dark:bg-teal-500' }: { value: 
   );
 }
 
+/** Délai de retour à « Copier » après un appui réussi. */
+const COPIED_RESET_MS = 1500;
+
 function CopyButton({ value, label = 'Copier' }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   if (value === '') return null;
@@ -297,7 +284,7 @@ function CopyButton({ value, label = 'Copier' }: { value: string; label?: string
         } catch {
           /* presse-papiers indisponible */
         }
-        window.setTimeout(() => setCopied(false), 1500);
+        window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
       }}
     >
       <Icon name={copied ? 'check' : 'file'} className="h-3.5 w-3.5" />
@@ -365,8 +352,8 @@ function IncidentPickerCard({
                     {fmtText(c.school_name)}{typeof c.district === 'string' && c.district !== '' ? ` · ${c.district}` : ''}
                   </span>
                   <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <Badge tone={URGENCY_TONE[urgency] ?? 'neutral'}>{URGENCY_LABEL[urgency] ?? urgency}</Badge>
-                    <Badge>{STATUS_LABEL[String(c.status)] ?? fmtText(c.status)}</Badge>
+                    <Badge tone={urgencyTone(urgency)}>{URGENCY_FR[urgency] ?? urgency}</Badge>
+                    <Badge>{STATUS_FR[String(c.status)] ?? fmtText(c.status)}</Badge>
                     <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{ref}</span>
                   </span>
                 </span>
@@ -436,8 +423,8 @@ function IncidentCard({
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          <Badge tone={URGENCY_TONE[urgency] ?? 'neutral'}>Urgence {URGENCY_LABEL[urgency] ?? urgency}</Badge>
-          <Badge>{STATUS_LABEL[String(data.status)] ?? fmtText(data.status)}</Badge>
+          <Badge tone={urgencyTone(urgency)}>Urgence {URGENCY_FR[urgency] ?? urgency}</Badge>
+          <Badge>{STATUS_FR[String(data.status)] ?? fmtText(data.status)}</Badge>
           {typeof data.category === 'string' && (
             <Badge tone="info">{CATEGORY_LABEL[data.category] ?? data.category}</Badge>
           )}
@@ -549,7 +536,7 @@ function RankingCard({
                   <span className="font-display text-lg font-extrabold tabular-nums">{fmtNum1(score)}</span>
                   <span className="inline-flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-400">
                     <UrgencyDot level={urg} />
-                    {URGENCY_LABEL[urg] ?? urg}
+                    {URGENCY_FR[urg] ?? urg}
                   </span>
                 </span>
               </>
@@ -653,7 +640,7 @@ function AnalysisCard({
               <div key={String(inc.id ?? i)} className="flex items-center gap-2 py-1.5 text-sm first:pt-0 last:pb-0">
                 <UrgencyDot level={urg} />
                 <span className="w-16 shrink-0 text-xs text-stone-600 dark:text-stone-400">
-                  {URGENCY_LABEL[urg] ?? urg}
+                  {URGENCY_FR[urg] ?? urg}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{fmtText(inc.title)}</span>
                 <span className="shrink-0 font-mono text-xs text-stone-500 dark:text-stone-400">
@@ -730,7 +717,7 @@ function DistrictCard({
             <div key={k} className="flex items-center gap-2">
               <span className="flex w-24 shrink-0 items-center gap-1.5 text-xs text-stone-600 dark:text-stone-400">
                 <UrgencyDot level={k} />
-                {URGENCY_LABEL[k] ?? k}
+                {URGENCY_FR[k] ?? k}
               </span>
               <div className="flex-1">
                 <NeedBar value={v} max={Math.max(total, 1)} bar={URGENCY_BAR[k] ?? 'bg-teal-600 dark:bg-teal-500'} />
@@ -786,7 +773,7 @@ function trendUrgencyEntries(data: Record<string, unknown>): DonutEntry[] {
   return Object.entries(asRecord(data.by_urgency))
     .filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && (v as number) > 0)
     .map(([k, v]) => ({
-      name: URGENCY_LABEL[k] ?? k,
+      name: URGENCY_FR[k] ?? k,
       value: v as number,
       color: URGENCY_SLICE[k] ?? '#a8a29e',
     }))
@@ -1154,7 +1141,7 @@ function ActionConfirmationCard({
   const expiry = (() => {
     if (typeof data.expires_at !== 'string' || data.expires_at === '') return null;
     const d = new Date(data.expires_at);
-    return Number.isNaN(d.getTime()) ? null : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    return Number.isNaN(d.getTime()) ? null : d.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
   })();
 
   const recapText =
@@ -2285,7 +2272,7 @@ function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<
                     <p className="mt-0.5 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(p.summary) ?? fmtOpt(p.title)}</p>
                   )}
                   <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <Badge tone={URGENCY_TONE[urg] ?? 'neutral'}>{URGENCY_LABEL[urg] ?? urg}</Badge>
+                    <Badge tone={urgencyTone(urg)}>{URGENCY_FR[urg] ?? urg}</Badge>
                     {cat !== undefined && (
                       <Badge>{CATEGORY_LABEL[cat] ?? cat}</Badge>
                     )}

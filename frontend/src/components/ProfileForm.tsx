@@ -26,13 +26,17 @@ interface Props {
 const inputCls =
   'w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 focus:border-teal-700 focus:outline-none dark:border-stone-700 dark:bg-stone-900 dark:text-stone-100';
 
+/** Timeout par défaut des profils (secondes), aligné backend : migrations
+ *  `->default(120)`, seeders, `AI_ENGINE_TIMEOUT=120` (README backend). */
+const DEFAULT_PROFILE_TIMEOUT_S = 120;
+
 export default function ProfileForm({ framed = true, kind, types, initial, submitting, serverError, onSubmit, onCancel }: Props) {
   const isEdit = initial !== null;
   const [providerId, setProviderId] = useState(initial?.providerId ?? types[0]?.id ?? '');
   const [name, setName] = useState(initial?.name ?? '');
   const [values, setValues] = useState<Record<string, string>>(initial?.values ?? {});
   const [apiKey, setApiKey] = useState('');
-  const [timeout, setTimeout] = useState(initial?.timeout ?? 120);
+  const [timeout, setTimeout] = useState(initial?.timeout ?? DEFAULT_PROFILE_TIMEOUT_S);
   const [threads, setThreads] = useState(initial?.threads ?? 2);
   const [language, setLanguage] = useState(initial?.language ?? 'fr');
 

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { api, ApiError } from '../lib/api';
 import type { Incident, School } from '../lib/api';
+import { LOCALE } from '../lib/locale';
+import { STATUS_FR, URGENCY_FR, urgencyTone } from '../lib/wash';
 import { Badge, Button, Skeleton } from './ui';
 import { Icon } from './icons';
 
@@ -11,7 +13,7 @@ export type DetailTarget = { kind: DetailKind; id: number };
 // ---------- Helpers ----------
 
 const fmtInt = (v: unknown): string => {
-  if (typeof v === 'number' && Number.isFinite(v)) return new Intl.NumberFormat('fr-FR').format(Math.round(v));
+  if (typeof v === 'number' && Number.isFinite(v)) return new Intl.NumberFormat(LOCALE).format(Math.round(v));
   return '—';
 };
 
@@ -20,32 +22,14 @@ const fmtDate = (v: unknown): string => {
   const d = new Date(v);
   return Number.isNaN(d.getTime())
     ? '—'
-    : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+    : d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 const fmtMoney = (v: number | null, currency: string | null): string =>
   v === null ? '—' : `${fmtInt(v)}${currency ? ` ${currency}` : ''}`;
 
-const URGENCY_TONE: Record<string, 'danger' | 'warn' | 'info' | 'neutral'> = {
-  critical: 'danger',
-  high: 'warn',
-  medium: 'info',
-  low: 'neutral',
-};
-const URGENCY_LABEL: Record<string, string> = {
-  critical: 'Critique',
-  high: 'Haute',
-  medium: 'Moyenne',
-  low: 'Basse',
-};
-const STATUS_LABEL: Record<string, string> = {
-  reported: 'Signalé',
-  triaged: 'Trié',
-  assigned: 'Assigné',
-  in_progress: 'En cours',
-  resolved: 'Résolu',
-  closed: 'Clôturé',
-};
+// DIVERGENCE volontaire conservée : 'Évacuation' (court, badge) vs
+// CATEGORY_FR 'Évacuation / drainage' de lib/wash.ts — rendu identique exigé.
 const CATEGORY_LABEL: Record<string, string> = {
   water_point: "Point d'eau",
   toilets_latrines: 'Toilettes / latrines',
@@ -105,10 +89,10 @@ function IncidentView({
       </p>
       <h2 className="mt-1 font-display text-xl font-bold leading-snug tracking-tight">{incident.title}</h2>
       <div className="mt-2 flex flex-wrap gap-1.5">
-        <Badge tone={URGENCY_TONE[incident.urgency] ?? 'neutral'}>
-          Urgence {URGENCY_LABEL[incident.urgency] ?? incident.urgency}
+        <Badge tone={urgencyTone(incident.urgency)}>
+          Urgence {URGENCY_FR[incident.urgency] ?? incident.urgency}
         </Badge>
-        <Badge>{STATUS_LABEL[incident.status] ?? incident.status}</Badge>
+        <Badge>{STATUS_FR[incident.status] ?? incident.status}</Badge>
         <Badge tone="info">{CATEGORY_LABEL[incident.category] ?? incident.category}</Badge>
       </div>
 
@@ -269,8 +253,8 @@ function SchoolView({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold">{inc.title}</span>
                     <span className="mt-1 flex flex-wrap items-center gap-1.5">
-                      <Badge tone={URGENCY_TONE[inc.urgency] ?? 'neutral'}>
-                        {URGENCY_LABEL[inc.urgency] ?? inc.urgency}
+                      <Badge tone={urgencyTone(inc.urgency)}>
+                        {URGENCY_FR[inc.urgency] ?? inc.urgency}
                       </Badge>
                       <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">
                         {inc.reference_code} · {fmtInt(inc.affected_students)} élèves

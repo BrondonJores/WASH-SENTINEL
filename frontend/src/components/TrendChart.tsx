@@ -16,6 +16,7 @@ import {
   YAxis,
 } from 'recharts';
 import { useTheme } from '../theme';
+import { LOCALE } from '../lib/locale';
 
 export interface TrendSeries {
   key: string;
@@ -43,9 +44,9 @@ interface TooltipEntry {
   color?: string;
 }
 
-const fmtFR = (v: number): string => new Intl.NumberFormat('fr-FR').format(v);
+const fmtFR = (v: number): string => new Intl.NumberFormat(LOCALE).format(v);
 const fmtCompact = (v: number): string =>
-  new Intl.NumberFormat('fr-FR', { notation: 'compact' }).format(v);
+  new Intl.NumberFormat(LOCALE, { notation: 'compact' }).format(v);
 
 /** Respecte prefers-reduced-motion pour les animations recharts. */
 function useReducedMotion(): boolean {

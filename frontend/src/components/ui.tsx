@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { Icon } from './icons';
 import type { IconName } from './icons';
+import { LOCALE } from '../lib/locale';
 
 // --- Boutons ---
 
@@ -193,17 +194,20 @@ export function StatusDot({
 
 // --- Horloge live (données réelles, tick chaque seconde) ---
 
+/** Pas de rafraîchissement de l'horloge live (1 seconde). */
+const LIVE_CLOCK_TICK_MS = 1000;
+
 export function LiveClock({ className = '' }: { className?: string }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
+    const id = setInterval(() => setNow(new Date()), LIVE_CLOCK_TICK_MS);
     return () => clearInterval(id);
   }, []);
   const pad = (n: number) => String(n).padStart(2, '0');
   return (
     <span
       className={`font-mono text-xs tabular-nums ${className}`}
-      title={now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+      title={now.toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
     >
       {pad(now.getHours())}:{pad(now.getMinutes())}:{pad(now.getSeconds())}
     </span>

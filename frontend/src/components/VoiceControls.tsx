@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCachedTtsUrl } from '../lib/ttsCache';
+import { MAX_RECORD_BYTES, MAX_RECORD_MS } from '../lib/voice-limits';
 
 /* ============================================================================
  * Contrôles vocaux Sentinel — dicter (STT) + écouter (TTS).
@@ -20,12 +21,6 @@ import { getCachedTtsUrl } from '../lib/ttsCache';
  *   `ttsBase64ToObjectUrl` ci-dessous le convertit en URL locale pour
  *   <audio> / VoicePlayer. Jamais d'autoplay : la lecture part au clic.
  * ========================================================================== */
-
-/** Durée maximale d'une dictée avant arrêt automatique (2 minutes). */
-const MAX_RECORD_MS = 120_000;
-
-/** Poids maximal d'une dictée acceptée (10 Mo, miroir de la validation Laravel). */
-const MAX_RECORD_BYTES = 10 * 1024 * 1024;
 
 /** Dictée trop lourde : guider vers un message plus court. */
 const TOO_HEAVY_GUIDANCE_MESSAGE =
