@@ -3,10 +3,8 @@ from __future__ import annotations
 from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 
 from .agent_loop import AgentLoop
-from .agent_stream import format_sse, stream_agent_events
 from .ai_metrics import summary as ai_metrics_summary
 from .decision_agent import DecisionAgent
 from .duplicate_detector import DuplicateDetector
@@ -70,7 +68,6 @@ app.add_middleware(
 default_llm = OllamaProvider()
 voice_service = VoiceService()
 
-
 def _llm(request: Request):
     """Résout le provider LLM actif depuis les headers envoyés par Laravel.
 
@@ -78,7 +75,6 @@ def _llm(request: Request):
     Chaque requête a son propre client : aucun état global mutable.
     """
     return llm_from_headers(request.headers)
-
 
 @app.get("/health")
 def health() -> dict[str, Any]:
@@ -107,7 +103,6 @@ def health() -> dict[str, Any]:
         ],
     }
 
-
 # ==========================================
 # 1. Extraction et Structuration Textuelle
 # ==========================================
@@ -122,7 +117,6 @@ async def extract_wash_data(request: Request, payload: WashExtractionRequest) ->
             detail=f"Erreur d'extraction IA : {str(exc)}"
         ) from exc
 
-
 # ==========================================
 # 2. Détection de Doublons Sémantiques
 # ==========================================
@@ -136,7 +130,6 @@ async def check_duplicates(request: Request, payload: DuplicateCheckRequest) -> 
             status_code=500,
             detail=f"Erreur lors de la détection de doublons : {str(exc)}"
         ) from exc
-
 
 # ==========================================
 # 3. Vision Multimodale (Analyse de Photos)
@@ -156,7 +149,6 @@ async def analyze_photo(request: Request, photo: UploadFile = File(...)) -> Imag
             detail=f"Erreur d'analyse visuelle : {str(exc)}"
         ) from exc
 
-
 # ==========================================
 # 4. Fiche Technique de Réparation (Techniciens)
 # ==========================================
@@ -171,7 +163,6 @@ async def generate_repair_plan(request: Request, payload: RepairPlanRequest) -> 
             detail=f"Erreur lors de la génération du plan technique : {str(exc)}"
         ) from exc
 
-
 # ==========================================
 # 5. Détecteur de Grappe & Alerte Épidémique
 # ==========================================
@@ -185,7 +176,6 @@ async def detect_epidemic_risk(request: Request, payload: EpidemicClusterRequest
             status_code=500,
             detail=f"Erreur lors de l'évaluation épidémique : {str(exc)}"
         ) from exc
-
 
 # ==========================================
 # 6. Équité Territoriale & Tournées Groupées (Anti-Favoritisme)
@@ -206,7 +196,6 @@ async def generate_equity_dispatch_plan(request: Request, payload: FairnessDispa
             detail=f"Erreur lors du calcul du plan d'équité : {str(exc)}"
         ) from exc
 
-
 # ==========================================
 # 7. Aide à la Décision Stratégique & Copilot (Tool-Calling)
 # ==========================================
@@ -225,7 +214,6 @@ async def decision_copilot_chat(request: Request, payload: DecisionCopilotReques
             detail=f"Erreur du Copilot Décisionnel : {str(exc)}"
         ) from exc
 
-
 @app.post("/v1/wash/copilot/replace-vs-repair", response_model=ReplaceVsRepairAnalysis)
 def evaluate_replace_vs_repair(request: Request, school: SchoolMaintenanceHistory) -> ReplaceVsRepairAnalysis:
     """Évalue mathématiquement et financièrement si un équipement doit être remplacé à neuf ou encore réparé."""
@@ -236,7 +224,6 @@ def evaluate_replace_vs_repair(request: Request, school: SchoolMaintenanceHistor
             status_code=500,
             detail=f"Erreur lors de l'analyse Réparer vs Remplacer : {str(exc)}"
         ) from exc
-
 
 # ==========================================
 # 8. Audio (Transcription STT & Synthèse TTS)
@@ -263,7 +250,6 @@ async def transcribe_audio(
             detail=f"Erreur de transcription audio : {str(exc)}"
         ) from exc
 
-
 @app.post("/v1/voice/synthesize", response_model=VoiceSynthesisResponse)
 def synthesize_voice(payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
     """Génère un message audio de confirmation via Piper TTS."""
@@ -274,7 +260,6 @@ def synthesize_voice(payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
             status_code=500,
             detail=f"Erreur de synthèse vocale : {str(exc)}"
         ) from exc
-
 
 # ==========================================
 # 9. Pipeline Unifié Commando (Texte ou Voix)
@@ -335,7 +320,6 @@ def list_provider_types() -> dict[str, Any]:
     """Descripteurs des providers supportés : pilote le formulaire dynamique de la page Settings."""
     return {"providers": PROVIDER_TYPES}
 
-
 @app.post("/v1/admin/test-provider", response_model=ProviderTestResponse)
 async def test_provider(payload: ProviderTestRequest) -> ProviderTestResponse:
     """Teste un profil modèle (bouton Tester de la page Settings)."""
@@ -352,7 +336,6 @@ async def test_provider(payload: ProviderTestRequest) -> ProviderTestResponse:
         )
     except Exception as exc:
         return ProviderTestResponse(ok=False, error=f"{type(exc).__name__}: {str(exc)[:300]}")
-
 
 @app.post("/v1/admin/warmup")
 async def warmup_provider(request: Request) -> dict[str, Any]:
@@ -371,7 +354,6 @@ async def warmup_provider(request: Request) -> dict[str, Any]:
 def list_stt_types() -> dict[str, Any]:
     """Descripteurs des moteurs de transcription : pilote le formulaire dynamique de la page Settings."""
     return {"drivers": STT_PROVIDER_TYPES}
-
 
 @app.post("/v1/admin/test-stt", response_model=SttTestResponse)
 async def test_stt(payload: SttTestRequest) -> SttTestResponse:
@@ -413,7 +395,6 @@ async def rag_ask(request: Request, payload: RagAskRequest) -> RagAskResponse:
             detail=f"Erreur RAG documentaire : {str(exc)}"
         ) from exc
 
-
 # ==========================================
 # 13. Veille Prédictive des Pannes Récurrentes
 # ==========================================
@@ -424,7 +405,6 @@ def recurrence_watch(payload: RecurrenceWatchRequest) -> RecurrenceWatchResponse
     result = watch_recurrence(history)
     return RecurrenceWatchResponse(risk=result["risk"], plan=result["plan"])
 
-
 # ==========================================
 # 14. Observabilité IA (latences/tokens)
 # ==========================================
@@ -432,7 +412,6 @@ def recurrence_watch(payload: RecurrenceWatchRequest) -> RecurrenceWatchResponse
 def get_ai_metrics() -> dict[str, Any]:
     """Observabilité IA : latences (avg/p95) et tokens par opération LLM."""
     return ai_metrics_summary()
-
 
 # ==========================================
 # 15. Agent Conversationnel Unifié (Dashboardless)
@@ -450,19 +429,3 @@ async def agent_chat(request: Request, payload: AgentChatRequest) -> AgentChatRe
             detail=f"Erreur de l'agent conversationnel : {str(exc)}"
         ) from exc
 
-
-@app.post("/v1/agent/chat/stream")
-async def agent_chat_stream(request: Request, payload: AgentChatRequest) -> StreamingResponse:
-    """Même boucle que /v1/agent/chat, rejouée en SSE temps réel.
-
-    Events : tools (transparence immédiate) -> cards -> deltas (~40 car.)
-    -> done (model + follow_ups).
-    """
-    async def _frames():
-        try:
-            async for event in stream_agent_events(AgentLoop(_llm(request)), payload):
-                yield format_sse(event)
-        except Exception as exc:
-            yield format_sse({"event": "error", "message": str(exc)[:300]})
-
-    return StreamingResponse(_frames(), media_type="text/event-stream")

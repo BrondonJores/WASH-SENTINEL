@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { api, converseStream } from '../lib/api';
+import { api } from '../lib/api';
 import { renderRichText } from '../lib/richtext';
 import type { ChatHistoryMessage, TerritoryPulse , AgentCard } from '../lib/api';
 import type { DialogueMessage as Msg } from '../lib/dialogues';
@@ -302,50 +302,11 @@ export default function ConsolePage() {
       .map((m) => ({ role: m.role, content: m.content }));
     const idx = messages.length + 1;
     setMessages((prev) => [...prev, { role: 'user', content: message, tools: [], cards: [], model: '', at: Date.now(), follow_ups: [] }]);
-    let assistantIdx: number | null = null;
-    const blankAssistant = (): Msg => (
-      { role: 'assistant', content: '', tools: [], cards: [], model: '', at: Date.now(), follow_ups: [] }
-    );
     try {
-      await converseStream(message, prior, (ev) => {
-        if (ev.kind === 'tools') {
-          assistantIdx = idx;
-          const tools = ev.tools;
-          setMessages((prev) => [...prev, { ...blankAssistant(), tools }]);
-        } else if (ev.kind === 'cards') {
-          const cards = ev.cards;
-          if (assistantIdx === null) {
-            assistantIdx = idx;
-            setMessages((prev) => [...prev, { ...blankAssistant(), cards }]);
-          } else {
-            const at = assistantIdx;
-            setMessages((prev) => prev.map((m, j) => (j === at ? { ...m, cards } : m)));
-          }
-        } else if (ev.kind === 'delta') {
-          const text = ev.text;
-          if (assistantIdx === null) {
-            assistantIdx = idx;
-            setMessages((prev) => [...prev, { ...blankAssistant(), content: text }]);
-          } else {
-            const at = assistantIdx;
-            setMessages((prev) => prev.map((m, j) => (j === at ? { ...m, content: m.content + text } : m)));
-          }
-        } else {
-          const model = ev.model;
-          const follow_ups = ev.follow_ups;
-          if (assistantIdx === null) {
-            assistantIdx = idx;
-            setMessages((prev) => [...prev, { ...blankAssistant(), model, follow_ups }]);
-          } else {
-            const at = assistantIdx;
-            setMessages((prev) => prev.map((m, j) => (j === at ? { ...m, model, follow_ups } : m)));
-          }
-        }
-      });
-    } catch {
-      try {
-        const res = await api.converse(message, prior);
-        const full: Msg = {
+      const res = await api.converse(message, prior);
+      setMessages((prev) => [
+        ...prev,
+        {
           role: 'assistant',
           content: res.answer,
           tools: res.tools_executed ?? [],
@@ -353,20 +314,14 @@ export default function ConsolePage() {
           model: res.model_used ?? '',
           at: Date.now(),
           follow_ups: res.follow_ups ?? [],
-        };
-        if (assistantIdx === null) {
-          setMessages((prev) => [...prev, full]);
-          if (!calm && res.answer !== '') {
-            setVisible(0);
-            setStreamId(idx);
-          }
-        } else {
-          const at = assistantIdx;
-          setMessages((prev) => prev.map((m, j) => (j === at ? full : m)));
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
+        },
+      ]);
+      if (!calm && res.answer !== '') {
+        setVisible(0);
+        setStreamId(idx);
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
     } finally {
       setBusy(false);
     }
