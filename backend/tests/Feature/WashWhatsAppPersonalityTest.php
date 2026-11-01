@@ -173,6 +173,8 @@ class WashWhatsAppPersonalityTest extends TestCase
         $reply = $this->sentTexts()[0]['message'] ?? '';
         $this->assertStringContainsString('Sentinel', $reply);
         $this->assertStringContainsString('note vocale', $reply);
+        $this->assertStringContainsString('robinet', $reply);
+        $this->assertStringContainsString('suivez', $reply);
     }
 
     public function test_true_off_topic_keeps_generic_guidance(): void

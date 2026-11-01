@@ -42,21 +42,21 @@ class WashWhatsAppPersonality
         return null;
     }
 
-    private const GREETING_FR = 'Bonjour ! Je suis Sentinel, l’assistant eau et hygiène de votre école. Pour signaler une panne, décrivez-la en une phrase avec le nom de l’école, ou envoyez une note vocale.';
+    private const GREETING_FR = 'Bonjour ! Je suis Sentinel, l’assistant eau et hygiène de votre école. Ici vous pouvez : 1) signaler une panne (robinet qui fuit, toilettes bouchées, plus de savon...) en une phrase ou note vocale ; 2) suivre votre dossier (« où en est mon dossier ? »).';
 
-    private const IDENTITY_FR = 'Je suis Sentinel, l’assistant eau et hygiène de votre école. Je reçois vos signalements (robinet, toilettes, savon...) : décrivez la panne en une phrase ou envoyez une note vocale.';
+    private const IDENTITY_FR = 'Je suis Sentinel, l’assistant eau et hygiène de votre école. Je reçois vos signalements : robinet qui fuit, pompe cassée, toilettes bouchées, plus de savon... Décrivez la panne en une phrase ou envoyez une note vocale, puis suivez votre dossier ici.';
 
-    private const CAPABILITIES_FR = 'Je suis Sentinel, l’assistant eau et hygiène de votre école. Je peux enregistrer vos pannes et suivre vos dossiers : décrivez la panne en une phrase, ou envoyez « où en est mon dossier ? » ou votre référence WASH-...';
+    private const CAPABILITIES_FR = 'Je suis Sentinel, l’assistant eau et hygiène de votre école. Je peux : 1) enregistrer vos pannes (eau, toilettes, savon...) ; 2) suivre vos dossiers. Envoyez « où en est mon dossier ? » ou votre référence WASH-... pour le suivi.';
 
-    private const THANKS_FR = 'Avec plaisir ! Je suis Sentinel, l’assistant eau et hygiène de votre école. S’il y a une autre panne, décrivez-la en une phrase et je m’en occupe.';
+    private const THANKS_FR = 'Avec plaisir ! Je suis Sentinel, l’assistant eau et hygiène de votre école. Autre panne ? Décrivez-la en une phrase (robinet, toilettes, savon...) et je m’en occupe. Pour suivre : « où en est mon dossier ? ».';
 
-    private const GREETING_EN = 'Hello! I am Sentinel, your school water and hygiene assistant. To report a problem, describe it in one sentence with the school name, or send a voice note.';
+    private const GREETING_EN = 'Hello! I am Sentinel, your school water and hygiene assistant. Here you can: 1) report a problem (leaking tap, blocked toilets, no soap...) in one sentence or voice note; 2) track your case ("where is my case?").';
 
-    private const IDENTITY_EN = 'I am Sentinel, your school water and hygiene assistant. I collect your reports (taps, toilets, soap...): just describe the problem in one sentence or send a voice note.';
+    private const IDENTITY_EN = 'I am Sentinel, your school water and hygiene assistant. I collect your reports: leaking tap, broken pump, blocked toilets, no soap... Describe it in one sentence or send a voice note, then track your case here.';
 
-    private const CAPABILITIES_EN = 'I am Sentinel, your school water and hygiene assistant. I can record problems and track your cases: describe the issue in one sentence, or ask "where is my case?" with your WASH-... reference.';
+    private const CAPABILITIES_EN = 'I am Sentinel, your school water and hygiene assistant. I can: 1) record problems (water, toilets, soap...); 2) track your cases. Ask "where is my case?" with your WASH-... reference for follow-up.';
 
-    private const THANKS_EN = 'You are welcome! I am Sentinel, your school water and hygiene assistant. If anything else breaks, describe it in one sentence and I will take care of it.';
+    private const THANKS_EN = 'You are welcome! I am Sentinel, your school water and hygiene assistant. Another problem? Describe it in one sentence (tap, toilets, soap...) and I will take care of it. To track: "where is my case?"';
 
     /** Normalise : minuscules, sans accents, espaces condensees. */
     private function normalize(string $text): string
