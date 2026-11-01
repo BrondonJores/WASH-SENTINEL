@@ -19,6 +19,7 @@ from .rag_store import RAGStore
 from .recurrence_watch import watch_recurrence
 from .repair_advisor import RepairAdvisor
 from .schemas import (
+    SCORE_MAX,
     DecisionCopilotRequest,
     DecisionCopilotResponse,
     AgentChatRequest,
@@ -48,6 +49,9 @@ from .schemas import (
     WashExtractionRequest,
     WashExtractionResponse,
 )
+
+#: Troncature des détails d'erreur renvoyés au relais (triage vision).
+ERROR_DETAIL_MAX_CHARS = 200
 from .voice_service import (
     MAX_VOICE_AUDIO_BYTES,
     VOICE_AUDIO_CHUNK_BYTES,
@@ -334,7 +338,7 @@ async def triage_report(
             visual_meta = {**vision.dict(), "visual_severity": severity, "visual_boost": boost,
                            "vision_unavailable": is_vision_unavailable(vision)}
         except Exception as exc:  # ceinture + bretelles (analyze() ne lève déjà jamais)
-            visual_meta = {"vision_error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+            visual_meta = {"vision_error": f"{type(exc).__name__}: {str(exc)[:ERROR_DETAIL_MAX_CHARS]}"}
 
     base_score = extracted.data.recommended_priority_score
     return {
@@ -345,7 +349,7 @@ async def triage_report(
         "unknowns": extracted.unknowns,
         "next_action": extracted.next_action,
         "visual": visual_meta,
-        "priority_score_with_vision": round(min(100.0, base_score + boost), 1),
+        "priority_score_with_vision": round(min(SCORE_MAX, base_score + boost), 1),
     }
 # ==========================================
 # 10. Administration des Providers (page Settings)

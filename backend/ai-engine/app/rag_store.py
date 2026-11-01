@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 import math
+import os
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -26,12 +27,41 @@ except ImportError:  # pragma: no cover
     _HAS_NUMPY = False
 
 
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 DATA_DIR = Path(__file__).resolve().parent / "data"
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 50
-DEFAULT_K = 3
+#: Taille cible des chunks documentaires (caractères, paragraphes entiers).
+#: Override ENV : RAG_CHUNK_SIZE (défaut historique 500).
+CHUNK_SIZE = _env_int("RAG_CHUNK_SIZE", 500)
+#: Recouvrement entre chunks consécutifs (préserve le contexte).
+#: Override ENV : RAG_CHUNK_OVERLAP (défaut historique 50).
+CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 50)
+#: Extraits remontés par défaut.
+#: Override ENV : RAG_TOP_K (défaut historique 3).
+DEFAULT_K = _env_int("RAG_TOP_K", 3)
 # Sous ce score, aucun chunk n'est retenu -> abstention ("je ne sais pas").
-MIN_SIMILARITY = 0.30
+#: Override ENV : RAG_MIN_SIMILARITY (défaut historique 0.30).
+MIN_SIMILARITY = _env_float("RAG_MIN_SIMILARITY", 0.30)
 
 ABSTENTION_MESSAGE = (
     "Je ne sais pas à partir des manuels disponibles. "

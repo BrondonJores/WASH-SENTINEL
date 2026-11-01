@@ -10,13 +10,88 @@ from typing import Any
 import httpx
 
 
-# --- Robustesse réseau (terrain : Ollama froid, timeouts, 5xx/429 transitoires) ---
-RETRY_MAX_ATTEMPTS = 3
-RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
-RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+# --- LOT 5 : robustesse réseau overridable par ENV (défauts historiques) ---
+
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float_list(name: str, default: tuple[float, ...]) -> tuple[float, ...]:
+    """Override ENV '1.0,2.0,4.0' -> tuple ; défaut si absent/invalide/vide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        values = tuple(float(v) for v in raw.split(",") if v.strip())
+    except ValueError:
+        return default
+    return values if values else default
+
+
+def _env_int_set(name: str, default: frozenset[int]) -> frozenset[int]:
+    """Override ENV '408,429,500' -> frozenset ; défaut si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        values = frozenset(int(v) for v in raw.split(",") if v.strip())
+    except ValueError:
+        return default
+    return values if values else default
+
+
+#: Nombre max de tentatives POST (terrain : Ollama froid, 5xx/429 transitoires).
+#: Override ENV : LLM_RETRY_MAX_ATTEMPTS (défaut historique 3).
+RETRY_MAX_ATTEMPTS = _env_int("LLM_RETRY_MAX_ATTEMPTS", 3)
+#: Pauses exponentielles entre réessais (tuple : _retry_delay indexe/slice).
+#: Override ENV : LLM_RETRY_BACKOFF_SECONDS="1.0,2.0,4.0".
+RETRY_BACKOFF_SECONDS = _env_float_list(
+    "LLM_RETRY_BACKOFF_SECONDS", (1.0, 2.0, 4.0))
+#: Statuts HTTP transitoires réessayés (jamais les autres 4xx métier).
+#: Override ENV : LLM_RETRYABLE_STATUS_CODES="408,429,500,502,503,504".
+RETRYABLE_STATUS_CODES = _env_int_set(
+    "LLM_RETRYABLE_STATUS_CODES", frozenset({408, 429, 500, 502, 503, 504}))
+#: Timeout du warmup (déjà ENV via LLM_WARMUP_TIMEOUT, défaut historique 15s).
 WARMUP_TIMEOUT_SECONDS_DEFAULT = 15.0
-# Parallélisme borné du batch embeddings sans endpoint natif (vieux serveurs).
-EMBED_BATCH_CONCURRENCY = 4
+#: Parallélisme borné du batch embeddings sans endpoint natif (vieux serveurs).
+#: Override ENV : LLM_EMBED_CONCURRENCY (défaut historique 4).
+EMBED_BATCH_CONCURRENCY = _env_int("LLM_EMBED_CONCURRENCY", 4)
+
+#: Température unique des 6 appels génération (JSON/vision/chat × 2 drivers) :
+#: quasi-déterministe, exigé par les schémas stricts (extracteur, vision...).
+LLM_TEMPERATURE = 0.1
+
+#: Timeout par défaut des appels LLM (génération/chat), en secondes.
+LLM_DEFAULT_TIMEOUT_SECONDS = 120.0
+#: Timeout des appels embeddings (rapides, batch natif ou gather borné).
+LLM_EMBED_TIMEOUT_SECONDS = 30.0
+#: Timeout appliqué aux profils de test sans timeout explicite (page Settings).
+PROVIDER_TEST_TIMEOUT_DEFAULT = 30.0
+
+#: Défauts Ollama partagés __init__ + UI PROVIDER_TYPES (zéro duplication).
+DEFAULT_OLLAMA_BASE_URL = "http://ollama:11434"
+DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
+DEFAULT_OLLAMA_EMBED_MODEL = "nomic-embed-text"
+#: Défauts API compatible-OpenAI partagés __init__ + UI (zéro duplication).
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OPENAI_EMBED_MODEL = "text-embedding-3-small"
+
+#: Nom de la variable du modèle vision Ollama (lue aussi par ImageAnalyzer).
+VISION_MODEL_ENV_VAR = "OLLAMA_VISION_MODEL"
+#: Défaut vision UNIQUE (LOT 5 : moondream partout, provider + ImageAnalyzer).
+#: Choix documenté : tests/test_image_vision.py épingle resolve_vision_model()
+#: == "moondream" (vert sans toucher aux tests), et la doc déploiement cible
+#: 2 Go VRAM (moondream ~1,7 Go ; llama3.2-vision:11b ~7,9 Go n'y passe pas).
+#: Grosses machines : OLLAMA_VISION_MODEL=llama3.2-vision:11b (défaut hist.).
+DEFAULT_VISION_MODEL = "moondream"
 
 
 class _OldEmbedApiError(Exception):
@@ -224,7 +299,7 @@ class BaseLLMProvider:
         vision_model: str | None = None,
         embed_model: str | None = None,
         api_key: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = LLM_DEFAULT_TIMEOUT_SECONDS,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -457,12 +532,12 @@ class OllamaProvider(BaseLLMProvider):
         timeout: float | None = None,
     ):
         super().__init__(
-            base_url=base_url or os.getenv("OLLAMA_URL", "http://ollama:11434"),
-            model=model or os.getenv("OLLAMA_MODEL", "llama3.2:3b"),
-            vision_model=vision_model or os.getenv("OLLAMA_VISION_MODEL", "llama3.2-vision:11b"),
-            embed_model=embed_model or os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+            base_url=base_url or os.getenv("OLLAMA_URL", DEFAULT_OLLAMA_BASE_URL),
+            model=model or os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL),
+            vision_model=vision_model or os.getenv(VISION_MODEL_ENV_VAR, DEFAULT_VISION_MODEL),
+            embed_model=embed_model or os.getenv("OLLAMA_EMBED_MODEL", DEFAULT_OLLAMA_EMBED_MODEL),
             api_key=api_key,
-            timeout=timeout or float(os.getenv("OLLAMA_TIMEOUT", "120.0")),
+            timeout=timeout or float(os.getenv("OLLAMA_TIMEOUT", str(LLM_DEFAULT_TIMEOUT_SECONDS))),
         )
 
     async def generate_json(self, prompt: str, system: str = "") -> dict[str, Any]:
@@ -474,7 +549,7 @@ class OllamaProvider(BaseLLMProvider):
                 "system": system,
                 "format": "json",
                 "stream": False,
-                "options": {"temperature": 0.1},
+                "options": {"temperature": LLM_TEMPERATURE},
             },
         )
         raise_for_ollama(response, self.model)
@@ -500,7 +575,7 @@ class OllamaProvider(BaseLLMProvider):
                 "images": [image_base64],
                 "format": "json",
                 "stream": False,
-                "options": {"temperature": 0.1},
+                "options": {"temperature": LLM_TEMPERATURE},
             },
         )
         try:
@@ -549,7 +624,7 @@ class OllamaProvider(BaseLLMProvider):
         response = await self._post_with_retry(
             f"{self.base_url}/api/embed",
             {"model": model, "input": list(texts)},
-            timeout=30.0,
+            timeout=LLM_EMBED_TIMEOUT_SECONDS,
         )
         if response.status_code == 404:
             body = response.text.lower()
@@ -594,7 +669,7 @@ class OllamaProvider(BaseLLMProvider):
                     errors.append("réponse sans embedding")
                     return None
 
-        async with self._async_client(timeout=30.0) as client:
+        async with self._async_client(timeout=LLM_EMBED_TIMEOUT_SECONDS) as client:
             vectors = await asyncio.gather(*(one(client, t) for t in texts))
         if any(v is None for v in vectors) or len(vectors) != len(texts):
             raise RuntimeError(
@@ -609,7 +684,7 @@ class OllamaProvider(BaseLLMProvider):
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": 0.1},
+            "options": {"temperature": LLM_TEMPERATURE},
         }
         if tools:
             payload["tools"] = tools
@@ -725,12 +800,12 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         timeout: float | None = None,
     ):
         super().__init__(
-            base_url=base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            model=model or os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            base_url=base_url or os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL),
+            model=model or os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
             vision_model=vision_model or os.getenv("OPENAI_VISION_MODEL") or None,
-            embed_model=embed_model or os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small"),
+            embed_model=embed_model or os.getenv("OPENAI_EMBED_MODEL", DEFAULT_OPENAI_EMBED_MODEL),
             api_key=api_key or os.getenv("OPENAI_API_KEY"),
-            timeout=timeout or float(os.getenv("OPENAI_TIMEOUT", "120.0")),
+            timeout=timeout or float(os.getenv("OPENAI_TIMEOUT", str(LLM_DEFAULT_TIMEOUT_SECONDS))),
         )
         if vision_model is None and os.getenv("OPENAI_VISION_MODEL") is None:
             self.vision_model = self.model
@@ -751,7 +826,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             {
                 "model": self.model,
                 "messages": messages,
-                "temperature": 0.1,
+                "temperature": LLM_TEMPERATURE,
                 "response_format": {"type": "json_object"},
             },
             headers=self._headers(),
@@ -779,7 +854,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             {
                 "model": self.vision_model,
                 "messages": messages,
-                "temperature": 0.1,
+                "temperature": LLM_TEMPERATURE,
                 "response_format": {"type": "json_object"},
             },
             headers=self._headers(),
@@ -814,7 +889,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                     f"{self.base_url}/embeddings",
                     {"model": model, "input": list(texts)},
                     headers=self._headers(),
-                    timeout=30.0,
+                    timeout=LLM_EMBED_TIMEOUT_SECONDS,
                 )
                 if response.status_code != 200:
                     errors.append(f"{model} : HTTP {response.status_code}")
@@ -844,7 +919,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
     async def chat(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": 0.1}
+        payload: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": LLM_TEMPERATURE}
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -985,12 +1060,14 @@ def provider_from_profile(profile: dict[str, Any]) -> BaseLLMProvider:
         "vision_model": profile.get("vision_model"),
         "embed_model": profile.get("embed_model"),
         "api_key": profile.get("api_key"),
-        "timeout": float(profile.get("timeout") or 30.0),
+        "timeout": float(profile.get("timeout") or PROVIDER_TEST_TIMEOUT_DEFAULT),
     }
     provider_cls = PROVIDER_REGISTRY.get(provider, OllamaProvider)
     return provider_cls(**kwargs)
 
 
+# LOT 5 : les `default:` UI sont générés depuis les MÊMES ENV que les
+# __init__ (zéro duplication de valeur : un seul DEFAULT_* par champ).
 PROVIDER_TYPES: list[dict[str, Any]] = [
     {
         "id": "ollama",
@@ -998,10 +1075,10 @@ PROVIDER_TYPES: list[dict[str, Any]] = [
         "description": "Modèles hébergés localement : Llama, Gemma, Llava, nomic-embed. Gratuit, privé, sans clé API.",
         "api_key_required": False,
         "fields": [
-            {"name": "base_url", "label": "URL Ollama", "type": "url", "default": "http://ollama:11434", "required": True},
-            {"name": "model", "label": "Modèle texte", "type": "text", "default": "llama3.2:3b", "required": True},
-            {"name": "vision_model", "label": "Modèle vision", "type": "text", "default": "llama3.2-vision:11b", "required": False},
-            {"name": "embed_model", "label": "Modèle embeddings", "type": "text", "default": "nomic-embed-text", "required": False},
+            {"name": "base_url", "label": "URL Ollama", "type": "url", "default": os.getenv("OLLAMA_URL", DEFAULT_OLLAMA_BASE_URL), "required": True},
+            {"name": "model", "label": "Modèle texte", "type": "text", "default": os.getenv("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL), "required": True},
+            {"name": "vision_model", "label": "Modèle vision", "type": "text", "default": os.getenv(VISION_MODEL_ENV_VAR, DEFAULT_VISION_MODEL), "required": False},
+            {"name": "embed_model", "label": "Modèle embeddings", "type": "text", "default": os.getenv("OLLAMA_EMBED_MODEL", DEFAULT_OLLAMA_EMBED_MODEL), "required": False},
         ],
     },
     {
@@ -1010,10 +1087,10 @@ PROVIDER_TYPES: list[dict[str, Any]] = [
         "description": "OpenAI, Groq, Together, Mistral, ou tout endpoint compatible /v1. Nécessite une clé API.",
         "api_key_required": True,
         "fields": [
-            {"name": "base_url", "label": "URL de base (/v1)", "type": "url", "default": "https://api.openai.com/v1", "required": True},
-            {"name": "model", "label": "Modèle texte", "type": "text", "default": "gpt-4o-mini", "required": True},
-            {"name": "vision_model", "label": "Modèle vision", "type": "text", "default": "", "required": False},
-            {"name": "embed_model", "label": "Modèle embeddings", "type": "text", "default": "text-embedding-3-small", "required": False},
+            {"name": "base_url", "label": "URL de base (/v1)", "type": "url", "default": os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL), "required": True},
+            {"name": "model", "label": "Modèle texte", "type": "text", "default": os.getenv("OPENAI_MODEL", DEFAULT_OPENAI_MODEL), "required": True},
+            {"name": "vision_model", "label": "Modèle vision", "type": "text", "default": os.getenv("OPENAI_VISION_MODEL", ""), "required": False},
+            {"name": "embed_model", "label": "Modèle embeddings", "type": "text", "default": os.getenv("OPENAI_EMBED_MODEL", DEFAULT_OPENAI_EMBED_MODEL), "required": False},
         ],
     },
 ]

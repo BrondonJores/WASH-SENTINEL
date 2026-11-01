@@ -61,34 +61,49 @@ def wash_whisper_prompt(language: str) -> str:
 #: Valeur renvoyée quand un driver ne peut pas honorer la langue demandée.
 LANGUAGE_AUTO_EFFECTIVE = "auto"
 
+#: Plafond anti-DoS des notes vocales, en Mo.
+#: LA RÉFÉRENCE documentée (LOT 5) : voice_service.MAX_VOICE_AUDIO_BYTES en
+#: dérive, et les lots Laravel suivants s'aligneront sur ces 12 Mo.
+STT_MAX_INPUT_MB = 12
 #: Garde-fou avant écriture disque : refuse les blobs démesurés sans lancer FFmpeg.
-MAX_STT_INPUT_BYTES = 12 * 1024 * 1024
+MAX_STT_INPUT_BYTES = STT_MAX_INPUT_MB * 1024 * 1024
+
+#: Délai maximal de la normalisation FFmpeg (secondes).
+FFMPEG_NORMALIZE_TIMEOUT_SECONDS = 30.0
+#: Format pivot imposé à tous les moteurs STT : WAV PCM 16 kHz mono 16 bits.
+STT_SAMPLE_RATE_HZ = 16000
+STT_CHANNELS = 1
+STT_SAMPLE_WIDTH_BYTES = 2
 
 
 def normalize_to_wav(
     audio_bytes: bytes,
     filename: str,
     workdir: str,
-    timeout: float = 30.0,
+    timeout: float = FFMPEG_NORMALIZE_TIMEOUT_SECONDS,
 ) -> str:
     """Normalise n'importe quel audio en WAV PCM 16kHz mono via FFmpeg."""
     if len(audio_bytes) > MAX_STT_INPUT_BYTES:
-        raise RuntimeError("Audio trop volumineux pour la normalisation (limite 12 Mo).")
+        raise RuntimeError(
+            f"Audio trop volumineux pour la normalisation (limite {STT_MAX_INPUT_MB} Mo).")
     input_file = os.path.join(workdir, filename)
     with open(input_file, "wb") as f:
         f.write(audio_bytes)
     wav_file = os.path.join(workdir, "normalized.wav")
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", input_file, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav_file],
+            ["ffmpeg", "-y", "-i", input_file, "-ar", str(STT_SAMPLE_RATE_HZ),
+             "-ac", str(STT_CHANNELS), "-c:a", "pcm_s16le", wav_file],
             capture_output=True, check=False, timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError("Normalisation audio trop lente (délai FFmpeg dépassé).") from exc
     except FileNotFoundError as exc:
-        raise RuntimeError("FFmpeg introuvable (normalisation 16kHz impossible).") from exc
+        raise RuntimeError(
+            f"FFmpeg introuvable (normalisation {STT_SAMPLE_RATE_HZ // 1000}kHz impossible).") from exc
     if not os.path.isfile(wav_file):
-        raise RuntimeError("FFmpeg introuvable ou audio illisible (normalisation 16kHz impossible).")
+        raise RuntimeError(
+            f"FFmpeg introuvable ou audio illisible (normalisation {STT_SAMPLE_RATE_HZ // 1000}kHz impossible).")
     return wav_file
 
 
@@ -247,11 +262,15 @@ class OmnilingualOnnxProvider(BaseSTTProvider):
         with tempfile.TemporaryDirectory(prefix="wash-omni-") as tmpdir:
             wav_file = normalize_to_wav(audio_bytes, filename, tmpdir)
             with wave.open(wav_file, "rb") as w:
-                if w.getnchannels() != 1 or w.getsampwidth() != 2 or w.getframerate() != 16000:
-                    raise RuntimeError("Format WAV inattendu après normalisation (16kHz mono requis).")
+                if (w.getnchannels() != STT_CHANNELS
+                        or w.getsampwidth() != STT_SAMPLE_WIDTH_BYTES
+                        or w.getframerate() != STT_SAMPLE_RATE_HZ):
+                    raise RuntimeError(
+                        f"Format WAV inattendu après normalisation "
+                        f"({STT_SAMPLE_RATE_HZ // 1000}kHz mono requis).")
                 samples = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
         stream = recognizer.create_stream()
-        stream.accept_waveform(16000, samples)
+        stream.accept_waveform(STT_SAMPLE_RATE_HZ, samples)
         recognizer.decode_stream(stream)
         return {
             "transcript": (stream.result.text or "").strip(),

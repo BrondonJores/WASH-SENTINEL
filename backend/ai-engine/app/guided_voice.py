@@ -68,6 +68,37 @@ QUESTIONS_DUA: dict[str, str] = {
     SEVERITY: Q_SEVERITY_DUA,
 }
 
+#: Questions par langue (LOT 5) : ask() résout QUESTIONS[lang][step].
+QUESTIONS: dict[str, dict[str, str]] = {
+    "fr": QUESTIONS_FR,
+    "dua": QUESTIONS_DUA,
+}
+#: Consigne de confirmation par langue (recap + oui/non).
+CONFIRM_TAILS: dict[str, str] = {
+    "fr": Q_CONFIRM_TAIL_FR,
+    "dua": Q_CONFIRM_TAIL_DUA,
+}
+#: Message de fin par langue (étape DONE).
+DONE_MESSAGES: dict[str, str] = {
+    "fr": "C'est not\u00e9. Merci !",
+    "dua": "E bonga. Mase !",
+}
+
+#: Longueur max du libellé école libre stocké dans le slot (tronqué).
+SCHOOL_LABEL_MAX_CHARS = 80
+
+#: Verdicts de parse_confirmation (oui/non/répéter/incompris).
+CONFIRM_YES = "yes"
+CONFIRM_NO = "no"
+CONFIRM_REPEAT = "repeat"
+CONFIRM_UNKNOWN = "unknown"
+
+#: Pastilles cliquables par étape (max 3, jamais de 4e option).
+PROBLEM_CHIPS: list[str] = ["Eau", "Toilettes", "Fuite"]
+CONFIRM_CHIPS: list[str] = ["Oui", "Non"]
+#: Plafond de pastilles (problème : 3 options ; écoles suggérées : 3 max).
+MAX_GUIDED_CHIPS = 3
+
 #: Tous les prompts guides reconnus (reprise de session via l'historique).
 ALL_QUESTIONS: tuple[str, ...] = (
     Q_SCHOOL_FR, Q_PROBLEM_FR, Q_SEVERITY_FR,
@@ -180,21 +211,21 @@ def parse_confirmation(text: str) -> Confirmation:
     """
     folded = _normalize_confirm(text)
     if not folded:
-        return "unknown"
+        return CONFIRM_UNKNOWN
     for cue in _REPEAT_CUES:
         if cue in folded:
-            return "repeat"
+            return CONFIRM_REPEAT
     if folded in _AMBIGUOUS_EXACT:
-        return "unknown"
+        return CONFIRM_UNKNOWN
     if folded in _YES_EXACT or folded in _NO_EXACT:
-        return "yes" if folded in _YES_EXACT else "no"
+        return CONFIRM_YES if folded in _YES_EXACT else CONFIRM_NO
     for cue in _NO_LOOSE:
         if cue in folded:
-            return "no"
+            return CONFIRM_NO
     for cue in _YES_LOOSE:
         if cue in folded:
-            return "yes"
-    return "unknown"
+            return CONFIRM_YES
+    return CONFIRM_UNKNOWN
 
 
 def parse_problem(text: str) -> str | None:
@@ -223,9 +254,9 @@ def parse_severity(text: str) -> str | None:
     if any(cue in folded for cue in _GRAVE_CUES):
         return SEV_GRAVE
     verdict = parse_confirmation(text)
-    if verdict == "yes":
+    if verdict == CONFIRM_YES:
         return SEV_GRAVE
-    if verdict == "no":
+    if verdict == CONFIRM_NO:
         return SEV_PAS_GRAVE
     return None
 
@@ -261,36 +292,37 @@ def ask(step: str, slots: dict[str, Any] | None = None, lang: str = "fr") -> str
     Garantie vocale : au plus UN point d'interrogation par texte.
     """
     dua = str(lang or "fr").lower().startswith(("dua", "douala"))
-    table = QUESTIONS_DUA if dua else QUESTIONS_FR
+    key = "dua" if dua else "fr"
+    table = QUESTIONS[key]
     if step in table:
         return table[step]
     if step == CONFIRM:
         slots = slots or {}
-        tail = Q_CONFIRM_TAIL_DUA if dua else Q_CONFIRM_TAIL_FR
+        tail = CONFIRM_TAILS[key]
         return (
             f"{RECAP_PREFIX}{slots.get(SCHOOL, '?')}, "
             f"{slots.get(PROBLEM, '?')}, {slots.get(SEVERITY, '?')}. {tail}"
         )
     if step == DONE:
-        return "C'est not\u00e9. Merci !" if not dua else "E bonga. Mase !"
+        return DONE_MESSAGES[key]
     raise ValueError(f"\u00e9tape guid\u00e9e inconnue : {step!r}")
 
 
 def guided_chips(step: str, context: dict[str, Any] | None = None) -> list[str]:
     """Pastilles cliquables du tour (max 3, jamais de 4e option)."""
     if step == PROBLEM:
-        return ["Eau", "Toilettes", "Fuite"]
+        return list(PROBLEM_CHIPS)
     if step in (SEVERITY, CONFIRM):
-        return ["Oui", "Non"]
+        return list(CONFIRM_CHIPS)
     if step == SCHOOL:
-        names = [s.get("school_name") for s in (context or {}).get("schools", [])[:3]]
-        return [n for n in names if n][:3]
+        names = [s.get("school_name") for s in (context or {}).get("schools", [])[:MAX_GUIDED_CHIPS]]
+        return [n for n in names if n][:MAX_GUIDED_CHIPS]
     return []
 
 
 def _canonical_school(text: str, context: dict[str, Any] | None) -> str:
     """Libelle connu si l'ecole est reconnue, sinon texte brut (tronque)."""
-    raw = " ".join((text or "").split())[:80]
+    raw = " ".join((text or "").split())[:SCHOOL_LABEL_MAX_CHARS]
     if context:
         try:
             from .agent_loop import resolve_place
@@ -308,7 +340,7 @@ def _accept_school(text: str) -> bool:
         return False
     if _normalize_confirm(text) in _AMBIGUOUS_EXACT:
         return False
-    return parse_confirmation(text) == "unknown"
+    return parse_confirmation(text) == CONFIRM_UNKNOWN
 
 
 def fill_from_text(
@@ -430,7 +462,7 @@ def guided_turn(
     if not in_session and not is_report_message(message):
         return None
 
-    if parse_confirmation(message) == "repeat":
+    if parse_confirmation(message) == CONFIRM_REPEAT:
         # Repetition : on repose la question en cours, sans avancer.
         slots = seeded_replay(history, message, context, skip_current=True)["slots"]
         step = next_step(slots)
@@ -479,14 +511,14 @@ def _run_answers(
     slots = dict(slots)
     restarted = False
     for answer in answers:
-        if parse_confirmation(answer) == "repeat":
+        if parse_confirmation(answer) == CONFIRM_REPEAT:
             continue
         step = next_step(slots)
         if step == CONFIRM:
             verdict = parse_confirmation(answer)
-            if verdict == "yes":
+            if verdict == CONFIRM_YES:
                 return {"slots": slots, "confirmed": True, "restarted": False}
-            if verdict == "no":
+            if verdict == CONFIRM_NO:
                 slots = {}
                 restarted = True
                 continue

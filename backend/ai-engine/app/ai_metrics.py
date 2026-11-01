@@ -13,7 +13,9 @@ Le buffer circulaire garde les 500 dernieres operations (thread-safe).
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import threading
 from collections import deque
 from contextlib import contextmanager
@@ -22,12 +24,26 @@ from typing import Any, Iterator
 
 __all__ = ["MAX_ENTRIES", "COST_PER_1K", "record", "timed", "summary", "reset", "estimate_cost"]
 
-MAX_ENTRIES = 500
+
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+#: Taille du buffer circulaire des opérations (thread-safe).
+#: Override ENV : AI_METRICS_MAX_ENTRIES (défaut historique 500).
+MAX_ENTRIES = _env_int("AI_METRICS_MAX_ENTRIES", 500)
 
 # Coûts ESTIMATIFS $/1k tokens (prompt + completion confondus), pour comparer
 # les profils modèles dans Réglages IA. Local (Ollama) = 0.0 exact ; valeurs
 # cloud indicatives, surchargeables par appel via cost_per_1k.
-COST_PER_1K: dict[str, float] = {
+_DEFAULT_COST_PER_1K: dict[str, float] = {
     "llama3.2:3b": 0.0,
     "llama3.2-vision:11b": 0.0,
     "nomic-embed-text": 0.0,
@@ -38,6 +54,32 @@ COST_PER_1K: dict[str, float] = {
     "gpt-4o": 3.00,
     "claude-sonnet-4-5": 4.50,
 }
+
+
+def _cost_table() -> dict[str, float]:
+    """Table des coûts : défauts + surcharge JSON via AI_METRICS_COSTS_JSON.
+
+    Exemple : AI_METRICS_COSTS_JSON='{"gpt-4o": 5.0, "nouveau": 0.1}'.
+    JSON absent/invalide -> défauts historiques inchangés (jamais de crash).
+    """
+    table = dict(_DEFAULT_COST_PER_1K)
+    raw = os.environ.get("AI_METRICS_COSTS_JSON", "").strip()
+    if not raw:
+        return table
+    try:
+        override = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return table
+    if isinstance(override, dict):
+        for model, price in override.items():
+            try:
+                table[str(model)] = float(price)
+            except (TypeError, ValueError):
+                continue
+    return table
+
+
+COST_PER_1K: dict[str, float] = _cost_table()
 
 _lock = threading.Lock()
 _buffer: deque[dict[str, Any]] = deque(maxlen=MAX_ENTRIES)

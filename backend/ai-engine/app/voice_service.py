@@ -12,6 +12,8 @@ import tempfile
 import wave
 from .schemas import VoiceSynthesisResponse, VoiceTranscriptionResponse
 from .stt_providers import (
+    MAX_STT_INPUT_BYTES,
+    STT_SAMPLE_RATE_HZ,
     SUPPORTED_VOICE_LANGUAGES,
     BaseSTTProvider,
     default_stt,
@@ -110,9 +112,11 @@ VOICE_LANGUAGE_ALIASES: dict[str, str] = {
 }
 
 #: Libellés FR des langues pour le message de repli MMS explicite.
+#: Noms de langue canoniques (LOT 5 : "anglais", plus "anglaise") ; l'accord
+#: féminin après « voix » est géré dans mms_fallback_notice (« voix anglaise »).
 VOICE_LANGUAGE_LABELS: dict[str, str] = {
     "fr": "français",
-    "en": "anglaise",
+    "en": "anglais",
     "dua_Latn": "douala",
     "bassa": "bassa",
     "ewondo": "ewondo",
@@ -124,9 +128,11 @@ DEFAULT_TTS_VOICE = "fr_FR-upmc-medium"
 #: Longueur maximale synthétisée (miroir de la validation Laravel max:1000).
 MAX_TTS_CHARS = 1000
 
-#: Plafond anti-DoS des notes vocales (octets) : 12 Mo, durci au-delà du
-#: max Laravel web 10 Mo pour couvrir l'exposition directe du moteur.
-MAX_VOICE_AUDIO_BYTES = 12 * 1024 * 1024
+#: Plafond anti-DoS des notes vocales (octets), durci au-delà du max Laravel
+#: web 10 Mo pour couvrir l'exposition directe du moteur. Dérive de LA
+#: référence 12 Mo (stt_providers.MAX_STT_INPUT_BYTES, LOT 5) : une seule
+#: valeur, les lots Laravel suivants s'aligneront sur ces 12 Mo.
+MAX_VOICE_AUDIO_BYTES = MAX_STT_INPUT_BYTES
 #: Taille des chunks de lecture transcribe : mesurer AVANT de tout charger.
 VOICE_AUDIO_CHUNK_BYTES = 1024 * 1024
 
@@ -134,8 +140,9 @@ VOICE_AUDIO_CHUNK_BYTES = 1024 * 1024
 def voice_too_heavy_message(size_bytes: int) -> str:
     """Message FR 413 quand la note vocale dépasse MAX_VOICE_AUDIO_BYTES."""
     size_mb = size_bytes / (1024 * 1024)
+    max_mb = MAX_VOICE_AUDIO_BYTES // (1024 * 1024)
     return (
-        f"Note vocale trop lourde ({size_mb:.1f} Mo, max 12 Mo) : "
+        f"Note vocale trop lourde ({size_mb:.1f} Mo, max {max_mb} Mo) : "
         "dictez par phrases courtes, puis réessayez."
     )
 
@@ -161,6 +168,15 @@ def guided_error(code: str) -> RuntimeError:
     return RuntimeError(f"[{code}] {GUIDANCE[code]}")
 
 
+def _voix_agreement(label: str) -> str:
+    """Accorde le nom de langue après « voix » (féminin) : « voix anglaise ».
+
+    Seuls les adjectifs en -ais s'accordent (anglais/français) ; les noms
+    invariables (douala, bassa, ewondo) sont inchangés.
+    """
+    return label + "e" if label in ("anglais", "français") else label
+
+
 def mms_fallback_notice(language: str) -> str:
     """Message FR explicite joint à l'audio quand MMS replie vers Piper FR.
 
@@ -168,7 +184,7 @@ def mms_fallback_notice(language: str) -> str:
     cette langue (dua/ewo/bas), ou modèle MMS non installé. Jamais de
     français déguisé en langue locale : le repli est toujours annoncé.
     """
-    label = VOICE_LANGUAGE_LABELS.get(language, language)
+    label = _voix_agreement(VOICE_LANGUAGE_LABELS.get(language, language))
     if MMS_LANGUAGE_MAP.get(language) in MMS_MISSING_PRETRAINED:
         return (
             f"Pas encore de voix {label} disponible (Meta MMS ne la propose "
@@ -207,6 +223,13 @@ def voice_registry() -> dict[str, list[str]]:
     return registry
 
 
+#: Délai maximal de la sonde de durée ffprobe (secondes).
+FFPROBE_TIMEOUT_SECONDS = 10.0
+
+#: Fenêtre d'estimation de l'énergie RMS (secondes à 16 kHz, bornée même long).
+VOICE_RMS_SAMPLE_SECONDS = 5
+
+
 def _probe_duration(audio_bytes: bytes, filename: str) -> float | None:
     """Durée (s) d'un audio compressé via ffprobe, ou None si indisponible.
 
@@ -223,7 +246,7 @@ def _probe_duration(audio_bytes: bytes, filename: str) -> float | None:
             res = subprocess.run(
                 ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
                  "-of", "csv=p=0", tmp.name],
-                capture_output=True, text=True, check=False, timeout=10,
+                capture_output=True, text=True, check=False, timeout=FFPROBE_TIMEOUT_SECONDS,
             )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -247,7 +270,7 @@ def _wav_stats(audio_bytes: bytes) -> tuple[float, float] | None:
             if n_frames <= 0 or sampwidth not in (1, 2):
                 return None
             # Échantillon borné : assez pour estimer l'énergie, même long.
-            max_frames = min(n_frames, 16000 * 5)
+            max_frames = min(n_frames, STT_SAMPLE_RATE_HZ * VOICE_RMS_SAMPLE_SECONDS)
             raw = w.readframes(max_frames)
     except (wave.Error, EOFError, OSError):
         return None

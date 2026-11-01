@@ -38,6 +38,7 @@ from typing import Any
 
 try:  # importé via « app.stt_omnilingual » (tests, moteur)
     from app.stt_providers import (
+        STT_SAMPLE_RATE_HZ,
         BaseSTTProvider,
         SUPPORTED_VOICE_LANGUAGES,
         normalize_to_wav,
@@ -45,25 +46,30 @@ try:  # importé via « app.stt_omnilingual » (tests, moteur)
 except ImportError:  # pragma: no cover - contexte paquet relatif
     try:
         from .stt_providers import (
+            STT_SAMPLE_RATE_HZ,
             BaseSTTProvider,
             SUPPORTED_VOICE_LANGUAGES,
             normalize_to_wav,
         )
     except ImportError:  # pragma: no cover - dossier app/ sur sys.path
         from stt_providers import (  # type: ignore[no-redef]
+            STT_SAMPLE_RATE_HZ,
             BaseSTTProvider,
             SUPPORTED_VOICE_LANGUAGES,
             normalize_to_wav,
         )
 
 #: Checkpoint CTC officiel Meta (repli transformers, 100 % CPU).
+#: Override ENV : OMNI_CTC_HF_MODEL (mapping > ENV > ce défaut, cf. __init__).
 OMNI_CTC_HF_REPO = "facebook/omniASR-CTC-300M"
 
 #: Export ONNX int8 officiel k2-fsa/sherpa-onnx (prioritaire, idéal CPU).
 OMNI_CTC_ONNX_REPO = (
     "sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12"
 )
-OMNI_CTC_ONNX_REPO_FULL = f"csukuangfj/{OMNI_CTC_ONNX_REPO}"
+#: Dépôt ONNX complet, overridable (miroir local/nas) via OMNI_CTC_ONNX_REPO.
+OMNI_CTC_ONNX_REPO_FULL = os.getenv(
+    "OMNI_CTC_ONNX_REPO", f"csukuangfj/{OMNI_CTC_ONNX_REPO}")
 
 #: Commandes exactes à lancer par l'usager (rappelées dans les erreurs).
 OMNI_CTC_ONNX_DOWNLOAD_CMD = (
@@ -273,7 +279,7 @@ class OmnilingualCTCProvider(BaseSTTProvider):
                 "(pip install numpy)."
             ) from exc
         stream = recognizer.create_stream()
-        stream.accept_waveform(16000, np.array(samples, dtype=np.float32))
+        stream.accept_waveform(STT_SAMPLE_RATE_HZ, np.array(samples, dtype=np.float32))
         recognizer.decode_stream(stream)
         return (stream.result.text or "").strip()
 
@@ -283,7 +289,7 @@ class OmnilingualCTCProvider(BaseSTTProvider):
             raise RuntimeError("Omnilingual CTC indisponible : torch non installé.")
         _transformers, torch = transformers_torch
         processor, model = handle
-        inputs = processor(samples, sampling_rate=16000, return_tensors="pt")
+        inputs = processor(samples, sampling_rate=STT_SAMPLE_RATE_HZ, return_tensors="pt")
         with torch.no_grad():
             logits = model(inputs.input_values).logits
         pred_ids = torch.argmax(logits, dim=-1)

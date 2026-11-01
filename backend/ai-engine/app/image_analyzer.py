@@ -12,12 +12,19 @@ Deploiement cible 2 Go VRAM :
   export OLLAMA_VISION_MODEL=moondream
   ollama pull moondream
 
+LOT 5 : UN SEUL défaut vision (``moondream``), défini dans
+:mod:`app.providers` (``DEFAULT_VISION_MODEL``) et réexporté ici : le provider
+Ollama et cet analyseur ne divergent plus. Choix documenté : les tests
+épinglent ``moondream`` (cf. tests/test_image_vision.py) et la cible reste
+2 Go VRAM. Sur grosses machines : ``OLLAMA_VISION_MODEL=llama3.2-vision:11b``
+(ancien défaut du provider, ~7,9 Go, ne passe PAS en 2 Go VRAM).
+
 Alternatives (tailles approximatives vues dans ``ollama list``) :
-  - ``moondream`` (~1,7 Go) — RECOMMANDE pour 2 Go VRAM ; suivi d'instructions
+  - ``moondream`` (~1,7 Go) — DEFAUT UNIQUE ; suivi d'instructions
     correct en vision legere, JSON generalement propre.
   - ``llava:7b`` (~4,7 Go) — qualite superieure mais ne tient pas en 2 Go VRAM.
-  - ``llama3.2-vision:11b`` (~7,9 Go) — defaut historique du provider ; ne passe
-    PAS sur 2 Go VRAM (conserve cote provider pour les grosses machines).
+  - ``llama3.2-vision:11b`` (~7,9 Go) — ancien defaut du provider ; ne passe
+    PAS sur 2 Go VRAM (accessible via ``OLLAMA_VISION_MODEL``).
 
 Repli gracieux
 --------------
@@ -34,11 +41,26 @@ le triage continue sur le texte seul.
 import base64
 import os
 
-from .providers import BaseLLMProvider
+from .providers import (
+    DEFAULT_VISION_MODEL,  # réexporté (LOT 5 : défaut unique moondream)
+    VISION_MODEL_ENV_VAR,  # réexporté (nom de l'ENV, source unique)
+    BaseLLMProvider,
+)
 from .schemas import ImageAnalysisResponse
 
-VISION_MODEL_ENV_VAR = "OLLAMA_VISION_MODEL"
-DEFAULT_VISION_MODEL = "moondream"
+__all__ = [
+    "DEFAULT_VISION_MODEL",
+    "VISION_MODEL_ENV_VAR",
+    "VISION_UNAVAILABLE_MARKER",
+    "WASH_VISION_SYSTEM",
+    "ImageAnalyzer",
+    "is_vision_unavailable",
+    "resolve_vision_model",
+    "vision_unavailable_response",
+    "visual_boost",
+    "visual_severity",
+]
+
 VISION_UNAVAILABLE_MARKER = "vision indisponible"
 
 WASH_VISION_SYSTEM = """
