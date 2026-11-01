@@ -78,6 +78,23 @@ class WashWhatsAppService
         'follow up', 'follow-up', 'followup',
     ];
 
+    /**
+     * Marqueurs EN génériques (signalement) : présents, SANS aucun marqueur FR
+     * (SUIVI_FRENCH_MARKERS réutilisée en veto) → TOUTE la réponse en anglais.
+     * Même pattern que le suivi, généralisé au flux de création. 'fr' par défaut.
+     * Appariés par frontières de mot (containsMarker) : 'toilet' ≠ 'toilettes'.
+     */
+    protected const REPLY_ENGLISH_MARKERS = [
+        'hello', 'good morning', 'good afternoon', 'good evening',
+        'this is', 'thank', 'thanks', 'please', 'sorry',
+        'school', 'pupil', 'pupils', 'student', 'students', 'teacher',
+        'water', 'tap', 'taps', 'leak', 'leaks', 'leaking', 'leakage',
+        'toilet', 'toilets', 'pipe', 'pipes', 'pump', 'borehole',
+        'soap', 'drink', 'drinking', 'flush', 'tank',
+        'block', 'blocks', 'broken', 'dirty', 'smell', 'shortage',
+        'hygiene', 'sanitation', 'sewage',
+    ];
+
     /** Indices eau/hygiène : un texte sans aucun est traité comme hors-sujet. */
     protected const WASH_KEYWORDS = [
         'eau', 'robinet', 'fuite', 'fuit', 'fuir', 'coul', 'goutt', 'pompe',
@@ -90,6 +107,9 @@ class WashWhatsAppService
         'puanteur', 'inond', 'flaque', 'mare', 'boue', 'mouche', 'moustique',
         'choléra', 'cholera', 'diarrh', 'malade', 'sanitaire', 'drainage',
         'soif', 'boire', 'fontaine', 'seau', 'javel', 'désinfect', 'desinfect',
+        // Mêmes indices en anglais : un signalement texte EN doit passer le filtre.
+        'water', 'tap', 'leak', 'toilet', 'pipe', 'pump', 'soap', 'drink',
+        'sanitation', 'sewage', 'drain', 'borehole', 'tank', 'flush', 'well',
     ];
 
     public function __construct(
@@ -200,11 +220,11 @@ class WashWhatsAppService
         // (même sans mot-clé eau/hygiène) ni en doublon « Déjà reçu ».
         $staleClarification = false;
         if (($channel === 'text' || $channel === 'voice') && ($text || $audio)) {
-            $clarifyIncidentId = Cache::get($this->clarifyKey($from));
-            if ($clarifyIncidentId) {
-                $pendingIncident = Incident::find($clarifyIncidentId);
+            $clarify = $this->clarify($from);
+            if ($clarify) {
+                $pendingIncident = Incident::find($clarify['incident_id']);
                 if ($pendingIncident) {
-                    return $this->applyClarification($from, $contact->school, $pendingIncident, $channel, $text, $audio, $photo);
+                    return $this->applyClarification($from, $contact->school, $pendingIncident, $channel, $text, $audio, $photo, $clarify['lang'] === 'en');
                 }
                 // Incident pending disparu (supprimé) : repli triage normal + note FR.
                 // (Clé expirée/silence = plus rien en cache : triage normal pur.)
@@ -238,10 +258,13 @@ class WashWhatsAppService
 
         $result = $this->triage->ingest($contact->school, $channel, $text, $audio, $photo, null, 'whatsapp');
         $incident = $result['incident'];
-        $staleNote = $staleClarification ? $this->staleClarificationNote() : '';
+        // Langue de RÉPONSE depuis le texte usager (transcript vocal ou texte,
+        // jamais language_effective STT : la requête force souvent fr).
+        $english = is_string($text) && $text !== '' && $this->isEnglishReply($text);
+        $staleNote = $staleClarification ? $this->staleClarificationNote($english) : '';
 
         if ($result['is_duplicate']) {
-            $this->reply($from, $staleNote . "Déjà reçu ! Incident {$incident->reference_code} suivi par nos équipes. Merci, pas besoin de renvoyer. On vous tient au courant ici.");
+            $this->reply($from, $staleNote . $this->duplicateReply($incident, $english));
 
             return [
                 'status' => 'triaged',
@@ -253,10 +276,10 @@ class WashWhatsAppService
 
         // Flow vocal : récap texte + boutons Oui/Non + note vocale TTS.
         if ($channel === 'voice' && (bool) config('whatsapp.voice_confirmation', true)) {
-            $this->reply($from, $staleNote . $this->createdReply($incident));
-            $this->rememberPending($from, $incident);
-            $this->sendConfirmationButtons($from);
-            $this->sendVoiceConfirmation($from, $incident);
+            $this->reply($from, $staleNote . $this->createdReply($incident, $english));
+            $this->rememberPending($from, $incident, $english);
+            $this->sendConfirmationButtons($from, $english);
+            $this->sendVoiceConfirmation($from, $incident, $english);
 
             return [
                 'status' => 'triaged_pending_confirmation',
@@ -266,7 +289,7 @@ class WashWhatsAppService
             ];
         }
 
-        $this->reply($from, $staleNote . $this->createdReply($incident));
+        $this->reply($from, $staleNote . $this->createdReply($incident, $english));
 
         return [
             'status' => 'triaged',
@@ -297,10 +320,13 @@ class WashWhatsAppService
         $pending = $this->pending($from);
         $this->forgetPending($from);
         $this->forgetClarification($from);
+        $english = ($pending['lang'] ?? 'fr') === 'en';
 
         $incident = $pending ? Incident::find($pending['incident_id'] ?? null) : null;
         if (!$incident) {
-            $this->reply($from, 'Merci ! Votre signalement est bien enregistré. Pour un autre problème, envoyez une note vocale ou décrivez-le en une phrase.');
+            $this->reply($from, $english
+                ? 'Thanks! Your report is recorded. For another issue, send a voice note or describe it in one sentence.'
+                : 'Merci ! Votre signalement est bien enregistré. Pour un autre problème, envoyez une note vocale ou décrivez-le en une phrase.');
 
             return ['status' => 'confirmed_stale', 'from' => $from];
         }
@@ -311,7 +337,9 @@ class WashWhatsAppService
             $incident->update(['ai_tags' => $tags]);
         }
 
-        $this->reply($from, "Parfait, c'est confirmé ! Incident {$incident->reference_code} suivi par nos équipes. On vous écrit ici dès que ça avance.");
+        $this->reply($from, $english
+            ? "Perfect, confirmed! Case {$incident->reference_code} is being followed by our teams. We'll write here as soon as it moves."
+            : "Parfait, c'est confirmé ! Incident {$incident->reference_code} suivi par nos équipes. On vous écrit ici dès que ça avance.");
 
         return ['status' => 'confirmed', 'from' => $from, 'incident_id' => $incident->id];
     }
@@ -319,14 +347,17 @@ class WashWhatsAppService
     protected function askClarification(string $from): array
     {
         $pending = $this->pending($from);
+        $lang = $pending['lang'] ?? 'fr';
         $this->forgetPending($from);
         if ($pending && isset($pending['incident_id'])) {
-            Cache::put($this->clarifyKey($from), $pending['incident_id'], 86400);
+            $this->rememberClarification($from, (int) $pending['incident_id'], $lang);
         }
 
         // UNE seule question courte : la réponse suivante (texte/vocal)
         // corrigera l'incident pending (applyClarification), pas un triage neuf.
-        $this->reply($from, 'Désolé ! Que dois-je corriger ? Répondez en une phrase : quoi + où.');
+        $this->reply($from, $lang === 'en'
+            ? 'Sorry! What should I fix? Reply in one sentence: what + where.'
+            : 'Désolé ! Que dois-je corriger ? Répondez en une phrase : quoi + où.');
 
         return ['status' => 'clarification_asked', 'from' => $from];
     }
@@ -338,7 +369,7 @@ class WashWhatsAppService
      * ses patterns via les modèles : Report lié (is_duplicate=false) + résumé à jour.
      * Re-confirmation : boutons Oui/Non renvoyés, pending + clarification conservés.
      */
-    protected function applyClarification(string $from, School $school, Incident $incident, string $channel, ?string $text, ?UploadedFile $audio, ?UploadedFile $photo): array
+    protected function applyClarification(string $from, School $school, Incident $incident, string $channel, ?string $text, ?UploadedFile $audio, ?UploadedFile $photo, bool $english = false): array
     {
         $correction = trim((string) $text);
         $rawText = $correction !== '' ? $correction : '[message vocal]';
@@ -366,11 +397,13 @@ class WashWhatsAppService
         $incident = $incident->fresh() ?? $incident;
 
         // Re-confirmation : pending conservé + clarification conservée + boutons.
-        $this->rememberPending($from, $incident);
-        Cache::put($this->clarifyKey($from), $incident->id, 86400);
+        $this->rememberPending($from, $incident, $english);
+        $this->rememberClarification($from, $incident->id, $english ? 'en' : 'fr');
         $summary = Str::limit((string) ($incident->ai_summary ?: $incident->title), 140);
-        $this->reply($from, "Merci ! J'ai corrigé : {$summary}. C'est bien ça ?");
-        $this->sendConfirmationButtons($from);
+        $this->reply($from, $english
+            ? "Thanks! I fixed it: {$summary}. Is this correct?"
+            : "Merci ! J'ai corrigé : {$summary}. C'est bien ça ?");
+        $this->sendConfirmationButtons($from, $english);
         Log::info("WhatsApp clarification applied to incident {$incident->id}.", ['from' => $from]);
 
         return ['status' => 'clarification_applied', 'from' => $from, 'incident_id' => $incident->id, 'is_duplicate' => false];
@@ -398,6 +431,34 @@ class WashWhatsAppService
         }
 
         return ['is_suivi' => $reference !== null || $hasKeyword, 'reference' => $reference];
+    }
+
+    /**
+     * True si la réponse au signalement doit être en anglais : au moins un
+     * marqueur EN générique, et AUCUN marqueur FR (veto, const réutilisée).
+     * 'fr' par défaut. Ne dépend jamais de language_effective STT.
+     */
+    protected function isEnglishReply(string $text): bool
+    {
+        $lower = mb_strtolower($text);
+        foreach (self::SUIVI_FRENCH_MARKERS as $marker) {
+            if ($this->containsMarker($lower, $marker)) {
+                return false;
+            }
+        }
+        foreach (self::REPLY_ENGLISH_MARKERS as $marker) {
+            if ($this->containsMarker($lower, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Marqueur borné par des frontières de mot (unicode) : 'tap' ≠ 'taper'. */
+    protected function containsMarker(string $lower, string $marker): bool
+    {
+        return preg_match('/\b' . preg_quote(mb_strtolower($marker), '/') . '\b/iu', $lower) === 1;
     }
 
     /** True si le message de suivi est en anglais (marqueurs EN, aucun FR). */
@@ -535,17 +596,22 @@ class WashWhatsAppService
         return ((int) $date->format('j')) . ' ' . ($months[(int) $date->format('n')] ?? $date->format('M'));
     }
 
-    protected function staleClarificationNote(): string
+    protected function staleClarificationNote(bool $english = false): string
     {
+        if ($english) {
+            return "I couldn't find your previous report, I'll treat your message as a new report. ";
+        }
+
         return "Je n'ai pas retrouvé votre signalement précédent, je traite votre message comme un nouveau signalement. ";
     }
 
-    protected function sendConfirmationButtons(string $to): void
+    protected function sendConfirmationButtons(string $to, bool $english = false): void
     {
         try {
-            $this->client->sendInteractiveButtons($to, "C'est bien ça ? Touchez Oui ou Non.", [
-                ['id' => self::BUTTON_YES, 'title' => 'Oui'],
-                ['id' => self::BUTTON_NO, 'title' => 'Non'],
+            // Ids wash_oui/wash_non INCHANGÉS (contrat button_reply.id), seuls les titres changent.
+            $this->client->sendInteractiveButtons($to, $english ? 'Is this correct? Tap Yes or No.' : "C'est bien ça ? Touchez Oui ou Non.", [
+                ['id' => self::BUTTON_YES, 'title' => $english ? 'Yes' : 'Oui'],
+                ['id' => self::BUTTON_NO, 'title' => $english ? 'No' : 'Non'],
             ]);
         } catch (\Throwable $e) {
             Log::warning('WhatsApp buttons failed: ' . $e->getMessage());
@@ -553,18 +619,26 @@ class WashWhatsAppService
     }
 
     /** Note vocale TTS de confirmation (best-effort : jamais bloquante). */
-    protected function sendVoiceConfirmation(string $to, Incident $incident): void
+    protected function sendVoiceConfirmation(string $to, Incident $incident, bool $english = false): void
     {
         if (!(bool) config('whatsapp.voice_note', true) || !$this->ai) {
             return;
         }
         try {
             $summary = Str::limit((string) ($incident->ai_summary ?: $incident->title), 140);
-            $tts = $this->ai->synthesize(
-                "Merci ! Incident {$incident->reference_code} enregistré : {$summary}. On vous tient au courant.",
-                (string) config('whatsapp.tts_voice', 'fr_FR-upmc-medium'),
-                'fr'
-            );
+            // EN : voix 'en-medium' = registre ai-engine (BUILTIN_VOICE_REGISTRY['en']),
+            // servie en MMS eng quand le moteur tourne avec TTS_DRIVER=mms.
+            $tts = $english
+                ? $this->ai->synthesize(
+                    "Thanks! Case {$incident->reference_code} recorded: {$summary}. We'll keep you posted.",
+                    (string) config('whatsapp.tts_voice_en', 'en-medium'),
+                    'en'
+                )
+                : $this->ai->synthesize(
+                    "Merci ! Incident {$incident->reference_code} enregistré : {$summary}. On vous tient au courant.",
+                    (string) config('whatsapp.tts_voice', 'fr_FR-upmc-medium'),
+                    'fr'
+                );
             $base64 = $tts['audio_base64'] ?? null;
             if (!is_string($base64) || $base64 === '') {
                 return;
@@ -707,13 +781,37 @@ class WashWhatsAppService
         return 'wash.whatsapp.clarify.' . SchoolContact::normalizePhone($from);
     }
 
-    protected function rememberPending(string $from, Incident $incident): void
+    protected function rememberPending(string $from, Incident $incident, bool $english = false): void
     {
         Cache::put($this->pendingKey($from), [
             'incident_id' => $incident->id,
             'reference' => $incident->reference_code,
             'summary' => (string) ($incident->ai_summary ?: $incident->title),
+            'lang' => $english ? 'en' : 'fr',
         ], (int) config('whatsapp.pending_ttl', 86400));
+    }
+
+    /** Clarification en attente + langue persistée (Oui/Non/correction restent EN). */
+    protected function rememberClarification(string $from, int $incidentId, string $lang): void
+    {
+        Cache::put($this->clarifyKey($from), [
+            'incident_id' => $incidentId,
+            'lang' => $lang === 'en' ? 'en' : 'fr',
+        ], 86400);
+    }
+
+    /** Lecture normalisée : tableau neuf, ou id brut (legacy) → lang 'fr'. */
+    protected function clarify(string $from): ?array
+    {
+        $raw = Cache::get($this->clarifyKey($from));
+        if (is_array($raw) && isset($raw['incident_id'])) {
+            return ['incident_id' => (int) $raw['incident_id'], 'lang' => ($raw['lang'] ?? 'fr') === 'en' ? 'en' : 'fr'];
+        }
+        if (is_int($raw) || (is_string($raw) && ctype_digit($raw))) {
+            return ['incident_id' => (int) $raw, 'lang' => 'fr'];
+        }
+
+        return null;
     }
 
     protected function pending(string $from): ?array
@@ -752,13 +850,27 @@ class WashWhatsAppService
             ?? "Merci pour votre message ! Ici on signale l'eau et l'hygiène à l'école : ex. robinet qui fuit, toilettes bouchées, plus de savon. Décrivez votre panne en une phrase.";
     }
 
-    protected function createdReply(Incident $incident): string
+    protected function createdReply(Incident $incident, bool $english = false): string
     {
         $summary = Str::limit((string) ($incident->ai_summary ?: $incident->title), 140);
+        if ($english) {
+            $urgency = $incident->urgency ?: 'medium';
+
+            return "Thanks! Case {$incident->reference_code} recorded: {$summary}. Priority {$urgency}. Next: our team is notified, we'll write here as soon as it moves.";
+        }
         $urgency = ['low' => 'basse', 'medium' => 'moyenne', 'high' => 'haute', 'critical' => 'critique'][$incident->urgency]
             ?? $incident->urgency;
 
         return "Merci ! Incident {$incident->reference_code} enregistré : {$summary}. Priorité {$urgency}. La suite : notre équipe est notifiée, on vous écrit ici dès que ça avance.";
+    }
+
+    protected function duplicateReply(Incident $incident, bool $english = false): string
+    {
+        if ($english) {
+            return "Already received! Case {$incident->reference_code} is being followed by our teams. Thanks, no need to resend. We'll keep you posted here.";
+        }
+
+        return "Déjà reçu ! Incident {$incident->reference_code} suivi par nos équipes. Merci, pas besoin de renvoyer. On vous tient au courant ici.";
     }
 
     protected function looksLikeWashReport(string $text): bool
