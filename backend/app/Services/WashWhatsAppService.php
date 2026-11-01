@@ -224,10 +224,11 @@ class WashWhatsAppService
             }
         }
 
-        // Texte sans aucun indice eau/hygiène : hors-sujet guidé, sans incident.
+        // Texte sans aucun indice eau/hygiène : personnalité d'abord
+        // (bonjour, qui es-tu...), sinon hors-sujet guidé, sans incident.
         if ($channel === 'text' && !$this->looksLikeWashReport((string) $text)) {
             $this->forgetClarification($from);
-            $this->reply($from, $this->offTopicReply());
+            $this->reply($from, $this->offTopicReply((string) $text));
 
             return ['status' => 'off_topic', 'from' => $from];
         }
@@ -743,9 +744,12 @@ class WashWhatsAppService
         return "Bonjour ! Ce numéro n'est rattaché à aucune école WASH Sentinel. De quelle école parlez-vous ? Envoyez : ECOLE Nom de votre école. On vous aidera à l'enregistrer.";
     }
 
-    protected function offTopicReply(): string
+    protected function offTopicReply(?string $text = null): string
     {
-        return "Merci pour votre message ! Ici on signale l'eau et l'hygiène à l'école : ex. robinet qui fuit, toilettes bouchées, plus de savon. Décrivez votre panne en une phrase.";
+        // Intention conversationnelle (bonjour, qui es-tu, aide...) : réponse
+        // chaleureuse de Sentinel ; sinon guidage signalement générique.
+        return (new WashWhatsAppPersonality)->replyFor($text)
+            ?? "Merci pour votre message ! Ici on signale l'eau et l'hygiène à l'école : ex. robinet qui fuit, toilettes bouchées, plus de savon. Décrivez votre panne en une phrase.";
     }
 
     protected function createdReply(Incident $incident): string
