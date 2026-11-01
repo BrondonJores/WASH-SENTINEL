@@ -54,9 +54,22 @@ export interface MeshBundle {
   media_sealed_alg?: string;
 }
 
+/**
+ * CONTRAT MESH — miroirs backend (ne pas modifier sans synchroniser) :
+ * - TTL_DAYS = 7 ↔ wash.php `mesh.default_ttl_days`
+ * - DEFAULT_MAX_HOPS = 10 ↔ wash.php `mesh.default_max_hops`
+ * - DEFAULT_DESTINATION ↔ wash.php `mesh.default_destination_eid`
+ * - DEFAULT_COPIES = 8 ↔ WashMeshController::COPIES_DEFAULT
+ * - MEDIA_MAX_BYTES = 2097152 ↔ WashMeshController::MEDIA_SIZE_MAX
+ * (MEDIA_CHUNK_SIZE = 32768 : détail front seul, aucun miroir backend.)
+ */
 const TTL_DAYS = 7;
 const DEFAULT_MAX_HOPS = 10;
 const DEFAULT_COPIES = 8;
+/** Secondes par jour (TTL bundles : `lifetime_seconds = ttlDays * SECONDS_PER_DAY`). */
+const SECONDS_PER_DAY = 86400;
+/** Millisecondes par jour (calcul de `expires_at`). */
+const MS_PER_DAY = 86400_000;
 export const DEFAULT_DESTINATION = 'dtn://wash-sentinel/ingest';
 
 export function nodeId(): string {
@@ -131,7 +144,7 @@ export async function createBundle(opts: {
 }): Promise<MeshBundle> {
   const now = new Date();
   const ttlDays = opts.ttlDays ?? TTL_DAYS;
-  const expires = new Date(now.getTime() + ttlDays * 86400_000);
+  const expires = new Date(now.getTime() + ttlDays * MS_PER_DAY);
   const me = nodeId();
   const bundle: MeshBundle = {
     v: 1,
@@ -148,7 +161,7 @@ export async function createBundle(opts: {
     max_hops: opts.maxHops ?? DEFAULT_MAX_HOPS,
     hops: [me],
     destination: DEFAULT_DESTINATION,
-    lifetime_seconds: Math.round(ttlDays * 86400),
+    lifetime_seconds: Math.round(ttlDays * SECONDS_PER_DAY),
     copies_remaining: opts.copies ?? DEFAULT_COPIES,
     priority: opts.priority ?? 'normal',
   };
@@ -194,6 +207,7 @@ export function serializeForQR(bundle: MeshBundle): string {
 }
 
 export const MEDIA_CHUNK_SIZE = 32768;
+/** Plafond média (o) — miroir de WashMeshController::MEDIA_SIZE_MAX. */
 export const MEDIA_MAX_BYTES = 2097152;
 
 export function chunkBytes(b64: string, size: number = MEDIA_CHUNK_SIZE): string[] {

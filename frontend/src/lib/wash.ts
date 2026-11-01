@@ -1,3 +1,9 @@
+// LOT 9 — LA source des maps statuts/urgences/catégories/canaux (+ tons, formats).
+// Les copies dans components/ sont en cours de suppression (lot components).
+import { LOCALE } from './locale';
+
+export { LOCALE };
+
 export const STATUS_FR: Record<string, string> = {
   reported: 'Signalé',
   triaged: 'Trié',
@@ -44,7 +50,7 @@ export const statusTone = (s: string): Tone =>
 
 export const fmtDate = (iso: string | null): string =>
   iso
-    ? new Date(iso).toLocaleString('fr-FR', {
+    ? new Date(iso).toLocaleString(LOCALE, {
         day: '2-digit',
         month: 'short',
         hour: '2-digit',
@@ -53,7 +59,7 @@ export const fmtDate = (iso: string | null): string =>
     : '—';
 
 export const fmtNum = (n: number | null | undefined): string =>
-  new Intl.NumberFormat('fr-FR').format(n ?? 0);
+  new Intl.NumberFormat(LOCALE).format(n ?? 0);
 
 export const INPUT_CLS =
   'w-full rounded-md border border-line bg-card px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none';

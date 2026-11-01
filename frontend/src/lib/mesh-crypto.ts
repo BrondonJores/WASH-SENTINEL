@@ -7,6 +7,9 @@ import { canonicalBytes, checksumOf, type MeshBundle } from './mesh-sdk';
 
 export const SEAL_ALG = 'nacl-sealed-box' as const;
 
+/** Chemin de la clé publique E2E du serveur. */
+export const MESH_KEY_PATH = '/v1/mesh/key';
+
 let ready: Promise<void> | null = null;
 
 function ensureReady(): Promise<void> {
@@ -22,7 +25,7 @@ export interface SealKey {
 /** Récupère la clé publique E2E (503 = chiffrement non configuré côté serveur). */
 export async function fetchSealKey(apiUrl: string): Promise<SealKey | null> {
   try {
-    const res = await fetch(`${apiUrl}/v1/mesh/key`);
+    const res = await fetch(`${apiUrl}${MESH_KEY_PATH}`);
     if (!res.ok) return null;
     const data = (await res.json()) as SealKey;
     return data.algorithm === SEAL_ALG && data.public_key ? data : null;

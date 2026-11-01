@@ -5,7 +5,12 @@
  * temps écoulé, et seuil d'attente explicite.
  */
 
-/** Seuil UX : au-delà, on propose explicitement quoi faire (sans rien perdre). */
+/**
+ * DOC — seuils UX (présentation pure, jamais bloquants) :
+ * - UX_WAIT_TIMEOUT_MS : au-delà de ce délai, l'UI propose explicitement quoi
+ *   faire (patienter / reformuler) sans rien perdre ; la requête continue.
+ * - STEP_AT_MS : seuils d'entrée (ms) des WAITING_STEPS, indicatifs.
+ */
 export const UX_WAIT_TIMEOUT_MS = 90_000;
 
 export interface WaitingStep {

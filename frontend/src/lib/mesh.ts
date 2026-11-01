@@ -12,6 +12,7 @@ import {
 import type { MeshBundle } from './mesh-sdk';
 import type { School } from './api';
 import { registerMeshSync } from './mesh-sync';
+import { API_URL } from './api';
 
 export {
   MEDIA_MAX_BYTES,
@@ -25,8 +26,8 @@ export {
 export type { MeshBundle };
 export const createBundle = sdkCreateBundle;
 
-export const apiBase = (): string =>
-  (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost/api';
+/** Base URL API partagée (voir API_URL dans lib/api — fail-fast en prod). */
+export const apiBase = (): string => API_URL;
 
 export const smsGateway = (): string =>
   (import.meta.env.VITE_SMS_GATEWAY_NUMBER as string | undefined) ?? '';
@@ -41,18 +42,28 @@ export function smsHref(to: string, body: string): string {
   return `sms:${to}${sep}body=${encodeURIComponent(body)}`;
 }
 
+/**
+ * CONTRAT GSM — miroirs de MeshSmsParser.php (ne pas modifier sans synchroniser) :
+ * - SMS_DETAIL_MAX_CHARS = 100 ↔ DETAIL_MAX_LENGTH
+ * - SMS_SINGLE_SEGMENT_MAX_CHARS = 160 ↔ 1 segment GSM 7-bit (cf. ACK_MAX_LENGTH)
+ */
+export const SMS_DETAIL_MAX_CHARS = 100;
+export const SMS_SINGLE_SEGMENT_MAX_CHARS = 160;
+
 /** Grammaire SMS commune : WASH <CODE> <TYPE> [détail], 1 segment. */
 export function smsText(schoolCode: string, type: string, detail: string): string {
-  const detailPart = detail.trim().slice(0, 100).toUpperCase();
-  return `WASH ${schoolCode} ${type}${detailPart ? ` ${detailPart}` : ''}`.slice(0, 160);
+  const detailPart = detail.trim().slice(0, SMS_DETAIL_MAX_CHARS).toUpperCase();
+  return `WASH ${schoolCode} ${type}${detailPart ? ` ${detailPart}` : ''}`.slice(0, SMS_SINGLE_SEGMENT_MAX_CHARS);
 }
 
 /** Cache local des écoles : la saisie reste possible offline dès la 2e visite. */
 const SCHOOL_CACHE_KEY = 'wash_mesh_schools';
+/** Nombre max d'écoles gardées dans le cache local (valeur front seule, aucun miroir backend). */
+export const SCHOOL_CACHE_MAX = 300;
 
 export function cacheSchools(schools: School[]): void {
   try {
-    localStorage.setItem(SCHOOL_CACHE_KEY, JSON.stringify(schools.slice(0, 300)));
+    localStorage.setItem(SCHOOL_CACHE_KEY, JSON.stringify(schools.slice(0, SCHOOL_CACHE_MAX)));
   } catch {
     /* quota dépassé : on garde l'ancien cache */
   }

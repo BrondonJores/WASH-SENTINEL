@@ -174,9 +174,30 @@ export interface SynthesisResult {
   text?: string;
 }
 
-const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost/api';
+/** URL API de secours en développement local uniquement (VITE_API_URL absente). */
+export const DEV_API_URL = 'http://localhost/api';
 
-let token: string | null = localStorage.getItem('wash_admin_token');
+function resolveApiUrl(): string {
+  const configured = import.meta.env.VITE_API_URL as string | undefined;
+  if (configured) return configured;
+  if (import.meta.env.PROD) {
+    throw new Error('Configuration manquante : VITE_API_URL est requise en production.');
+  }
+  return DEV_API_URL;
+}
+
+/**
+ * Base URL API partagée (mesh.ts la réutilise via apiBase()).
+ * Fail-fast en production si VITE_API_URL est absente ; en dev, localhost.
+ */
+export const API_URL = resolveApiUrl();
+
+const baseUrl = API_URL;
+
+/** Clé localStorage du token admin. */
+export const TOKEN_STORAGE_KEY = 'wash_admin_token';
+
+let token: string | null = localStorage.getItem(TOKEN_STORAGE_KEY);
 let unauthorizedHandler: (() => void) | null = null;
 
 export const setUnauthorizedHandler = (fn: (() => void) | null) => {
@@ -186,15 +207,33 @@ export const getToken = () => token;
 
 export function setToken(t: string | null) {
   token = t;
-  if (t) localStorage.setItem('wash_admin_token', t);
-  else localStorage.removeItem('wash_admin_token');
+  if (t) localStorage.setItem(TOKEN_STORAGE_KEY, t);
+  else localStorage.removeItem(TOKEN_STORAGE_KEY);
 }
 
 export type ApiFailureKind = 'network' | 'timeout' | 'unauthorized' | 'rate-limit' | 'server' | 'other';
 
 export const GUIDED_NETWORK_MESSAGE =
   'Pas de connexion. Vérifiez le réseau puis réessayez — votre texte est gardé.';
-export const GUIDED_RATE_LIMIT_MESSAGE = "Trop de questions d'un coup, pause 30 secondes.";
+/**
+ * Pause annoncée par défaut sur 429 (s) — miroir de SOFT_THROTTLE_DECAY_SECONDS
+ * (WashAgentController). La pause réelle vient de l'en-tête Retry-After.
+ */
+export const RATE_LIMIT_DEFAULT_PAUSE_SECONDS = 60;
+
+/** Message 429 dynamique : reprend la pause réelle imposée par le serveur. */
+export function rateLimitMessage(pauseSeconds: number): string {
+  return `Trop de questions d'un coup, pause ${pauseSeconds} secondes.`;
+}
+
+/** Lit la pause imposée par le serveur (en-tête Retry-After du throttle Laravel), défaut 60 s. */
+function retryAfterSeconds(res: Response): number {
+  const raw = res.headers.get('Retry-After');
+  const parsed = raw !== null ? Number.parseInt(raw, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : RATE_LIMIT_DEFAULT_PAUSE_SECONDS;
+}
+
+export const GUIDED_RATE_LIMIT_MESSAGE = rateLimitMessage(RATE_LIMIT_DEFAULT_PAUSE_SECONDS);
 export const GUIDED_SERVER_MESSAGE =
   'Sentinel met trop longtemps. Réessayez — si ça persiste, reposez plus simplement.';
 
@@ -241,7 +280,7 @@ interface ErrorBody {
 
 async function parseError(res: Response, fallback: string): Promise<never> {
   const body = (await res.json().catch(() => ({}))) as ErrorBody;
-  if (res.status === 429) throw new ApiError(res.status, GUIDED_RATE_LIMIT_MESSAGE, 'rate-limit');
+  if (res.status === 429) throw new ApiError(res.status, rateLimitMessage(retryAfterSeconds(res)), 'rate-limit');
   if (res.status === 408 || res.status >= 500) {
     throw new ApiError(res.status, GUIDED_SERVER_MESSAGE, 'server');
   }
@@ -335,6 +374,15 @@ async function reqMultipart<T>(path: string, form: FormData, timeoutMs?: number)
   }
 }
 
+/** Timeout transcription : un gros audio peut prendre ~1 min côté moteur. */
+export const TRANSCRIBE_TIMEOUT_MS = 90_000;
+/** Timeout synthèse vocale. */
+export const SYNTHESIZE_TIMEOUT_MS = 60_000;
+/** Miroir de wash.php `voice.text_max_chars` : texte tronqué avant synthèse. */
+export const SYNTHESIS_TEXT_MAX_CHARS = 1000;
+/** Nom de pièce jointe du blob vocal envoyé à la transcription. */
+export const VOICE_DICTATION_FILENAME = 'dictation.webm';
+
 export const api = {
   login: (email: string, password: string) =>
     req<{ token: string; user: AuthUser }>('/v1/auth/token', {
@@ -359,9 +407,9 @@ export const api = {
     }),
   transcribeVoice: (blob: Blob, language?: string) => {
     const form = new FormData();
-    form.append('audio', blob, 'dictation.webm');
+    form.append('audio', blob, VOICE_DICTATION_FILENAME);
     if (language) form.append('language', language);
-    return reqMultipart<TranscriptionResult>('/v1/wash/agent/transcribe', form, 90_000);
+    return reqMultipart<TranscriptionResult>('/v1/wash/agent/transcribe', form, TRANSCRIBE_TIMEOUT_MS);
   },
   synthesizeVoice: (text: string, opts?: { voice?: string; language?: string }) =>
     req<SynthesisResult>(
@@ -369,12 +417,12 @@ export const api = {
       {
         method: 'POST',
         body: JSON.stringify({
-          text: text.slice(0, 1000),
+          text: text.slice(0, SYNTHESIS_TEXT_MAX_CHARS),
           ...(opts?.voice ? { voice: opts.voice } : {}),
           ...(opts?.language ? { language: opts.language } : {}),
         }),
       },
-      60_000,
+      SYNTHESIZE_TIMEOUT_MS,
     ),
   overview: () => req<TerritoryPulse>('/v1/wash/overview'),
   library: () => req<LibraryPayload>('/v1/wash/library'),

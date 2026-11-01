@@ -11,9 +11,12 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** Clé localStorage de l'utilisateur admin (miroir de TOKEN_STORAGE_KEY dans lib/api). */
+const USER_STORAGE_KEY = 'wash_admin_user';
+
 function storedUser(): AuthUser | null {
   try {
-    return JSON.parse(localStorage.getItem('wash_admin_user') ?? 'null') as AuthUser | null;
+    return JSON.parse(localStorage.getItem(USER_STORAGE_KEY) ?? 'null') as AuthUser | null;
   } catch {
     return null;
   }
@@ -26,14 +29,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const hadToken = getToken() !== null;
     setToken(null);
     setUser(null);
-    localStorage.removeItem('wash_admin_user');
+    localStorage.removeItem(USER_STORAGE_KEY);
     if (hadToken) api.logout().catch(() => undefined);
   }, []);
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
       setUser(null);
-      localStorage.removeItem('wash_admin_user');
+      localStorage.removeItem(USER_STORAGE_KEY);
     });
     return () => setUnauthorizedHandler(null);
   }, []);
@@ -42,7 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { token, user: u } = await api.login(email, password);
     setToken(token);
     setUser(u);
-    localStorage.setItem('wash_admin_user', JSON.stringify(u));
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(u));
   }, []);
 
   const value = useMemo(() => ({ user, login, logout }), [user, login, logout]);

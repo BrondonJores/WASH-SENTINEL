@@ -1,4 +1,8 @@
 import type { AgentCard, MessagePayload } from './api';
+import { LOCALE } from './locale';
+
+/** Longueur max du titre auto d'une discussion (tronqué avec …). */
+export const CHAT_TITLE_MAX_CHARS = 42;
 
 export interface DialogueMessage {
   role: 'user' | 'assistant';
@@ -27,15 +31,15 @@ export interface ProjectItem {
 export function chatTitle(messages: DialogueMessage[]): string {
   const first = messages.find((m) => m.role === 'user');
   const text = (first?.content ?? 'Discussion').trim().replace(/\s+/g, ' ');
-  return text.length > 42 ? `${text.slice(0, 42)}…` : text;
+  return text.length > CHAT_TITLE_MAX_CHARS ? `${text.slice(0, CHAT_TITLE_MAX_CHARS)}…` : text;
 }
 
 export function fmtWhen(at: number): string {
   const d = new Date(at);
   if (d.toDateString() === new Date().toDateString()) {
-    return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
   }
-  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  return d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' });
 }
 
 export function toMessagePayload(messages: DialogueMessage[]): MessagePayload[] {

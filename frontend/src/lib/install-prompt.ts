@@ -6,10 +6,20 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+/** Motif UA des appareils iOS (iPhone/iPad/iPod). */
+const IOS_DEVICE_RE = /iPad|iPhone|iPod/;
+/** Platform des Mac (un Mac tactile = iPad en mode desktop). */
+const APPLE_PC_PLATFORM = 'MacIntel';
+/** Media query du mode installé (PWA standalone). */
+const STANDALONE_MEDIA_QUERY = '(display-mode: standalone)';
+/** Événements PWA d'installation (Chromium). */
+const BEFORE_INSTALL_PROMPT_EVENT = 'beforeinstallprompt';
+const APP_INSTALLED_EVENT = 'appinstalled';
+
 /** Pure (testable en node) : détection iPhone/iPad, y compris iPad desktop. */
 export function isIOSDevice(userAgent: string, platform: string, maxTouchPoints: number): boolean {
   return (
-    /iPad|iPhone|iPod/.test(userAgent) || (platform === 'MacIntel' && maxTouchPoints > 1)
+    IOS_DEVICE_RE.test(userAgent) || (platform === APPLE_PC_PLATFORM && maxTouchPoints > 1)
   );
 }
 
@@ -20,7 +30,7 @@ export function currentIsIOSDevice(): boolean {
 /** L'app tourne-t-elle déjà installée (standalone) ? */
 export function isStandaloneDisplay(): boolean {
   if (typeof window === 'undefined') return false;
-  if (window.matchMedia?.('(display-mode: standalone)').matches) return true;
+  if (window.matchMedia?.(STANDALONE_MEDIA_QUERY).matches) return true;
   return (navigator as Navigator & { standalone?: boolean }).standalone === true;
 }
 
@@ -57,11 +67,11 @@ export function useInstallPrompt(): InstallPrompt {
       setDeferred(null);
       setDismissed(false);
     };
-    window.addEventListener('beforeinstallprompt', onBeforeInstall);
-    window.addEventListener('appinstalled', onInstalled);
+    window.addEventListener(BEFORE_INSTALL_PROMPT_EVENT, onBeforeInstall);
+    window.addEventListener(APP_INSTALLED_EVENT, onInstalled);
     return () => {
-      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
-      window.removeEventListener('appinstalled', onInstalled);
+      window.removeEventListener(BEFORE_INSTALL_PROMPT_EVENT, onBeforeInstall);
+      window.removeEventListener(APP_INSTALLED_EVENT, onInstalled);
     };
   }, []);
 
@@ -79,10 +89,12 @@ export function useInstallPrompt(): InstallPrompt {
 }
 
 const IOS_HELP_KEY = 'wash_mesh_ios_help_dismissed';
+/** Valeur stockée quand l'aide iOS a été masquée. */
+const IOS_HELP_DISMISSED_VALUE = '1';
 
 export function iosHelpDismissed(): boolean {
   try {
-    return localStorage.getItem(IOS_HELP_KEY) === '1';
+    return localStorage.getItem(IOS_HELP_KEY) === IOS_HELP_DISMISSED_VALUE;
   } catch {
     return false;
   }
@@ -90,7 +102,7 @@ export function iosHelpDismissed(): boolean {
 
 export function dismissIosHelp(): void {
   try {
-    localStorage.setItem(IOS_HELP_KEY, '1');
+    localStorage.setItem(IOS_HELP_KEY, IOS_HELP_DISMISSED_VALUE);
   } catch {
     /* stockage indisponible : l'aide reviendra, sans gravité */
   }

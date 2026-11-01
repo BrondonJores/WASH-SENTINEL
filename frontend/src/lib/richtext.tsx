@@ -3,12 +3,14 @@ import type { ReactNode } from 'react';
 const BULLET_RE = /^\s*([*\-•])\s+(.*)$/;
 const NUMBERED_RE = /^\s*\d+[.)]\s+(.*)$/;
 const BOLD_RE = /(\*\*[^*]+\*\*)/g;
+/** Délimiteur du gras mini-markdown. */
+const BOLD_DELIMITER = '**';
 
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return text.split(BOLD_RE).map((part, i) =>
-    part.startsWith('**') && part.endsWith('**') && part.length > 4 ? (
+    part.startsWith(BOLD_DELIMITER) && part.endsWith(BOLD_DELIMITER) && part.length > BOLD_DELIMITER.length * 2 ? (
       <strong key={`${keyPrefix}-b${i}`} className="font-semibold text-ink">
-        {part.slice(2, -2)}
+        {part.slice(BOLD_DELIMITER.length, -BOLD_DELIMITER.length)}
       </strong>
     ) : (
       <span key={`${keyPrefix}-t${i}`}>{part}</span>

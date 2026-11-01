@@ -1,6 +1,6 @@
 /* ============================================================================
  * Cache TTS Sentinel — une synthèse par (texte, voix, langue), réécoutée sans
- * réseau. LRU borné (20 entrées) avec révocation à l'éviction : les URL sont
+ * réseau. LRU borné (TTS_CACHE_CAPACITY entrées) avec révocation à l'éviction : les URL sont
  * la propriété du cache, l'appelant ne doit JAMAIS les révoquer.
  *
  * Seul le TTS est caché. Jamais le STT : les transcriptions alimentent le
@@ -9,6 +9,11 @@
 
 /** Nombre maximal d'audios gardés en mémoire. */
 export const TTS_CACHE_CAPACITY = 20;
+
+/** Langue par défaut de la clé de cache (miroir de wash.php `voice.default_language`). */
+const TTS_DEFAULT_LANGUAGE = 'fr';
+/** Voix par défaut de la clé de cache (étiquette locale, jamais envoyée). */
+const TTS_DEFAULT_VOICE_KEY = 'default';
 
 export interface TtsCacheOpts {
   voice?: string;
@@ -24,7 +29,7 @@ const cache = new Map<string, string>();
 
 /** Clé stable pour (texte, voix, langue). */
 export function ttsCacheKey(text: string, opts?: TtsCacheOpts): string {
-  return `${opts?.language ?? 'fr'}|${opts?.voice ?? 'default'}|${text}`;
+  return `${opts?.language ?? TTS_DEFAULT_LANGUAGE}|${opts?.voice ?? TTS_DEFAULT_VOICE_KEY}|${text}`;
 }
 
 /** URL cachée si présente (rafraîchit le rang LRU), sinon undefined. */

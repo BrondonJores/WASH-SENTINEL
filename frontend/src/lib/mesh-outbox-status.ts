@@ -42,6 +42,10 @@ export interface OutboxViewItem {
 
 export const OUTBOX_META_KEY = 'wash_mesh_outbox_meta';
 export const MAX_SENT_HISTORY = 20;
+/** Longueur max du libellé affiché d'un bundle. */
+export const BUNDLE_LABEL_MAX_CHARS = 60;
+/** Longueur de l'identifiant court affiché (préfixe du bundle_id). */
+export const BUNDLE_SHORT_ID_LENGTH = 8;
 
 export function emptyOutboxMeta(): OutboxMeta {
   return { failed: {}, sent: [] };
@@ -51,7 +55,7 @@ export function emptyOutboxMeta(): OutboxMeta {
 export function bundleLabel(bundle: MeshBundle): string {
   if (bundle.sealed) return '(chiffré)';
   const text = bundle.message?.trim();
-  if (text) return text.slice(0, 60);
+  if (text) return text.slice(0, BUNDLE_LABEL_MAX_CHARS);
   if (bundle.chunk) return `(fragment ${String((bundle.fragment_offset ?? 0) + 1)}/${String(bundle.fragment_total ?? '?')})`;
   if (bundle.fragment_total) return `(média, ${String(bundle.fragment_total)} fragments)`;
   return '(sans texte)';
@@ -97,7 +101,7 @@ export function deriveOutboxView(input: DeriveOutboxViewInput): OutboxView {
         : 'pending';
     return {
       id: b.bundle_id,
-      shortId: b.bundle_id.slice(0, 8),
+      shortId: b.bundle_id.slice(0, BUNDLE_SHORT_ID_LENGTH),
       status,
       label: bundleLabel(b),
       detail: bundleDetail(b),
