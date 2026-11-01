@@ -5,7 +5,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .agent_loop import AgentLoop
-from .ai_metrics import summary as ai_metrics_summary
+from .ai_metrics import summary as ai_metrics_summary, timed
 from .decision_agent import DecisionAgent
 from .duplicate_detector import DuplicateDetector
 from .epidemic_detector import EpidemicDetector
@@ -110,7 +110,9 @@ def health() -> dict[str, Any]:
 async def extract_wash_data(request: Request, payload: WashExtractionRequest) -> WashExtractionResponse:
     """Extrait et structure un signalement en JSON strict via Meta Llama 3.2."""
     try:
-        return await WashExtractor(_llm(request)).extract(payload.raw_text, payload.school_name)
+        llm = _llm(request)
+        with timed("extract", model=llm.model, provider=llm.provider_name):
+            return await WashExtractor(llm).extract(payload.raw_text, payload.school_name)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -124,7 +126,9 @@ async def extract_wash_data(request: Request, payload: WashExtractionRequest) ->
 async def check_duplicates(request: Request, payload: DuplicateCheckRequest) -> DuplicateCheckResponse:
     """Compare un signalement aux incidents existants pour détecter les doublons par similarité vectorielle."""
     try:
-        return await DuplicateDetector(_llm(request)).check(payload)
+        llm = _llm(request)
+        with timed("check_duplicates", model=llm.model, provider=llm.provider_name):
+            return await DuplicateDetector(llm).check(payload)
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -139,7 +143,9 @@ async def analyze_photo(request: Request, photo: UploadFile = File(...)) -> Imag
     """Analyse visuellement une photo de panne d'infrastructure via le modèle vision configuré."""
     try:
         image_bytes = await photo.read()
-        result = await ImageAnalyzer(_llm(request)).analyze(image_bytes)
+        llm = _llm(request)
+        with timed("analyze_image", model=llm.vision_model, provider=llm.provider_name):
+            result = await ImageAnalyzer(llm).analyze(image_bytes)
         if is_vision_unavailable(result):
             result.vision_unavailable = True
         return result
@@ -422,7 +428,9 @@ async def agent_chat(request: Request, payload: AgentChatRequest) -> AgentChatRe
     Python les exécute sur les données Laravel, et des cartes structurées sont
     renvoyées pour le widget omniprésent."""
     try:
-        return await AgentLoop(_llm(request)).chat(payload)
+        llm = _llm(request)
+        with timed("agent_chat", model=llm.model, provider=llm.provider_name):
+            return await AgentLoop(llm).chat(payload)
     except Exception as exc:
         raise HTTPException(
             status_code=500,

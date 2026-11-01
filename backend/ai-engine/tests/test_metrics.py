@@ -125,5 +125,143 @@ class TimedTest(unittest.TestCase):
         self.assertEqual(summary()["totals"]["count"], 1)
 
 
+class FailureTaggingTest(unittest.TestCase):
+    """timed() tague les échecs : status/error_type, sans changer le succès."""
+
+    def setUp(self) -> None:
+        reset()
+
+    def tearDown(self) -> None:
+        reset()
+
+    def test_timed_exception_tagged_error(self) -> None:
+        with self.assertRaises(ValueError):
+            with timed("extract", model="llama3.2:3b", provider="ollama"):
+                raise ValueError("boom")
+        out = summary()
+        self.assertEqual(out["totals"]["error_count"], 1)
+        self.assertAlmostEqual(out["totals"]["error_rate"], 1.0)
+        self.assertEqual(out["by_status"], {"ok": 0, "error": 1})
+        self.assertEqual(out["by_model"]["llama3.2:3b"]["error_count"], 1)
+
+    def test_mixed_ok_and_error_counts(self) -> None:
+        with self.assertRaises(TimeoutError):
+            with timed("extract"):
+                raise TimeoutError("froid")
+        with timed("extract") as ctx:
+            ctx["prompt_tokens"] = 10
+        out = summary()
+        self.assertEqual(out["totals"]["count"], 2)
+        self.assertEqual(out["totals"]["error_count"], 1)
+        self.assertAlmostEqual(out["totals"]["error_rate"], 0.5)
+        self.assertEqual(out["by_status"], {"ok": 1, "error": 1})
+
+    def test_error_type_preserved_on_entry(self) -> None:
+        entry = record("extract", 0.2, status="error", model="llama3.2:3b", error_type="TimeoutError")
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["error_type"], "TimeoutError")
+        self.assertEqual(entry["model"], "llama3.2:3b")
+        self.assertEqual(summary()["totals"]["error_count"], 1)
+
+    def test_ctx_overrides_model_and_error_type(self) -> None:
+        with self.assertRaises(RuntimeError):
+            with timed("extract", model="llama3.2:3b") as ctx:
+                ctx["model"] = "gpt-4o-mini"
+                ctx["error_type"] = "fallback-rules"
+                raise RuntimeError("down")
+        out = summary()
+        self.assertIn("gpt-4o-mini", out["by_model"])
+        self.assertNotIn("llama3.2:3b", out["by_model"])
+
+
+class ByModelSplitTest(unittest.TestCase):
+    def setUp(self) -> None:
+        reset()
+
+    def tearDown(self) -> None:
+        reset()
+
+    def test_per_model_stats(self) -> None:
+        record("extract", 0.1, prompt_tokens=100, completion_tokens=20, model="llama3.2:3b")
+        record("extract", 0.3, prompt_tokens=200, completion_tokens=40, model="gpt-4o-mini")
+        out = summary()
+        local = out["by_model"]["llama3.2:3b"]
+        cloud = out["by_model"]["gpt-4o-mini"]
+        self.assertEqual(local["count"], 1)
+        self.assertAlmostEqual(local["avg_ms"], 100.0, places=2)
+        self.assertEqual(local["total_tokens"], 120)
+        self.assertEqual(cloud["count"], 1)
+        self.assertAlmostEqual(cloud["avg_ms"], 300.0, places=2)
+        self.assertEqual(cloud["total_tokens"], 240)
+        # Forme historique inchangée.
+        self.assertEqual(out["totals"]["count"], 2)
+        self.assertEqual(out["totals"]["total_tokens"], 360)
+        self.assertEqual(out["by_operation"]["extract"]["count"], 2)
+
+    def test_entries_without_model_skipped(self) -> None:
+        record("extract", 0.1)
+        out = summary()
+        self.assertEqual(out["by_model"], {})
+        self.assertEqual(out["totals"]["count"], 1)
+
+
+class CostTest(unittest.TestCase):
+    def setUp(self) -> None:
+        reset()
+
+    def tearDown(self) -> None:
+        reset()
+
+    def test_priced_model_positive_local_zero(self) -> None:
+        priced = record("extract", 0.1, prompt_tokens=800, completion_tokens=200, model="gpt-4o-mini")
+        local = record("extract", 0.1, prompt_tokens=800, completion_tokens=200, model="llama3.2:3b")
+        self.assertGreater(priced["cost_usd"], 0.0)
+        self.assertEqual(local["cost_usd"], 0.0)
+        totals = summary()["totals"]
+        self.assertAlmostEqual(totals["cost_usd"], priced["cost_usd"], places=6)
+
+    def test_unknown_model_cost_none(self) -> None:
+        entry = record("extract", 0.1, prompt_tokens=100, model="modele-inconnu")
+        self.assertIsNone(entry["cost_usd"])
+        self.assertEqual(summary()["totals"]["cost_usd"], 0.0)
+
+    def test_explicit_cost_and_per_1k_override(self) -> None:
+        explicit = record("extract", 0.1, prompt_tokens=1000, model="gpt-4o-mini", cost_usd=0.5)
+        self.assertEqual(explicit["cost_usd"], 0.5)
+        override = record("extract", 0.1, prompt_tokens=1000, model="modele-inconnu", cost_per_1k=0.2)
+        self.assertAlmostEqual(override["cost_usd"], 0.2, places=6)
+
+
+class BackwardCompatTest(unittest.TestCase):
+    def setUp(self) -> None:
+        reset()
+
+    def tearDown(self) -> None:
+        reset()
+
+    def test_old_style_record_defaults(self) -> None:
+        entry = record("extract", 0.1)
+        self.assertEqual(entry["status"], "ok")
+        self.assertIsNone(entry["model"])
+        self.assertIsNone(entry["provider"])
+        self.assertIsNone(entry["error_type"])
+        self.assertIsNone(entry["cost_usd"])
+        # Clés historiques présentes et identiques.
+        for key in ("operation", "seconds", "duration_ms", "prompt_tokens", "completion_tokens", "timestamp"):
+            self.assertIn(key, entry)
+
+    def test_legacy_summary_keys_intact(self) -> None:
+        record("extract", 0.1, prompt_tokens=10, completion_tokens=5)
+        out = summary()
+        self.assertEqual(set(out["by_operation"]["extract"]), {"count", "avg_ms", "p95_ms"})
+        for key in ("count", "avg_ms", "p95_ms", "prompt_tokens", "completion_tokens", "total_tokens"):
+            self.assertIn(key, out["totals"])
+        # Additions purement additives.
+        for key in ("error_count", "error_rate", "cost_usd"):
+            self.assertIn(key, out["totals"])
+        self.assertIn("by_status", out)
+        self.assertIn("by_model", out)
+
+
 if __name__ == "__main__":
     unittest.main()

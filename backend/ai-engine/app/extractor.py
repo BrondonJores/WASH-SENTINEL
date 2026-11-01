@@ -37,13 +37,34 @@ Règles impératives :
 class WashExtractor:
     def __init__(self, llm: BaseLLMProvider):
         self.llm = llm
+        self.last_meta: dict[str, bool] = {"fallback_infra": False, "fallback_issue": False}
 
-    async def extract(self, raw_text: str, school_name: str | None = None) -> WashExtractionResponse:
+    async def extract(
+        self,
+        raw_text: str,
+        school_name: str | None = None,
+        meta: dict[str, bool] | None = None,
+    ) -> WashExtractionResponse:
         user_prompt = f"Signalement brut :\n\"\"\"\n{raw_text}\n\"\"\""
         if school_name:
             user_prompt += f"\nÉcole déclarée : {school_name}"
 
         raw_json = await self.llm.generate_json(user_prompt, WASH_SYSTEM_PROMPT)
+
+        # Télémétrie (evals/métriques) : le LLM a-t-il répondu dans la liste,
+        # ou le filet mots-clés a-t-il pris le relais ? Miroir exact de la
+        # condition de _normalize_choice, sans toucher au scoring.
+        fallback_infra = (
+            str(raw_json.get("infrastructure_type") or "").strip().lower()
+            not in ("water_point", "toilets_latrines", "handwashing", "sewage_drainage")
+        )
+        fallback_issue = (
+            str(raw_json.get("issue_type") or "").strip().lower()
+            not in ("leak", "total_breakdown", "contamination", "blockage", "dry_well", "vandalism")
+        )
+        self.last_meta = {"fallback_infra": fallback_infra, "fallback_issue": fallback_issue}
+        if meta is not None:
+            meta.update(self.last_meta)
 
         # Calcul automatique du score de priorité standardisé (0 à 100)
         priority_score = self.calculate_priority_score(raw_json)

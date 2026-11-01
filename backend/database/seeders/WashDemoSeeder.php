@@ -126,6 +126,131 @@ class WashDemoSeeder extends Seeder
                 'repaired_at' => now()->subDays(40), 'days_without_service' => 2,
             ]
         );
+
+        // --- Axe 9 : 3e district (Sanaga-Maritime), équité + catégories manquantes ---
+        SchoolContact::updateOrCreate(
+            ['phone' => '237611223344'],
+            ['school_id' => $schools['SAN-EDI-006']->id, 'name' => 'Marthe Bikim', 'role' => 'directrice', 'is_verified' => true]
+        );
+        SchoolContact::updateOrCreate(
+            ['phone' => '237644556677'],
+            ['school_id' => $schools['SAN-POU-007']->id, 'name' => 'Samuel Nkom', 'role' => 'directeur', 'is_verified' => true]
+        );
+        SchoolContact::updateOrCreate(
+            ['phone' => '237677889900'],
+            ['school_id' => $schools['SAN-NYO-008']->id, 'name' => 'Alice Minka', 'role' => 'directrice', 'is_verified' => true]
+        );
+
+        // Miroir d'équité : critique rurale non desservie (31 j, reported) face à
+        // Bonanjo critique urbaine prise en charge (triaged).
+        $pouuma = Incident::firstOrCreate(
+            ['title' => 'Forage solaire à l\'arrêt, école assoiffée', 'school_id' => $schools['SAN-POU-007']->id],
+            [
+                'category' => 'water_point', 'issue_type' => 'total_breakdown',
+                'status' => 'reported', 'urgency' => 'critical', 'health_hazard' => 'severe',
+                'priority_score' => 96.0, 'affected_students' => 120,
+                'ai_summary' => 'Forage solaire de Pouuma à l\'arrêt depuis 31 jours, 120 jeunes filles sans eau.',
+                'ai_tags' => ['water_point', 'total_breakdown', 'critical'],
+            ]
+        );
+        // created_at n'est pas fillable : backdate explicite (idempotent).
+        $pouuma->forceFill(['created_at' => now()->subDays(31), 'updated_at' => now()->subDays(31)])->save();
+
+        Incident::firstOrCreate(
+            ['title' => 'Lave-mains vandalisés dans la cour', 'school_id' => $schools['SAN-EDI-006']->id],
+            [
+                'category' => 'handwashing', 'issue_type' => 'vandalism',
+                'status' => 'reported', 'urgency' => 'high', 'health_hazard' => 'medium',
+                'priority_score' => 68.0, 'affected_students' => 200,
+                'ai_summary' => 'Lave-mains de la cour vandalisés depuis 18 jours, 200 élèves sans lavage des mains.',
+                'ai_tags' => ['handwashing', 'vandalism', 'high'],
+            ]
+        )->forceFill(['created_at' => now()->subDays(18), 'updated_at' => now()->subDays(18)])->save();
+
+        $nyoSewage = Incident::firstOrCreate(
+            ['title' => 'Caniveau bouché, eaux stagnantes', 'school_id' => $schools['SAN-NYO-008']->id],
+            [
+                'category' => 'sewage_drainage', 'issue_type' => 'blockage',
+                'status' => 'reported', 'urgency' => 'high', 'health_hazard' => 'severe',
+                'priority_score' => 82.0, 'affected_students' => 150,
+                'ai_summary' => 'Caniveau bouché depuis 9 jours, eaux stagnantes et risque choléra.',
+                'ai_tags' => ['sewage_drainage', 'blockage', 'high'],
+            ]
+        );
+        $nyoSewage->forceFill(['created_at' => now()->subDays(9), 'updated_at' => now()->subDays(9)])->save();
+
+        // Bali n'est plus idle : incident modeste (low) pour ne pas perturber le picker jury.
+        Incident::firstOrCreate(
+            ['title' => 'Robinet du préau qui goutte', 'school_id' => $schools['DOU-BAL-003']->id],
+            [
+                'category' => 'water_point', 'issue_type' => 'leak',
+                'status' => 'reported', 'urgency' => 'low', 'health_hazard' => 'low',
+                'priority_score' => 22.0, 'affected_students' => 30,
+                'ai_summary' => 'Petit goutte-à-goutte au robinet du préau depuis 2 jours.',
+                'ai_tags' => ['water_point', 'leak', 'low'],
+            ]
+        )->forceFill(['created_at' => now()->subDays(2), 'updated_at' => now()->subDays(2)])->save();
+
+        $nyoResolved = Incident::firstOrCreate(
+            ['title' => 'Pompe du forage remise en service', 'school_id' => $schools['SAN-NYO-008']->id],
+            [
+                'category' => 'water_point', 'issue_type' => 'total_breakdown',
+                'status' => 'resolved', 'urgency' => 'medium', 'health_hazard' => 'medium',
+                'priority_score' => 45.0, 'affected_students' => 180,
+                'ai_summary' => 'Pompe du forage de Nyo réparée, eau revenue après 6 jours de coupure.',
+                'ai_tags' => ['water_point', 'total_breakdown', 'medium'],
+                'assigned_to_user_id' => $tech->id,
+                'resolved_at' => now()->subDays(9),
+            ]
+        );
+        $nyoResolved->forceFill(['created_at' => now()->subDays(65), 'updated_at' => now()->subDays(9)])->save();
+
+        MaintenanceLog::firstOrCreate(
+            ['incident_id' => $nyoResolved->id, 'notes' => 'Remplacement clapet + amorçage pompe.'],
+            [
+                'school_id' => $schools['SAN-NYO-008']->id, 'performed_by' => $tech->id,
+                'cost_amount' => 95000, 'currency' => 'XAF',
+                'repaired_at' => now()->subDays(9), 'days_without_service' => 6,
+            ]
+        );
+        MaintenanceLog::firstOrCreate(
+            ['incident_id' => $nyoResolved->id, 'notes' => 'Rebobinage moteur + colonne montante.'],
+            [
+                'school_id' => $schools['SAN-NYO-008']->id, 'performed_by' => $tech->id,
+                'cost_amount' => 410000, 'currency' => 'XAF',
+                'repaired_at' => now()->subDays(60), 'days_without_service' => 11,
+            ]
+        );
+
+        Report::firstOrCreate(
+            ['raw_content' => 'The school toilet is blocked, water everywhere near the classrooms.'],
+            [
+                'incident_id' => $nyoSewage->id, 'school_id' => $schools['SAN-NYO-008']->id,
+                'channel' => 'text', 'is_duplicate' => false,
+            ]
+        );
+        Report::firstOrCreate(
+            ['raw_content' => 'Wata don spoil for school pump since one month.'],
+            [
+                'incident_id' => $pouuma->id, 'school_id' => $schools['SAN-POU-007']->id,
+                'channel' => 'text', 'is_duplicate' => false,
+            ]
+        );
+        Report::firstOrCreate(
+            ['raw_content' => 'Ici école de Pouuma, le forage ne donne plus rien depuis un mois, les filles marchent des kilomètres pour l\'eau.'],
+            [
+                'incident_id' => $pouuma->id, 'school_id' => $schools['SAN-POU-007']->id,
+                'reporter_id' => $director->id, 'channel' => 'text',
+                'is_duplicate' => false,
+            ]
+        );
+        Report::firstOrCreate(
+            ['raw_content' => 'Message vocal : urgence à Pouuma, plus une goutte au forage depuis des semaines, aidez-nous vite.'],
+            [
+                'incident_id' => $pouuma->id, 'school_id' => $schools['SAN-POU-007']->id,
+                'channel' => 'voice', 'is_duplicate' => false,
+            ]
+        );
     }
 
     protected function schools(): array
@@ -170,6 +295,30 @@ class WashDemoSeeder extends Seeder
                 'broken_toilets' => 0, 'distance_from_center_km' => 65.0,
                 'equipment_type' => 'pompe_manuelle', 'installation_year' => 2020,
                 'estimated_replacement_cost' => 1500000.0, 'contact_phone' => '+237 6 00 99 00',
+            ],
+            [
+                'name' => 'École Publique d\'Édéa', 'code' => 'SAN-EDI-006', 'district' => 'Sanaga-Maritime',
+                'latitude' => 3.80000000, 'longitude' => 10.13330000,
+                'student_count' => 900, 'female_students' => 460, 'teacher_count' => 30,
+                'broken_toilets' => 2, 'distance_from_center_km' => 12.0,
+                'equipment_type' => 'forage_mecanise', 'installation_year' => 2016,
+                'estimated_replacement_cost' => 4500000.0, 'contact_phone' => '+237 6 11 22 33',
+            ],
+            [
+                'name' => 'École Rurale de Pouuma', 'code' => 'SAN-POU-007', 'district' => 'Sanaga-Maritime', 'default_language' => 'dua_Latn',
+                'latitude' => 3.65000000, 'longitude' => 10.55000000,
+                'student_count' => 140, 'female_students' => 120, 'teacher_count' => 4,
+                'broken_toilets' => 4, 'distance_from_center_km' => 85.0,
+                'equipment_type' => 'forage_solaire', 'installation_year' => 2018,
+                'estimated_replacement_cost' => 3200000.0, 'contact_phone' => '+237 6 44 55 66',
+            ],
+            [
+                'name' => 'École de Nyo', 'code' => 'SAN-NYO-008', 'district' => 'Sanaga-Maritime',
+                'latitude' => 3.72000000, 'longitude' => 10.30000000,
+                'student_count' => 350, 'female_students' => 175, 'teacher_count' => 10,
+                'broken_toilets' => 1, 'distance_from_center_km' => 38.0,
+                'equipment_type' => 'pompe_manuelle', 'installation_year' => 2020,
+                'estimated_replacement_cost' => 1500000.0, 'contact_phone' => '+237 6 77 88 99',
             ],
         ];
     }

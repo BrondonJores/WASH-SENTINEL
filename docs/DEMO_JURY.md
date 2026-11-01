@@ -4,10 +4,12 @@
 > Pré-requis : `./start.sh` a tourné (migrations + seeders OK).
 > Comptes démo (mot de passe `password`) : `admin@wash.cm` (Amina Ngo Bell, admin),
 > `tech@wash.cm` (Jean Fotso, maintenance), `directeur@ecole.cm` (Clarisse Eko, reporter).
-> Données : 5 écoles (Bonanjo, Libermann, Bali — Wouri ; Ngok, Nkol — Mvila),
-> 4 incidents (`WashDemoSeeder`) : pompe Bonanjo CRITICAL (triaged), forage Ngok
-> à sec HIGH (il y a 22 j), fuite Nkol MEDIUM (il y a 12 j), latrines Libermann
-> HIGH résolues (il y a 5 j).
+> Données : 8 écoles (Bonanjo, Libermann, Bali — Wouri ; Ngok, Nkol — Mvila ;
+> Édéa, Pouuma, Nyo — Sanaga-Maritime), 9 incidents (`WashDemoSeeder`) :
+> pompe Bonanjo CRITICAL (triaged), forage Ngok à sec HIGH (il y a 22 j),
+> fuite Nkol MEDIUM (il y a 12 j), latrines Libermann HIGH résolues (il y a 5 j),
+> forage Pouuma CRITICAL non desservi (il y a 31 j), lave-mains Édéa HIGH,
+> caniveau Nyo HIGH, pompe Nyo résolue, robinet Bali LOW.
 
 ## 0. URLs du jour J
 
@@ -110,7 +112,9 @@ Montre-moi la carte du territoire.
 ```
 
 Attendu : carte **`territory_map`** (outil `territory_overview`) : écoles,
-incidents ouverts, élèves affectés. Variante district :
+incidents ouverts, élèves affectés — 3 districts (Wouri, Mvila,
+Sanaga-Maritime), contraste équité Bonanjo (critique servie) / Pouuma
+(critique non desservie depuis 31 j). Variante district :
 
 ```text
 Montre-moi la carte du territoire de Wouri.
