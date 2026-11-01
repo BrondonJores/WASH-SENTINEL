@@ -16,10 +16,10 @@ from app.image_analyzer import (
     ImageAnalyzer,
     is_vision_unavailable,
     resolve_vision_model,
+    vision_unavailable_response,
     visual_boost,
     visual_severity,
 )
-from app.providers import VISION_FALLBACK
 
 
 class StubVisionLLM:
@@ -127,10 +127,20 @@ class GracefulFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(is_vision_unavailable(res))
         self.assertIsNone(visual_severity(res))
 
-    async def test_silent_provider_fallback_requalified(self) -> None:
-        stub = StubVisionLLM(dict(VISION_FALLBACK))
+    async def test_provider_raise_gives_explicit_fallback(self) -> None:
+        stub = StubVisionLLM(error=RuntimeError("Modèle Ollama 'moondream' introuvable (404)."))
         res = await ImageAnalyzer(stub).analyze(FAKE_JPEG)  # type: ignore[arg-type]
         self.assertTrue(is_vision_unavailable(res))
+        self.assertTrue(res.vision_unavailable)
+        self.assertIsNone(visual_severity(res))
+        self.assertIsNotNone(res.vision_error)
+        self.assertTrue(res.next_action)
+
+    async def test_unavailable_response_sets_flag_and_next_action(self) -> None:
+        res = vision_unavailable_response("Modèle Ollama 'x' introuvable (404).")
+        self.assertTrue(res.vision_unavailable)
+        self.assertIn(VISION_UNAVAILABLE_MARKER, res.visible_damage)
+        self.assertIn("ollama pull", res.next_action)
         self.assertIsNone(visual_severity(res))
 
     async def test_missing_score_never_invented(self) -> None:

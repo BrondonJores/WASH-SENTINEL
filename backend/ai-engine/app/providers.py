@@ -135,16 +135,6 @@ def extract_text_tool_calls(content: str, tools: list[dict[str, Any]]) -> list[d
     return []
 
 
-VISION_FALLBACK = {
-    "is_wash_related": True,
-    "infrastructure_detected": "Point d'eau / Tuyauterie scolaire",
-    "visible_damage": "Degradation visible constatee sur l'image",
-    "visual_severity_score": 75.0,
-    "health_hazard_detected": True,
-    "technician_notes": "Intervention requise pour securiser l'alimentation en eau potable",
-}
-
-
 class BaseLLMProvider:
     """Contrat commun : tout provider (local ou API externe) doit l'implémenter."""
 
@@ -349,39 +339,64 @@ class OllamaProvider(BaseLLMProvider):
         return parse_json_response(response.json().get("response", "{}"))
 
     async def generate_vision_json(self, prompt: str, image_base64: str, system: str = "") -> dict[str, Any]:
+        """Vision Ollama : lève une erreur FR actionnable, jamais de score inventé.
+
+        Réessaie les pannes transitoires via _post_with_retry (comme generate_json),
+        puis lève : 404 modèle absent (hint 'ollama pull'), autre HTTP (corps inclus),
+        réponse non-JSON. ImageAnalyzer convertit en repli « vision indisponible ».
+        """
+        response = await self._post_with_retry(
+            f"{self.base_url}/api/generate",
+            {
+                "model": self.vision_model,
+                "prompt": prompt,
+                "system": system,
+                "images": [image_base64],
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0.1},
+            },
+        )
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/api/generate",
-                    json={
-                        "model": self.vision_model,
-                        "prompt": prompt,
-                        "system": system,
-                        "images": [image_base64],
-                        "format": "json",
-                        "stream": False,
-                        "options": {"temperature": 0.1},
-                    },
-                )
-                if response.status_code == 200:
-                    return parse_json_response(response.json().get("response", "{}"))
-        except Exception:
-            pass
-        return dict(VISION_FALLBACK)
+            raise_for_ollama(response, self.vision_model)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"{exc} Essayez 'ollama pull {self.vision_model}'."
+            ) from exc
+        try:
+            return parse_json_response(response.json().get("response", "{}"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Modèle vision '{self.vision_model}' : réponse non-JSON ({exc}). "
+                "Réessayez ou changez de modèle vision."
+            ) from exc
 
     async def get_embedding(self, text: str) -> list[float]:
+        """Embeddings Ollama : lève une erreur FR explicite si aucun modèle ne répond.
+
+        Essaie embed_model puis model (repli conservé), mais ne renvoie plus []
+        silencieusement : l'appelant décide du repli (Jaccard, abstention RAG...).
+        """
+        errors: list[str] = []
         for model in [self.embed_model, self.model]:
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with self._async_client(timeout=30.0) as client:
                     resp = await client.post(
                         f"{self.base_url}/api/embeddings",
                         json={"model": model, "prompt": text},
                     )
-                    if resp.status_code == 200:
-                        return resp.json().get("embedding", [])
-            except Exception:
-                continue
-        return []
+                if resp.status_code != 200:
+                    errors.append(f"{model} : HTTP {resp.status_code}")
+                    continue
+                return resp.json()["embedding"]
+            except KeyError as exc:
+                errors.append(f"{model} : réponse sans embedding ({exc})")
+            except Exception as exc:
+                errors.append(f"{model} : {type(exc).__name__} {str(exc)[:150]}")
+        raise RuntimeError(
+            f"Embeddings indisponibles (modèles essayés : {self.embed_model}, {self.model}) — "
+            f"{'; '.join(errors)}. Vérifiez 'ollama list' / 'ollama pull {self.embed_model}' puis réessayez."
+        )
 
 
     async def chat(
@@ -553,39 +568,58 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
             ],
         })
+        response = await self._post_with_retry(
+            f"{self.base_url}/chat/completions",
+            {
+                "model": self.vision_model,
+                "messages": messages,
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"},
+            },
+            headers=self._headers(),
+        )
+        if response.status_code != 200:
+            body = " ".join(response.text.split())[:300]
+            raise RuntimeError(
+                f"Vision '{self.vision_model}' ({self.provider_name}) : HTTP {response.status_code} — "
+                f"{body or 'sans détail'}. Vérifiez le modèle, la clé API et l'URL, puis réessayez."
+            )
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=self._headers(),
-                    json={
-                        "model": self.vision_model,
-                        "messages": messages,
-                        "temperature": 0.1,
-                        "response_format": {"type": "json_object"},
-                    },
-                )
-                if response.status_code == 200:
-                    content = response.json()["choices"][0]["message"]["content"]
-                    return parse_json_response(content)
-        except Exception:
-            pass
-        return dict(VISION_FALLBACK)
+            content = response.json()["choices"][0]["message"]["content"]
+            return parse_json_response(content)
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"Modèle vision '{self.vision_model}' : réponse inattendue ({type(exc).__name__}). "
+                "Réessayez ou vérifiez le modèle vision."
+            ) from exc
 
     async def get_embedding(self, text: str) -> list[float]:
+        """Embeddings API externe : lève une erreur FR explicite si aucun modèle ne répond.
+
+        Essaie embed_model puis model (repli conservé), mais ne renvoie plus []
+        silencieusement : l'appelant décide du repli (Jaccard, abstention RAG...).
+        """
+        errors: list[str] = []
         for model in [self.embed_model, self.model]:
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with self._async_client(timeout=30.0) as client:
                     resp = await client.post(
                         f"{self.base_url}/embeddings",
                         headers=self._headers(),
                         json={"model": model, "input": text},
                     )
-                    if resp.status_code == 200:
-                        return resp.json()["data"][0]["embedding"]
-            except Exception:
-                continue
-        return []
+                if resp.status_code != 200:
+                    errors.append(f"{model} : HTTP {resp.status_code}")
+                    continue
+                return resp.json()["data"][0]["embedding"]
+            except (KeyError, IndexError, TypeError) as exc:
+                errors.append(f"{model} : réponse sans embedding ({type(exc).__name__})")
+            except Exception as exc:
+                errors.append(f"{model} : {type(exc).__name__} {str(exc)[:150]}")
+        raise RuntimeError(
+            f"Embeddings indisponibles (modèles essayés : {self.embed_model}, {self.model}) — "
+            f"{'; '.join(errors)}. Vérifiez le modèle, la clé API et l'URL, puis réessayez."
+        )
 
 
     async def chat(

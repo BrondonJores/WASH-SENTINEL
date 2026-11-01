@@ -93,6 +93,20 @@ async def run_diagnostics():
     except Exception as e:
         print(f"ℹ️ Mode hors-ligne Équité : {e}")
 
+    print("\n5. [Copilot Décisionnel : abstention honnête + démo explicite]")
+    try:
+        abstain = await decision_agent.answer_decision_query(
+            DecisionCopilotRequest(user_query="Que remplacer ?", district="District Ouest")
+        )
+        print(f"🛟 Sans données            : {abstain.answer[:80]}... (source={abstain.data_source})")
+        demo = await decision_agent.answer_decision_query(
+            DecisionCopilotRequest(user_query="Que remplacer ?", district="District Ouest"),
+            allow_demo=True,
+        )
+        print(f"🎭 Démo explicite (opt-in) : {len(demo.replace_recommendations)} écoles fictives assumées")
+    except Exception as e:
+        print(f"ℹ️ Mode hors-ligne Copilot : {e}")
+
     print("\n==========================================================")
     print("✅ TOUS LES MODULES IA STRATÉGIQUES SONT OPÉRATIONNELS !")
     print("==========================================================")

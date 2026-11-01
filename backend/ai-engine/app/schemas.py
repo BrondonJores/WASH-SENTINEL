@@ -33,6 +33,8 @@ class ExtractedWashIncident(BaseModel):
     ] = Field(..., description="Nature de la panne")
     urgency_level: Literal["low", "medium", "high", "critical"] = Field(..., description="Niveau d'urgence")
     estimated_affected_students: int = Field(0, description="Nombre d'élèves impactés")
+    students_unknown: bool = Field(False, description="True si le nombre d'élèves est un défaut (50), non confirmé")
+    is_wash_related: bool | None = Field(None, description="None=non évalué, False=hors-sujet suspecté, True=WASH")
     health_hazard_risk: Literal["low", "medium", "high", "severe"] = Field(..., description="Risque sanitaire immédiat")
     short_summary: str = Field(..., description="Résumé concis et factuel en français (1 à 2 phrases max)")
     recommended_priority_score: float = Field(..., ge=0.0, le=100.0, description="Score de priorité de 0 à 100")
@@ -41,7 +43,10 @@ class ExtractedWashIncident(BaseModel):
 class WashExtractionResponse(BaseModel):
     data: ExtractedWashIncident
     model_used: str
-    confidence_score: float = 0.90
+    confidence_score: float = 0.0
+    unknowns: list[str] = Field(default_factory=list, description="Champs non confirmés (codes stables)")
+    next_action: str = Field("", description="Prochaine action opérateur pour fiabiliser le signalement")
+    field_provenance: dict[str, str] = Field(default_factory=dict, description="Provenance par champ (llm|keyword|default|declared|unknown)")
 
 
 # ==========================================
@@ -85,6 +90,8 @@ class ImageAnalysisResponse(BaseModel):
     health_hazard_detected: bool = Field(..., description="Présence d'eau stagnante, déversement fécal ou danger biologique visible")
     technician_notes: str = Field(..., description="Note d'orientation pour le réparateur")
     vision_unavailable: bool = Field(False, description="True si la vision a échoué : ne pas croire le score")
+    vision_error: str | None = Field(None, description="Raison brute de la panne vision (None si vision OK)")
+    next_action: str = Field("", description="Prochaine action opérateur (reprendre la photo, réveiller le modèle...)")
 
 
 # ==========================================
@@ -172,6 +179,9 @@ class DecisionCopilotResponse(BaseModel):
     tools_executed: list[str] = Field(default_factory=list, description="Outils analytiques appelés par l'agent")
     replace_recommendations: list[ReplaceVsRepairAnalysis] = Field(default_factory=list, description="Analyses de remplacement générées")
     strategic_action_plan: list[str] = Field(default_factory=list, description="Plan d'action prioritaire recommandé pour le budget")
+    data_source: Literal["real", "empty"] = Field("real", description="real=données Laravel, empty=abstention sans données")
+    warnings: list[str] = Field(default_factory=list, description="Avertissements (abstention, secours sans LLM...)")
+    next_action: str = Field("", description="Prochaine action opérateur pour obtenir une analyse")
 
 
 # ==========================================

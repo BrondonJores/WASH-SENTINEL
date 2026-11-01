@@ -578,3 +578,35 @@ class PromptFailureEvalTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res.data.urgency_level, "medium", "[bizarre] urgency")
         self.assertEqual(res.data.estimated_affected_students, 100, "[bizarre] affected")
         self.assertEqual(meta, {"fallback_infra": True, "fallback_issue": True})
+
+
+class PromptHonestyEvalTest(unittest.IsolatedAsyncioTestCase):
+    """Abstention honnête sur ambigu/hors-sujet/vide : catégories golden
+    inchangées (cf. PromptGoldenEvalTest), mais unknowns + next_action
+    explicites et confiance < 0.92."""
+
+    async def test_01_ambigu_unknowns(self) -> None:
+        case = GOLDEN_CASES[8]  # ambigu
+        ex = WashExtractor(llm=StubLLM(case["payload"]))  # type: ignore[arg-type]
+        res = await ex.extract(case["text"])
+        self.assertLess(res.confidence_score, 0.92, "[ambigu] confiance honnête")
+        self.assertTrue(res.unknowns, "[ambigu] unknowns non vides")
+        self.assertTrue(res.next_action, "[ambigu] next_action non vide")
+        self.assertTrue(res.data.students_unknown, "[ambigu] élèves non confirmés")
+
+    async def test_02_hors_sujet_unknowns(self) -> None:
+        case = GOLDEN_CASES[9]  # hors_sujet
+        ex = WashExtractor(llm=StubLLM(case["payload"]))  # type: ignore[arg-type]
+        res = await ex.extract(case["text"])
+        self.assertLess(res.confidence_score, 0.92, "[hors_sujet] confiance honnête")
+        self.assertIn("off_topic_suspected", res.unknowns, "[hors_sujet] flag")
+        self.assertFalse(res.data.is_wash_related, "[hors_sujet] non-WASH")
+        self.assertTrue(res.next_action, "[hors_sujet] next_action non vide")
+
+    async def test_03_empty_unknowns(self) -> None:
+        stub = StubLLM(_degraded_payload("medium", None, "low", None))
+        ex = WashExtractor(llm=stub)  # type: ignore[arg-type]
+        res = await ex.extract("")
+        self.assertLess(res.confidence_score, 0.92, "[vide] confiance honnête")
+        self.assertIn("empty_report", res.unknowns, "[vide] flag")
+        self.assertTrue(res.next_action, "[vide] next_action non vide")

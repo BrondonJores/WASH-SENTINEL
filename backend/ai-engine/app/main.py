@@ -318,6 +318,8 @@ async def triage_report(
         "is_voice": audio is not None,
         "voice_details": transcription_meta,
         "extraction": extracted.dict(),
+        "unknowns": extracted.unknowns,
+        "next_action": extracted.next_action,
         "visual": visual_meta,
         "priority_score_with_vision": round(min(100.0, base_score + boost), 1),
     }

@@ -78,20 +78,47 @@ class DecisionAgent:
             suggested_modernization=suggested,
         )
 
-    async def answer_decision_query(self, req: DecisionCopilotRequest) -> DecisionCopilotResponse:
+    async def answer_decision_query(
+        self, req: DecisionCopilotRequest, allow_demo: bool = False
+    ) -> DecisionCopilotResponse:
         """
         Agent conversationnel d'aide à la décision :
         1. Exécute les tools d'évaluation sur les données scolaires.
         2. Construit le contexte chiffré.
         3. Fait synthétiser la décision stratégique par Llama 3.2.
+
+        Sans données : abstention honnête (HTTP 200, data_source="empty"),
+        jamais d'écoles fictives. Les données de démo exigent l'opt-in
+        explicite allow_demo=True (démo manuelle / jury uniquement).
         """
         tools_used: list[str] = ["evaluate_replace_vs_repair", "budget_impact_analyzer"]
         analyses: list[ReplaceVsRepairAnalysis] = []
 
-        # Si aucune donnée n'est passée par Laravel, injection de données de démonstration crédibles
         schools_data = req.schools_data
         if not schools_data:
-            schools_data = self._generate_demo_schools_data(req.district)
+            if allow_demo:
+                schools_data = self._generate_demo_schools_data(req.district)
+            else:
+                district = req.district or "le district ciblé"
+                return DecisionCopilotResponse(
+                    answer=(
+                        f"Données insuffisantes : aucun historique fourni pour {district}. "
+                        "Transmettez les historiques Laravel (coûts, pannes, jours sans eau) "
+                        "pour obtenir une analyse Réparer vs Remplacer."
+                    ),
+                    tools_executed=[],
+                    replace_recommendations=[],
+                    strategic_action_plan=[
+                        "Transmettre les historiques Laravel (coûts de réparation, pannes, jours sans eau) pour chaque école du district",
+                        "Préciser le district ciblé et la question budgétaire (remplacement, maintenance, achat groupé)",
+                        "Relancer l'analyse une fois les données complétées",
+                    ],
+                    data_source="empty",
+                    warnings=[
+                        "Aucune donnée d'historique fournie — réponse d'abstention, aucune recommandation calculée."
+                    ],
+                    next_action="Fournissez schools_data (historiques Laravel) puis relancez la requête.",
+                )
 
         # 1. Exécution du tool Replace vs Repair sur chaque école
         for school in schools_data:
@@ -135,10 +162,13 @@ Rédige une réponse d'aide à la décision percutante pour l'opérateur, compre
             system=DECISION_COPILOT_SYSTEM + "\nRéponds avec un JSON : {\"answer\": \"texte du rapport\", \"action_plan\": [\"point 1\", \"point 2\", \"point 3\"]}"
         )
 
+        degraded = False
         answer_text = raw_reply.get("answer")
         if not answer_text or len(str(answer_text)) < 50:
-            # Fallback structuré
+            # Fallback structuré (LLM muet) : chiffres déterministes, marqué dégradé.
+            degraded = True
             answer_text = (
+                "Réponse de secours sans LLM — chiffres issus des tools déterministes. "
                 f"Sur les {len(schools_data)} écoles analysées, **{len(replace_targets)} établissement(s)** ont franchi le seuil critique d'inefficacité budgétaire. "
                 f"Dans ces écoles, les factures de réparations successives représentent plus de 55% du prix d'une installation neuve. "
                 f"Nous recommandons un **remplacement immédiat par des forages solaires** pour éliminer les pannes chroniques et sécuriser l'eau des élèves."
@@ -146,6 +176,7 @@ Rédige une réponse d'aide à la décision percutante pour l'opérateur, compre
 
         actions = raw_reply.get("action_plan")
         if not isinstance(actions, list) or not actions:
+            degraded = True
             actions = [
                 f"Inscrire en priorité d'investissement Capex les écoles : {', '.join([a.school_name for a in replace_targets]) if replace_targets else 'Aucune urgence absolue'}",
                 "Geler les bons de commande de réparations palliatives pour les équipements ayant dépassé 55% de ratio de vétusté",
@@ -157,6 +188,15 @@ Rédige une réponse d'aide à la décision percutante pour l'opérateur, compre
             tools_executed=tools_used,
             replace_recommendations=analyses,
             strategic_action_plan=actions,
+            data_source="real",
+            warnings=(
+                ["Réponse de secours sans LLM — chiffres issus des tools déterministes."]
+                if degraded else []
+            ),
+            next_action=(
+                "Réveillez le modèle via POST /v1/admin/warmup puis relancez pour une synthèse complète."
+                if degraded else ""
+            ),
         )
 
     def _generate_demo_schools_data(self, district: str | None) -> list[SchoolMaintenanceHistory]:

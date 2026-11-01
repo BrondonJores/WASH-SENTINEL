@@ -96,5 +96,84 @@ class LocalKeywordsTest(unittest.TestCase):
         )
 
 
+class HonestConfidenceTest(unittest.IsolatedAsyncioTestCase):
+    """Confiance calculée + unknowns : jamais 0.92 par défaut."""
+
+    async def test_llm_valid_high_confidence_no_unknowns(self) -> None:
+        stub = StubLLM({
+            "school_detected": "EPP Centre",
+            "infrastructure_type": "water_point",
+            "issue_type": "leak",
+            "urgency_level": "high",
+            "estimated_affected_students": 320,
+            "health_hazard_risk": "high",
+            "short_summary": "Fuite franche au point d'eau.",
+        })
+        ex = WashExtractor(llm=stub)  # type: ignore[arg-type]
+        res = await ex.extract("Fuite au point d'eau.", school_name="EPP Centre")
+        self.assertGreaterEqual(res.confidence_score, 0.85)
+        self.assertNotEqual(res.confidence_score, 0.92)
+        self.assertEqual(res.unknowns, [])
+        self.assertEqual(res.next_action, "")
+        self.assertEqual(res.field_provenance["infrastructure_type"], "llm")
+        self.assertFalse(res.data.students_unknown)
+
+    async def test_keyword_fallback_lower_confidence_with_unknowns(self) -> None:
+        stub = StubLLM({
+            "school_detected": None,
+            "infrastructure_type": "other",
+            "issue_type": "other",
+            "urgency_level": "medium",
+            "estimated_affected_students": 0,
+            "health_hazard_risk": "low",
+            "short_summary": "Latrines bouchées.",
+        })
+        ex = WashExtractor(llm=stub)  # type: ignore[arg-type]
+        res = await ex.extract("Les latrines des filles sont bouchées et débordent.")
+        self.assertEqual(res.data.infrastructure_type, "toilets_latrines")
+        self.assertEqual(res.data.issue_type, "blockage")
+        self.assertLess(res.confidence_score, 0.92)
+        self.assertIn("infrastructure_guess", res.unknowns)
+        self.assertIn("issue_guess", res.unknowns)
+        self.assertIn("affected_students_unknown", res.unknowns)
+        self.assertTrue(res.next_action)
+        self.assertEqual(res.field_provenance["infrastructure_type"], "keyword")
+        self.assertTrue(res.data.students_unknown)
+
+    async def test_empty_report_explicit_unknowns(self) -> None:
+        stub = StubLLM({
+            "school_detected": None,
+            "infrastructure_type": "other",
+            "issue_type": "other",
+            "urgency_level": "medium",
+            "estimated_affected_students": None,
+            "health_hazard_risk": "low",
+            "short_summary": None,
+        })
+        ex = WashExtractor(llm=stub)  # type: ignore[arg-type]
+        res = await ex.extract("   ")
+        self.assertIn("empty_report", res.unknowns)
+        self.assertTrue(res.next_action)
+        self.assertLess(res.confidence_score, 0.92)
+        self.assertIsNone(res.data.is_wash_related)
+
+    async def test_off_topic_suspected_not_silent(self) -> None:
+        stub = StubLLM({
+            "school_detected": None,
+            "infrastructure_type": "other",
+            "issue_type": "other",
+            "urgency_level": "medium",
+            "estimated_affected_students": None,
+            "health_hazard_risk": "low",
+            "short_summary": None,
+        })
+        ex = WashExtractor(llm=stub)  # type: ignore[arg-type]
+        res = await ex.extract("Le match de football inter-écoles aura lieu samedi au stade.")
+        self.assertIn("off_topic_suspected", res.unknowns)
+        self.assertFalse(res.data.is_wash_related)
+        self.assertTrue(res.next_action)
+        self.assertLess(res.confidence_score, 0.92)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -37,11 +37,6 @@ import os
 from .providers import BaseLLMProvider
 from .schemas import ImageAnalysisResponse
 
-try:
-    from .providers import VISION_FALLBACK as _PROVIDER_VISION_FALLBACK
-except ImportError:  # garde-fou si providers.py evolue (lecture seule ici)
-    _PROVIDER_VISION_FALLBACK = {}
-
 VISION_MODEL_ENV_VAR = "OLLAMA_VISION_MODEL"
 DEFAULT_VISION_MODEL = "moondream"
 VISION_UNAVAILABLE_MARKER = "vision indisponible"
@@ -72,6 +67,20 @@ def resolve_vision_model(explicit: str | None = None) -> str:
     return os.getenv(VISION_MODEL_ENV_VAR, DEFAULT_VISION_MODEL) or DEFAULT_VISION_MODEL
 
 
+def _vision_next_action(reason: str) -> str:
+    """Prochaine action operateur selon la cause probable de la panne vision."""
+    low = reason.lower()
+    if "image vide" in low:
+        return "Fournissez une photo nette de l'infrastructure."
+    if any(k in low for k in ("introuvable", "404", "pull", "connexion", "connect")):
+        return "Vérifiez le modèle vision ('ollama list' / 'ollama pull <modèle>') puis réessayez, ou continuez sans photo."
+    if any(k in low for k in ("timeout", "délai", "delai", "timed out", "408", "warmup")):
+        return "Réveillez le modèle via POST /v1/admin/warmup puis réessayez."
+    if "score" in low or "vide ou invalide" in low:
+        return "Reprenez la photo de près, nette et bien cadrée."
+    return "Reprenez la photo ou continuez sans la vision."
+
+
 def vision_unavailable_response(reason: str) -> ImageAnalysisResponse:
     """Diagnostic explicite de panne vision (jamais de score invente).
 
@@ -80,13 +89,17 @@ def vision_unavailable_response(reason: str) -> ImageAnalysisResponse:
     et non ce champ.
     """
     message = f"{VISION_UNAVAILABLE_MARKER} : {reason}"
+    next_action = _vision_next_action(reason)
     return ImageAnalysisResponse(
         is_wash_related=False,
         infrastructure_detected=VISION_UNAVAILABLE_MARKER,
         visible_damage=message[:300],
         visual_severity_score=0.0,
         health_hazard_detected=False,
-        technician_notes=f"{message} — continuer sans la vision (severity None, boost 0).",
+        technician_notes=f"{message} — {next_action}",
+        vision_unavailable=True,
+        vision_error=reason[:300],
+        next_action=next_action,
     )
 
 
@@ -161,13 +174,6 @@ class ImageAnalyzer:
             return vision_unavailable_response(f"{type(exc).__name__}: {str(exc)[:200]}")
         if not isinstance(raw, dict) or not raw:
             return vision_unavailable_response("réponse vision vide ou invalide")
-        if _PROVIDER_VISION_FALLBACK and raw == _PROVIDER_VISION_FALLBACK:
-            # OllamaProvider/OpenAICompatibleProvider avalent les erreurs (404, timeout)
-            # et renvoient un dict factice à 75.0 : on le requalifie en panne explicite
-            # plutôt que d'inventer un score (providers.py est hors périmètre ici).
-            return vision_unavailable_response(
-                f"modèle '{self.vision_model}' indisponible (repli provider silencieux détecté)"
-            )
 
         is_wash = bool(raw.get("is_wash_related", True))
         if not is_wash:
