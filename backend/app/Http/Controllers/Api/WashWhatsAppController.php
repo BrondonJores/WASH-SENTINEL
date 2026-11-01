@@ -10,13 +10,28 @@ use Illuminate\Support\Facades\Cache;
 
 class WashWhatsAppController extends Controller
 {
+    protected function verifyToken(): string
+    {
+        $token = (string) config('whatsapp.verify_token', '');
+        if ($token === '') {
+            $token = (string) config('services.whatsapp.verify_token', '');
+        }
+
+        return $token;
+    }
+
+    protected function isSimulator(): bool
+    {
+        return (bool) config('whatsapp.simulator', config('services.whatsapp.simulator', false));
+    }
+
     public function verify(Request $request)
     {
         $mode = $request->query('hub_mode');
         $token = (string) $request->query('hub_verify_token', '');
         $challenge = $request->query('hub_challenge');
 
-        if ($mode === 'subscribe' && $challenge && hash_equals((string) config('services.whatsapp.verify_token', ''), $token)) {
+        if ($mode === 'subscribe' && $challenge && hash_equals($this->verifyToken(), $token)) {
             return response($challenge, 200)->header('Content-Type', 'text/plain');
         }
 
@@ -25,7 +40,11 @@ class WashWhatsAppController extends Controller
 
     public function receive(Request $request, WashWhatsAppService $service)
     {
-        if (!config('services.whatsapp.simulator', false)
+        if (!(bool) config('whatsapp.enabled', true)) {
+            abort(503, 'WhatsApp channel disabled.');
+        }
+
+        if (!$this->isSimulator()
             && !$service->verifySignature($request->getContent(), $request->header('X-Hub-Signature-256'))) {
             abort(403, 'Invalid webhook signature.');
         }
@@ -38,9 +57,18 @@ class WashWhatsAppController extends Controller
 
     public function diagnostics()
     {
+        $accessToken = (string) config('whatsapp.token', '');
+        if ($accessToken === '') {
+            $accessToken = (string) config('services.whatsapp.access_token', '');
+        }
+
         return response()->json([
-            'verify_token_configured' => (string) config('services.whatsapp.verify_token', '') !== '',
-            'app_token_configured' => (string) config('services.whatsapp.access_token', '') !== '',
+            'enabled' => (bool) config('whatsapp.enabled', true),
+            'verify_token_configured' => $this->verifyToken() !== '',
+            'app_token_configured' => $accessToken !== '',
+            'phone_number_id_configured' => (string) config('whatsapp.phone_number_id', config('services.whatsapp.phone_number_id', '')) !== '',
+            'voice_confirmation' => (bool) config('whatsapp.voice_confirmation', true),
+            'confirmation_template' => (string) config('whatsapp.confirmation_template', 'wash_confirmation'),
             'webhook_url_hint' => rtrim((string) config('app.url', ''), '/') . '/api/v1/whatsapp/webhook',
             'queue_connection' => (string) config('queue.default', 'database'),
             'last_webhook_at' => Cache::get('wash.whatsapp.last_webhook_at'),

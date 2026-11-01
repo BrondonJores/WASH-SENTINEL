@@ -121,6 +121,63 @@ class WashWhatsAppTest extends TestCase
         $this->assertNotNull($report->audio_path);
     }
 
+    public function test_audio_message_sends_confirmation_buttons(): void
+    {
+        config(['filesystems.disks.public.root' => sys_get_temp_dir() . '/wash-test-public']);
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('audio'))
+            ->assertOk();
+
+        $interactive = array_values(array_filter(
+            FakeWhatsAppService::$sent,
+            fn ($m) => ($m['type'] ?? '') === 'interactive'
+        ));
+        $this->assertCount(1, $interactive);
+        $ids = array_column($interactive[0]['buttons'] ?? [], 'id');
+        $this->assertContains('wash_oui', $ids);
+        $this->assertContains('wash_non', $ids);
+    }
+
+    public function test_yes_button_confirms_pending_incident(): void
+    {
+        config(['filesystems.disks.public.root' => sys_get_temp_dir() . '/wash-test-public']);
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('audio'))->assertOk();
+        $incident = Incident::first();
+        $this->assertNotNull($incident);
+        $this->assertNotContains('confirme-usager', $incident->ai_tags ?? []);
+
+        FakeWhatsAppService::$sent = [];
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('interactive_yes'))
+            ->assertOk();
+
+        $this->assertContains('confirme-usager', $incident->fresh()->ai_tags ?? []);
+        $last = end(FakeWhatsAppService::$sent);
+        $this->assertStringContainsString('confirmé', $last['message']);
+    }
+
+    public function test_no_button_asks_one_short_question(): void
+    {
+        config(['filesystems.disks.public.root' => sys_get_temp_dir() . '/wash-test-public']);
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('audio'))->assertOk();
+
+        FakeWhatsAppService::$sent = [];
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('interactive_no'))
+            ->assertOk();
+
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $question = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString('Que dois-je corriger', $question);
+        $this->assertLessThan(120, mb_strlen($question));
+    }
+
     public function test_unknown_number_gets_registration_reply(): void
     {
         $this->fakeTriage();
