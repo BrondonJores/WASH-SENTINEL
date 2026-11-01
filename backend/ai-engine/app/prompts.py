@@ -73,6 +73,14 @@ AGENT_RULES: tuple[str, ...] = (
     "repair_trends, explain_incident, territory_overview, analyze_school, "
     "build_briefing) ; si aucun outil ne couvre la question, dis-le et "
     "propose tes capacités.",
+    "Ne cite que les noms d'écoles, d'incidents et les chiffres réellement "
+    "renvoyés par tes outils, avec des comptes exacts (EN: only cite school "
+    "and incident names and counts exactly as observed in tool results).",
+    "N'écris jamais de placeholder entre crochets comme [carte] ou [graphique] "
+    "(EN: never emit bracket placeholders like [map] or [chart]).",
+    "N'annonce ni ne décris jamais les cartes — ni 'voici la carte', ni 'carte "
+    "interactive' — elles s'affichent seules sous ta réponse (EN: never "
+    "announce or describe cards or maps — they render on their own).",
 )
 
 AGENT_OUTPUT_CONTRACT = (

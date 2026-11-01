@@ -628,6 +628,315 @@ def _follow_ups(message: str, executed: list[tuple[str, dict[str, Any]]],
     return []
 
 
+# ---------------------------------------------------------------------------
+# Réparations heuristiques déterministes (anti-hallucination petit LLM).
+# Le petit modèle (Qwen 3B) produit parfois en synthèse : des puces de liste
+# vides ("* * *"), des placeholders entre crochets ("[Carte interactive...]")
+# ou des annonces de carte sans carte construite. Les fonctions ci-dessous
+# sont pures et testables : elles corrigent la réponse finale AVANT envoi,
+# uniquement à partir des observations d'outils (jamais d'invention).
+# ---------------------------------------------------------------------------
+
+#: Puce en début de ligne : "-", "*", "•" ou "1."/"1)".
+_LINE_BULLET_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<marker>(?:[-*•]|\d{1,3}[.)]))(?P<content>.*)$"
+)
+
+#: Marqueur de puce isolé dans une ligne (cas réel : "sont : * * * Ces...").
+#: Tiret exclu : "X - Y" est une ponctuation légitime, pas une puce vide.
+_INLINE_BULLET_RE = re.compile(r"(?<![\w*•])(?P<marker>[*•])(?![\w*•])")
+
+#: Placeholder entre crochets à supprimer : [carte...], [map...], [graphique...],
+#: [chart...], [voir...], [image...], [figure...]. Les notes de troncature
+#: ("[tronqué...]", "[+N autres...]") sont préservées (garde dans le code).
+_BRACKET_PLACEHOLDER_RE = re.compile(
+    r"\[[^\[\]\n]{0,120}?(?:carte|carte interactive|map|graphique|chart|graph|"
+    r"voir\s|image|figure)[^\[\]\n]{0,120}?\](?:\([^)\n]*\))?",
+    re.IGNORECASE,
+)
+
+#: Annonce d'une carte dans le texte (FR + EN).
+_MAP_ANNOUNCE_RE = re.compile(
+    r"voici la carte|carte interactive|carte (?:est |ci-dessous|du territoire)|"
+    r"interactive map|here (?:is|are) the map|map below",
+    re.IGNORECASE,
+)
+
+#: Clés d'observations contenant des listes d'écoles/incidents.
+_REPAIR_LIST_KEYS = (
+    "schools_involved", "ranking", "schools", "items", "incidents",
+    "open_incidents", "candidates",
+)
+
+
+def _useful_chars(text: str) -> int:
+    """Nombre de caractères alphanumériques (markdown ignoré)."""
+    return sum(1 for c in text if c.isalnum())
+
+
+def _entry_label(entry: Any) -> str | None:
+    """Libellé citable d'une entrée d'observation (fonction pure)."""
+    if isinstance(entry, str):
+        label = entry.strip()
+        return label or None
+    if not isinstance(entry, dict):
+        return None
+    school = str(entry.get("school_name") or entry.get("nom") or "").strip()
+    title = str(entry.get("title") or "").strip()
+    ref = str(entry.get("reference_code") or entry.get("reference") or "").strip()
+    if school and title and title.lower() not in school.lower():
+        return f"{school} — {title}"
+    return school or title or ref or None
+
+
+def collect_repair_names(executed: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    """Noms réellement observés (écoles/incidents/références), sans doublon.
+
+    Ordre préservé : dernière observation d'abord (la plus pertinente),
+    puis les précédentes. Fonction pure.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for _name, obs in reversed(executed or []):
+        if not isinstance(obs, dict) or "error" in obs:
+            continue
+        candidates: list[Any] = [
+            obs.get("school_name"), obs.get("title"), obs.get("reference_code"),
+        ]
+        for key in _REPAIR_LIST_KEYS:
+            values = obs.get(key)
+            if isinstance(values, list):
+                candidates.extend(values)
+        for candidate in candidates:
+            label = _entry_label(candidate)
+            if label and label not in ("?", "-") and _norm(label) not in seen:
+                seen.add(_norm(label))
+                names.append(label)
+    return names
+
+
+def strip_bracket_placeholders(text: str) -> str:
+    """Supprime les placeholders entre crochets ([Carte...], [graphique...]).
+
+    Les notes de troncature déterministes ([tronqué...], "[+N autres...]")
+    sont préservées. Fonction pure.
+    """
+    if not text or "[" not in text:
+        return text
+
+    def _drop(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        lowered = raw.lower()
+        if "tronqu" in lowered or raw.startswith("[+"):
+            return raw
+        return ""
+
+    stripped = _BRACKET_PLACEHOLDER_RE.sub(_drop, text)
+    if stripped == text:
+        return text
+    cleaned = re.sub(r"[ \t]{2,}", " ", stripped)
+    lines = [line for line in cleaned.split("\n") if line.strip()]
+    return "\n".join(lines)
+
+
+def repair_empty_bullets(text: str, names: list[str]) -> str:
+    """Remplit les puces vides depuis `names`, ou les supprime sans données.
+
+    Vide = sans contenu ou contenu < 3 caractères alphanumériques.
+    Couvre les puces en début de ligne ("-", "*", "•", "1.") et les marqueurs
+    isolés dans une ligne ("sont : * * * Ces..."). Fonction pure.
+    """
+    if not text:
+        return text
+    pool = [str(n).strip() for n in (names or []) if str(n).strip()]
+    idx = 0
+
+    lines = text.split("\n")
+    kept: list[str] = []
+    for line in lines:
+        match = _LINE_BULLET_RE.match(line)
+        if match and _useful_chars(match.group("content")) < 3:
+            if idx < len(pool):
+                kept.append(f"{match.group('indent')}{match.group('marker')} {pool[idx]}")
+                idx += 1
+            # Sinon : puce supprimée (aucune donnée pour la remplir).
+        else:
+            kept.append(line)
+    text = "\n".join(kept)
+
+    # Marqueurs isolés dans une ligne : regroupés par plages (séparés par de
+    # simples espaces), en ignorant les multiplications ("2 * 3").
+    matches = list(_INLINE_BULLET_RE.finditer(text))
+    if not matches:
+        return text
+    groups: list[list[re.Match[str]]] = []
+    for match in matches:
+        if groups and text[groups[-1][-1].end():match.start()].strip() == "":
+            groups[-1].append(match)
+        else:
+            groups.append([match])
+
+    def _neighbors_are_alnum(start: int, end: int) -> bool:
+        before = text[:start].rstrip()[-1:] or ""
+        after = text[end:].lstrip()[:1] or ""
+        return bool(before and after and before.isalnum() and after.isalnum())
+
+    for group in reversed(groups):
+        start, end = group[0].start(), group[-1].end()
+        if _neighbors_are_alnum(start, end):
+            continue
+        available = len(pool) - idx
+        if available <= 0:
+            text = text[:start] + text[end:]
+            continue
+        take = min(len(group), available)
+        fill = ", ".join(pool[idx:idx + take])
+        idx += take
+        after = text[end:].lstrip()[:1] or ""
+        if after and after.isupper() and not fill.endswith((".", "!", "?", ";", ":")):
+            fill += "."
+        text = text[:start] + fill + text[end:]
+    return re.sub(r"[ \t]{2,}", " ", text)
+
+
+def repair_final_answer(
+    answer: str,
+    executed: list[tuple[str, dict[str, Any]]] | None = None,
+) -> str:
+    """Passe de réparation déterministe sur la réponse finale (fonction pure).
+
+    Placeholders entre crochets supprimés, puces vides remplies depuis les
+    observations (ou supprimées sans données). Réponse saine inchangée.
+    """
+    if not answer or not answer.strip():
+        return answer
+    text = strip_bracket_placeholders(answer)
+    names = collect_repair_names(executed or [])
+    lowered = _norm(text)
+    fresh = [n for n in names if _norm(n) not in lowered]
+    return repair_empty_bullets(text, fresh or names)
+
+
+def announces_map(text: str) -> bool:
+    """Le texte annonce-t-il une carte (FR/EN) ? Fonction pure."""
+    return bool(text and _MAP_ANNOUNCE_RE.search(text))
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result
+
+
+def collect_map_points(
+    executed: list[tuple[str, dict[str, Any]]] | None,
+    context: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Écoles géolocalisées (lat/lng) issues des observations (fonction pure).
+
+    1. Points directs : toute entrée d'observation avec nom + lat/lng.
+    2. Enrichissement : noms observés retrouvés dans `context["schools"]`
+       avec GPS (cas summarize_district/rank, sans lat/lng dans l'obs).
+    """
+    points: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add(name: str, lat: Any, lng: Any, extra: dict[str, Any]) -> None:
+        flat_lat, flat_lng = _as_float(lat), _as_float(lng)
+        key = _norm(name)
+        if flat_lat is None or flat_lng is None or not key or key in seen:
+            return
+        seen.add(key)
+        points.append({
+            "school_id": extra.get("school_id"),
+            "school_name": name,
+            "district": extra.get("district"),
+            "lat": flat_lat,
+            "lng": flat_lng,
+            "open_incidents": int(extra.get("open_incidents", 0) or 0),
+            "affected_students": int(extra.get("affected_students", 0) or 0),
+            "top_urgency": extra.get("top_urgency"),
+        })
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            name = value.get("school_name") or value.get("nom")
+            if name:
+                _add(str(name), value.get("lat", value.get("latitude")),
+                     value.get("lng", value.get("longitude")), value)
+            for child in value.values():
+                _walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                _walk(child)
+
+    for _name, obs in executed or []:
+        if isinstance(obs, dict) and "error" not in obs:
+            _walk(obs)
+
+    schools = (context or {}).get("schools") or []
+    gps_by_name = {}
+    for school in schools:
+        if not isinstance(school, dict) or not school.get("school_name"):
+            continue
+        gps_by_name[_norm(str(school["school_name"]))] = school
+    for label in collect_repair_names(executed or []):
+        school = gps_by_name.get(_norm(label))
+        if school is not None:
+            _add(str(school["school_name"]),
+                 school.get("lat", school.get("latitude")),
+                 school.get("lng", school.get("longitude")), school)
+    return points
+
+
+def build_forced_map_card(
+    points: list[dict[str, Any]],
+    district: str | None = None,
+) -> AgentCard:
+    """Carte territory_map de secours (même forme que territory_overview)."""
+    if district is None:
+        districts = [str(p.get("district")) for p in points if p.get("district")]
+        district = max(set(districts), key=districts.count) if districts else None
+    total_open = sum(int(p.get("open_incidents", 0) or 0) for p in points)
+    return AgentCard(
+        type="territory_map",
+        title=f"Carte du territoire{f' — {district}' if district else ''}",
+        data={
+            "district": district,
+            "schools": points,
+            "missing_gps": [],
+            "total": len(points),
+            "open_incidents": total_open,
+            "insight": f"{len(points)} écoles géolocalisées.",
+        },
+    )
+
+
+def maybe_force_map_card(
+    answer: str,
+    executed: list[tuple[str, dict[str, Any]]] | None,
+    cards: list[AgentCard] | None,
+    context: dict[str, Any] | None = None,
+) -> list[AgentCard]:
+    """Force la carte si le texte l'annonce sans qu'elle soit construite.
+
+    Seulement quand des écoles avec lat/lng existent (observations, puis
+    contexte). N'ajoute jamais de doublon. Fonction pure (nouvelle liste).
+    """
+    cards = list(cards or [])
+    if not announces_map(answer):
+        return cards
+    if any("map" in (card.type or "") for card in cards):
+        return cards
+    points = collect_map_points(executed, context)
+    if not points:
+        return cards
+    cards.append(build_forced_map_card(points))
+    return cards
+
+
 class AgentLoop:
     """Boucle agentique réelle : le LLM choisit ses outils, Python les exécute."""
 
@@ -728,7 +1037,13 @@ class AgentLoop:
             else:
                 answer = self._fallback_answer(executed, context)
 
+        # Réparation déterministe AVANT envoi : puces vides remplies depuis
+        # les observations, placeholders [...] supprimés (fonctions pures).
+        answer = repair_final_answer(answer, executed)
         cards = self._build_cards(executed, context)
+        # Annonce-carte sans carte construite : force la carte si des écoles
+        # avec lat/lng existent (petit LLM : CAS "voici la carte..." seul).
+        cards = maybe_force_map_card(answer, executed, cards, context)
         if not cards:
             # Aucune carte (échec ou lieu inconnu) : suggestions cliquables.
             suggest = suggest_places(req.message, context)
