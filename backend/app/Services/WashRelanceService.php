@@ -10,10 +10,9 @@ use Illuminate\Support\Collection;
 class WashRelanceService
 {
     /**
-     * Statuts "ouverts" : miroir de Incident::scopeOpen() (tout sauf
-     * resolved/closed) et de l'enum de la migration incidents.
+     * LOT 6 — alias historique, source unique : Incident::OPEN_STATUSES.
      */
-    public const OPEN_STATUSES = ['reported', 'triaged', 'assigned', 'in_progress'];
+    public const OPEN_STATUSES = Incident::OPEN_STATUSES;
 
     public const DEFAULT_DAYS = 7;
 
@@ -27,7 +26,7 @@ class WashRelanceService
         $days = max(1, $days);
 
         return Incident::with(['school:id,name,district', 'assignee:id,name'])
-            ->whereIn('status', self::OPEN_STATUSES)
+            ->whereIn('status', Incident::OPEN_STATUSES)
             ->where('updated_at', '<', now()->subDays($days))
             ->orderByDesc('priority_score')
             ->orderBy('updated_at')

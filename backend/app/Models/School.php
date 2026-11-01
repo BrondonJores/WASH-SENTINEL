@@ -28,7 +28,8 @@ class School extends Model
 
     public function openIncidents(): HasMany
     {
-        return $this->hasMany(Incident::class)->whereNotIn('status', ['resolved', 'closed']);
+        // Source unique : Incident::OPEN_STATUSES (LOT 6).
+        return $this->hasMany(Incident::class)->whereIn('status', Incident::OPEN_STATUSES);
     }
 
     public function reports(): HasMany

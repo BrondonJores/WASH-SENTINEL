@@ -47,13 +47,19 @@ class ProposalGuidanceException extends HttpException
         return response()->json($this->guidance(), $this->getStatusCode());
     }
 
+    /** LOT 6 — texte FR (locale forcée, extraction pure, textes identiques). */
+    protected static function fr(string $key, array $replace = []): string
+    {
+        return trans('wash.' . $key, $replace, 'fr');
+    }
+
     public static function expired(AgentProposal $proposal, string $redraftPrompt): self
     {
         return new self(
             410,
             'expired',
-            "Ce dossier a expiré (30 min). Redemandez un récapitulatif : « {$redraftPrompt} ».",
-            ['label' => 'Refaire la demande', 'prompt' => $redraftPrompt],
+            self::fr('guidance.expired', ['minutes' => config('wash.proposals.expiry_minutes'), 'prompt' => $redraftPrompt]),
+            ['label' => self::fr('guidance.redraft_label'), 'prompt' => $redraftPrompt],
             ['proposal_id' => $proposal->id, 'action' => $proposal->action],
         );
     }
@@ -62,10 +68,10 @@ class ProposalGuidanceException extends HttpException
     {
         $ref = is_array($created) ? ($created['reference_code'] ?? null) : null;
         $summary = is_array($created) ? ($created['summary'] ?? null) : null;
-        $message = 'Déjà enregistré ! '
-            . ($summary ? "{$summary} " : 'Cette demande a déjà été validée. ')
-            . ($ref ? "Voir : {$ref}." : 'Rien de plus à valider.');
-        $prompt = $ref ? "Affiche le dossier {$ref}" : null;
+        $message = self::fr('guidance.already_done')
+            . ($summary ? "{$summary} " : self::fr('guidance.already_validated'))
+            . ($ref ? self::fr('guidance.already_see', ['ref' => $ref]) : self::fr('guidance.already_nothing'));
+        $prompt = $ref ? self::fr('guidance.already_show_prompt', ['ref' => $ref]) : null;
 
         $extra = ['proposal_id' => $proposal->id, 'action' => $proposal->action];
         foreach (['reference_code', 'incident_id', 'report_id', 'log_id'] as $key) {
@@ -78,7 +84,7 @@ class ProposalGuidanceException extends HttpException
             409,
             'already_confirmed',
             trim($message),
-            $prompt ? ['label' => 'Voir le dossier', 'prompt' => $prompt] : null,
+            $prompt ? ['label' => self::fr('guidance.already_show_label'), 'prompt' => $prompt] : null,
             $extra,
         );
     }
@@ -88,9 +94,8 @@ class ProposalGuidanceException extends HttpException
         return new self(
             409,
             'conflict',
-            "Quelqu'un l'a déjà traité : cette demande a été annulée et rien n'a été créé. "
-                . "Si besoin, refaites la demande : « {$redraftPrompt} ».",
-            ['label' => 'Refaire la demande', 'prompt' => $redraftPrompt],
+            self::fr('guidance.conflict', ['prompt' => $redraftPrompt]),
+            ['label' => self::fr('guidance.redraft_label'), 'prompt' => $redraftPrompt],
             ['proposal_id' => $proposal->id, 'action' => $proposal->action],
         );
     }
@@ -100,9 +105,8 @@ class ProposalGuidanceException extends HttpException
         return new self(
             403,
             'forbidden',
-            "Action refusée : {$reason} Rien n'a été créé. "
-                . 'Vérifiez votre rôle ou demandez à un administrateur.',
-            ['label' => 'Voir mes actions possibles', 'prompt' => 'Que puis-je faire avec mon rôle ?'],
+            self::fr('guidance.refused', ['reason' => $reason]),
+            ['label' => self::fr('guidance.refused_label'), 'prompt' => self::fr('guidance.refused_prompt')],
             ['proposal_id' => $proposal->id, 'action' => $proposal->action],
         );
     }
@@ -112,7 +116,7 @@ class ProposalGuidanceException extends HttpException
         return new self(
             403,
             'forbidden',
-            "Cette proposition appartient à un autre utilisateur. Rien n'a été créé sur votre compte.",
+            self::fr('guidance.owner_mismatch'),
             null,
             ['proposal_id' => $proposal->id],
         );
