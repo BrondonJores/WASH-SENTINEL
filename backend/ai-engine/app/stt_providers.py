@@ -13,17 +13,22 @@ import httpx
 #: Langues vocales prises en charge de bout en bout (console -> relais -> moteur).
 #: Le Cameroun est bilingue FR/EN : "en" est accepté partout (STT -l en,
 #: TTS MMS eng, validation Laravel, schools.default_language='en').
-SUPPORTED_VOICE_LANGUAGES: set[str] = {"fr", "en", "dua_Latn", "bassa", "ewondo"}
+#: "bbj_Latn" (ghomala') : couvert nativement par Meta Omnilingual ASR
+#: (driver omnilingual_ctc, cf. app/stt_omnilingual.py).
+SUPPORTED_VOICE_LANGUAGES: set[str] = {"fr", "en", "dua_Latn", "bassa", "ewondo", "bbj_Latn"}
 
 #: Code langue réellement envoyé au binaire whisper.cpp (-l). Whisper.cpp ne
-#: fournit aucun modèle dua/bassa/ewondo : "auto" est un choix délibéré et
+#: fournit aucun modèle dua/bassa/ewondo/bbj : "auto" est un choix délibéré et
 #: documenté (pas une substitution silencieuse), exposé via language_effective.
+#: Pour bbj_Latn (ghomala'), Whisper ne connaît pas la langue : le driver
+#: réel est Omnilingual CTC (Meta Omnilingual ASR couvre bbj_Latn nativement).
 WHISPER_LANG_MAP: dict[str, str] = {
     "fr": "fr",
     "en": "en",
     "dua_Latn": "auto",
     "bassa": "auto",
     "ewondo": "auto",
+    "bbj_Latn": "auto",
 }
 
 #: Prompt métier WASH injecté à Whisper (initial_prompt : --prompt côté
@@ -340,15 +345,55 @@ def _mapping_from_headers(headers: Any) -> dict[str, Any]:
     }
 
 
+def _ensure_ctc_registered() -> bool:
+    """Enregistre OmnilingualCTCProvider (bbj_Latn) dans STT_REGISTRY.
+
+    Import paresseux : app/stt_omnilingual.py importe ce module, un import
+    direct au sommet bouclerait. Retourne True si le driver est joignable.
+    """
+    if "omnilingual_ctc" in STT_REGISTRY:
+        return True
+    provider_cls: type[BaseSTTProvider] | None = None
+    try:
+        from app.stt_omnilingual import OmnilingualCTCProvider as provider_cls
+    except ImportError:
+        try:
+            from .stt_omnilingual import OmnilingualCTCProvider as provider_cls
+        except ImportError:
+            return False
+    if provider_cls is None:
+        return False
+    STT_REGISTRY["omnilingual_ctc"] = provider_cls
+    return True
+
+
+def _ctc_from_mapping(mapping: dict[str, Any]) -> BaseSTTProvider:
+    """Instancie le driver omnilingual_ctc, ou erreur explicite.
+
+    Jamais de repli silencieux vers Whisper : un driver explicitement
+    demandé mais injoignable est une panne franche, pas un "auto".
+    """
+    if not _ensure_ctc_registered():
+        raise RuntimeError(
+            "Driver omnilingual_ctc indisponible "
+            "(module app/stt_omnilingual.py introuvable)."
+        )
+    return STT_REGISTRY["omnilingual_ctc"].from_mapping(mapping)
+
+
 def stt_from_headers(headers: Any) -> BaseSTTProvider:
     mapping = _mapping_from_headers(headers)
     driver = (mapping.get("driver") or "whisper_cpp").lower()
+    if driver == "omnilingual_ctc":
+        return _ctc_from_mapping(mapping)
     provider_cls = STT_REGISTRY.get(driver, WhisperCppProvider)
     return provider_cls.from_mapping(mapping)
 
 
 def stt_from_profile(profile: dict[str, Any]) -> BaseSTTProvider:
     driver = (profile.get("driver") or "whisper_cpp").lower()
+    if driver == "omnilingual_ctc":
+        return _ctc_from_mapping(profile)
     provider_cls = STT_REGISTRY.get(driver, WhisperCppProvider)
     return provider_cls.from_mapping(profile)
 
@@ -384,6 +429,21 @@ STT_PROVIDER_TYPES: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "omnilingual_ctc",
+        "label": "Omnilingual CTC (ghomala', 1600+ langues)",
+        "description": "Meta Omnilingual ASR CTC : ghomala' (bbj_Latn) natif, 1600+ langues, 100 % CPU. ONNX int8 via sherpa-onnx si installé, sinon checkpoint transformers.",
+        "api_key_required": False,
+        "local_languages": True,
+        "fields": [
+            {"name": "model", "label": "Modèle ONNX (.onnx)", "type": "text", "default": "/models/omnilingual/model.int8.onnx", "required": True},
+            {"name": "tokens", "label": "Fichier tokens (tokens.txt)", "type": "text", "default": "/models/omnilingual/tokens.txt", "required": True},
+            {"name": "hf_model", "label": "Checkpoint HF (repli transformers)", "type": "text", "default": "facebook/omniASR-CTC-300M", "required": False},
+            {"name": "backend", "label": "Backend (auto/sherpa/transformers)", "type": "text", "default": "auto", "required": False},
+            {"name": "threads", "label": "Threads CPU", "type": "number", "default": "2", "required": False},
+            {"name": "timeout", "label": "Timeout (s)", "type": "number", "default": "180", "required": False},
+        ],
+    },
+    {
         "id": "cloud_whisper",
         "label": "API cloud (OpenAI / Groq)",
         "description": "Endpoint /audio/transcriptions compatible OpenAI. Nécessite une clé API.",
@@ -397,3 +457,19 @@ STT_PROVIDER_TYPES: list[dict[str, Any]] = [
         ],
     },
 ]
+
+
+# Enregistrement eager du driver CTC (bbj_Latn) : best-effort. En cas
+# d'import circulaire partiel (stt_omnilingual importe ce module), le lazy
+# _ensure_ctc_registered() des fabriques prend le relais au premier usage.
+try:
+    from app.stt_omnilingual import OmnilingualCTCProvider as _OmnilingualCTC
+
+    STT_REGISTRY.setdefault("omnilingual_ctc", _OmnilingualCTC)
+except ImportError:
+    try:
+        from .stt_omnilingual import OmnilingualCTCProvider as _OmnilingualCTC
+
+        STT_REGISTRY.setdefault("omnilingual_ctc", _OmnilingualCTC)
+    except ImportError:
+        pass
