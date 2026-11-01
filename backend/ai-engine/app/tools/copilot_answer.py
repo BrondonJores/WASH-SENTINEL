@@ -10,6 +10,13 @@ from __future__ import annotations
 import unicodedata
 from typing import Any
 
+from ..decision_agent import (
+    DECISION_MONITOR_MIN_INCIDENTS,
+    DECISION_MONITOR_MIN_RATIO_PCT,
+    DECISION_REPLACE_MIN_DAYS_OFF,
+    DECISION_REPLACE_MIN_INCIDENTS,
+    DECISION_REPLACE_MIN_RATIO_PCT,
+)
 from ..schemas import AgentCard
 
 TOOL_NAME = "copilot_answer"
@@ -80,6 +87,19 @@ _RECO_LABELS = {
     "PRIORITIZE": "traiter l'école la plus touchée en priorité",
 }
 
+# --- LOT 3 : constantes locales (valeurs historiques inchangées) ---
+# Les seuils d'arbitrage (_recommend) sont IMPORTÉS de decision_agent
+# (source unique, zéro recopie) ; ci-dessous les réglages propres au plugin.
+
+#: Longueur min d'un token distinctif pour citer une école (anti-bruit).
+SCHOOL_TOKEN_MIN_LEN = 4
+
+#: Enveloppe budget : remplacement = coût ×1.2 (marge), sinon coût ×0.5
+#: avec plancher 100 000 XAF (maintenance préventive minimale).
+BUDGET_REPLACE_MARGIN = 1.2
+BUDGET_MAINTAIN_FRACTION = 0.5
+BUDGET_MIN_ENVELOPE_XAF = 100000.0
+
 
 def _norm(text: Any) -> str:
     """Minuscules sans accents (comparaisons floues déterministes)."""
@@ -129,7 +149,7 @@ def _detect_school(question_norm: str, context: dict[str, Any]) -> dict[str, Any
             best, best_len = school, len(name_norm)
             continue
         for token in name_norm.replace("-", " ").split():
-            if len(token) >= 4 and token not in _SCHOOL_STOPWORDS:
+            if len(token) >= SCHOOL_TOKEN_MIN_LEN and token not in _SCHOOL_STOPWORDS:
                 if token in question_norm and len(token) > best_len:
                     best, best_len = school, len(token)
     return best
@@ -144,10 +164,13 @@ def _detect_topic(question_norm: str) -> str:
 
 
 def _recommend(incident_count: int, ratio: float, days: int) -> str:
-    """Arbitrage calqué sur la règle DecisionAgent : >= 4 pannes -> REPLACE."""
-    if incident_count >= 4 or ratio >= 55.0 or days >= 30:
+    """Arbitrage calqué sur la règle DecisionAgent : >= 4 pannes -> REPLACE.
+
+    Seuils IMPORTÉS de decision_agent (source unique, zéro recopie).
+    """
+    if incident_count >= DECISION_REPLACE_MIN_INCIDENTS or ratio >= DECISION_REPLACE_MIN_RATIO_PCT or days >= DECISION_REPLACE_MIN_DAYS_OFF:
         return "REPLACE"
-    if incident_count >= 2 or ratio >= 30.0:
+    if incident_count >= DECISION_MONITOR_MIN_INCIDENTS or ratio >= DECISION_MONITOR_MIN_RATIO_PCT:
         return "MONITOR"
     return "MAINTAIN"
 
@@ -178,7 +201,7 @@ def _advise_school(
     label = _RECO_LABELS[reco]
 
     if topic == "budget":
-        envelope = max(replacement, cost * 1.2) if reco == "REPLACE" else max(cost * 0.5, 100000.0)
+        envelope = max(replacement, cost * BUDGET_REPLACE_MARGIN) if reco == "REPLACE" else max(cost * BUDGET_MAINTAIN_FRACTION, BUDGET_MIN_ENVELOPE_XAF)
         insight = (
             f"{name} cumule {_fmt_xaf(cost)} XAF de dépenses pour {count} pannes, "
             f"soit {ratio} % du coût d'un équipement neuf ({_fmt_xaf(replacement)} XAF). "
@@ -189,7 +212,7 @@ def _advise_school(
         insight = (
             f"{name} subit des pannes à répétition : {count} pannes et {days} jours "
             f"sans service au total, dont {opened} incidents encore ouverts. "
-            f"Avec {count} pannes (seuil de 4 atteint : {('oui' if count >= 4 else 'non')}), "
+            f"Avec {count} pannes (seuil de {DECISION_REPLACE_MIN_INCIDENTS} atteint : {('oui' if count >= DECISION_REPLACE_MIN_INCIDENTS else 'non')}), "
             f"les dépannages répétés coûtent plus cher qu'une solution durable. "
             f"Recommandation : {label}."
         )

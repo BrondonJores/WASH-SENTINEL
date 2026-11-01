@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import date
 from typing import Any
 from .providers import BaseLLMProvider
 from .schemas import (
@@ -24,6 +26,46 @@ Règles de style :
 """
 
 
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+# --- LOT 3 : matrice Réparer vs Remplacer (seuils historiques inchangés) ---
+# Source unique des seuils décisionnels : tools/copilot_answer.py les importe
+# (zéro recopie) et recurrence_watch.py reprend les mêmes valeurs agrégées.
+
+#: Remplacement : ratio dépenses/neuf ≥55 %, ou ≥4 pannes, ou ≥30 j sans eau.
+DECISION_REPLACE_MIN_RATIO_PCT = _env_float("DECISION_REPLACE_MIN_RATIO_PCT", 55.0)
+DECISION_REPLACE_MIN_INCIDENTS = _env_int("DECISION_REPLACE_MIN_INCIDENTS", 4)
+DECISION_REPLACE_MIN_DAYS_OFF = _env_int("DECISION_REPLACE_MIN_DAYS_OFF", 30)
+
+#: Économie estimée : 45 % des réparations cumulées sur 24 mois.
+DECISION_REPAIR_SAVING_RATIO = _env_float("DECISION_REPAIR_SAVING_RATIO", 0.45)
+DECISION_SAVING_HORIZON_MONTHS = _env_int("DECISION_SAVING_HORIZON_MONTHS", 24)
+
+#: Surveillance renforcée : ratio ≥30 % ou ≥2 pannes.
+DECISION_MONITOR_MIN_RATIO_PCT = _env_float("DECISION_MONITOR_MIN_RATIO_PCT", 30.0)
+DECISION_MONITOR_MIN_INCIDENTS = _env_int("DECISION_MONITOR_MIN_INCIDENTS", 2)
+
+
 class DecisionAgent:
     def __init__(self, llm: BaseLLMProvider):
         self.llm = llm
@@ -37,20 +79,20 @@ class DecisionAgent:
         repl_cost = max(school.estimated_replacement_cost, 1.0)
         ratio = round((school.total_repair_cost / repl_cost) * 100.0, 1)
 
-        # Années de service estimées
-        years_in_service = max(1, 2026 - (school.installation_year or 2021))
+        # Années de service estimées (LOT 3 : année courante réelle, plus 2026 figé).
+        years_in_service = max(1, date.today().year - (school.installation_year or 2021))
         annual_failure_rate = round(school.incident_count / float(years_in_service), 1)
 
         # Règle d'arbitrage
-        if ratio >= 55.0 or school.incident_count >= 4 or school.total_days_without_service >= 30:
+        if ratio >= DECISION_REPLACE_MIN_RATIO_PCT or school.incident_count >= DECISION_REPLACE_MIN_INCIDENTS or school.total_days_without_service >= DECISION_REPLACE_MIN_DAYS_OFF:
             recommendation = "REPLACE_EQUIPMENT"
-            saving_text = f"Économie estimée à {int(school.total_repair_cost * 0.45):,} FCFA sur les 24 prochains mois en stoppant les réparations à répétition."
+            saving_text = f"Économie estimée à {int(school.total_repair_cost * DECISION_REPAIR_SAVING_RATIO):,} FCFA sur les {DECISION_SAVING_HORIZON_MONTHS} prochains mois en stoppant les réparations à répétition."
             justification = (
                 f"L'école {school.school_name} a déjà dépensé {ratio}% de la valeur d'une installation neuve en réparations ({school.incident_count} pannes subies). "
                 f"Avec {school.total_days_without_service} jours cumulés sans eau potable, la maintenance corrective permanente coûte plus cher qu'un remplacement pérenne."
             )
             suggested = "Remplacement par un système de pompage solaire immergé avec cuve tampon surélevée (Garantie 10 ans, maintenance minimale)."
-        elif ratio >= 30.0 or school.incident_count >= 2:
+        elif ratio >= DECISION_MONITOR_MIN_RATIO_PCT or school.incident_count >= DECISION_MONITOR_MIN_INCIDENTS:
             recommendation = "MONITOR_CLOSELY"
             saving_text = "Optimisation possible par un contrat de maintenance préventive semestrielle."
             justification = (
@@ -170,7 +212,7 @@ Rédige une réponse d'aide à la décision percutante pour l'opérateur, compre
             answer_text = (
                 "Réponse de secours sans LLM — chiffres issus des tools déterministes. "
                 f"Sur les {len(schools_data)} écoles analysées, **{len(replace_targets)} établissement(s)** ont franchi le seuil critique d'inefficacité budgétaire. "
-                f"Dans ces écoles, les factures de réparations successives représentent plus de 55% du prix d'une installation neuve. "
+                f"Dans ces écoles, les factures de réparations successives représentent plus de {DECISION_REPLACE_MIN_RATIO_PCT:g}% du prix d'une installation neuve. "
                 f"Nous recommandons un **remplacement immédiat par des forages solaires** pour éliminer les pannes chroniques et sécuriser l'eau des élèves."
             )
 
@@ -179,7 +221,7 @@ Rédige une réponse d'aide à la décision percutante pour l'opérateur, compre
             degraded = True
             actions = [
                 f"Inscrire en priorité d'investissement Capex les écoles : {', '.join([a.school_name for a in replace_targets]) if replace_targets else 'Aucune urgence absolue'}",
-                "Geler les bons de commande de réparations palliatives pour les équipements ayant dépassé 55% de ratio de vétusté",
+                f"Geler les bons de commande de réparations palliatives pour les équipements ayant dépassé {DECISION_REPLACE_MIN_RATIO_PCT:g}% de ratio de vétusté",
                 "Négocier un contrat d'achat groupé de kits solaires pour réduire les coûts unitaires de 20%"
             ]
 

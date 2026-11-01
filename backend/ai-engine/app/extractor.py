@@ -71,6 +71,58 @@ CONFIDENCE_MAX = 0.95
 #: fournit pas short_summary).
 SUMMARY_FALLBACK_MAX_CHARS = 120
 
+# --- LOT 3 : table pannes canonique UNIQUE (normalisation des types) ---
+# Définie ici UNE SEULE FOIS, importée par app/recurrence_watch.py (zéro
+# recopie). Couche distincte du filet de détection `_ISSUE_KEYWORDS`
+# (motifs substring + négation à portée, ordre non-régressif inchangé) :
+# ici, normalisation exacte alias -> code canonique + libellés français
+# pluriels pour les raisons explicites. Contenu historiquement identique
+# à l'ancien `_ISSUE_ALIASES` / `_ISSUE_LABELS` de recurrence_watch.
+
+#: Libellés français pluriels par type de panne canonique.
+ISSUE_TYPE_LABELS: dict[str, str] = {
+    "leak": "fuites",
+    "total_breakdown": "pannes totales",
+    "contamination": "contaminations",
+    "blockage": "obstructions",
+    "dry_well": "assèchements de puits",
+    "vandalism": "actes de vandalisme",
+    "other": "pannes",
+}
+
+#: Alias tolérés (codes + libellés français courants, clés pré-repliées
+#: sans accents : cf. `_normalize_issue` côté recurrence_watch) -> code.
+ISSUE_TYPE_ALIASES: dict[str, str] = {
+    "leak": "leak",
+    "fuite": "leak",
+    "fuites": "leak",
+    "total_breakdown": "total_breakdown",
+    "total breakdown": "total_breakdown",
+    "breakdown": "total_breakdown",
+    "panne totale": "total_breakdown",
+    "pompe hs": "total_breakdown",
+    "pompe cassee": "total_breakdown",
+    "contamination": "contamination",
+    "eau contaminee": "contamination",
+    "pollution": "contamination",
+    "blockage": "blockage",
+    "obstruction": "blockage",
+    "bouchon": "blockage",
+    "bouche": "blockage",
+    "bouchee": "blockage",
+    "dry_well": "dry_well",
+    "dry well": "dry_well",
+    "assechement": "dry_well",
+    "puits sec": "dry_well",
+    "vandalism": "vandalism",
+    "vandalisme": "vandalism",
+    "vol": "vandalism",
+    "other": "other",
+    "autre": "other",
+    "unknown": "other",
+    "": "other",
+}
+
 
 class WashExtractor:
     def __init__(self, llm: BaseLLMProvider):

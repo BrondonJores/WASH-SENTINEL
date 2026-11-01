@@ -42,9 +42,11 @@ Règles de prudence documentées :
 
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from .extractor import ISSUE_TYPE_ALIASES, ISSUE_TYPE_LABELS
 from .schemas import SchoolMaintenanceHistory
 
 __all__ = [
@@ -64,26 +66,55 @@ __all__ = [
 
 # ================= Seuils nommés (voir docstring du module) =================
 
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 #: Fenêtre glissante d'observation en jours (≈ un trimestre scolaire).
-RECURRENCE_WINDOW_DAYS = 90
+#: Override ENV : RECURRENCE_WINDOW_DAYS (défaut historique 90).
+RECURRENCE_WINDOW_DAYS = _env_int("RECURRENCE_WINDOW_DAYS", 90)
 
 #: Occurrences d'un même type sur la fenêtre → niveau "high" (panne chronique).
-HIGH_SAME_TYPE_COUNT = 3
+#: Override ENV : RECURRENCE_HIGH_SAME_TYPE_COUNT (défaut historique 3).
+HIGH_SAME_TYPE_COUNT = _env_int("RECURRENCE_HIGH_SAME_TYPE_COUNT", 3)
 
 #: Occurrences d'un même type sur la fenêtre → niveau "watch" (vigilance).
-WATCH_SAME_TYPE_COUNT = 2
+#: Override ENV : RECURRENCE_WATCH_SAME_TYPE_COUNT (défaut historique 2).
+WATCH_SAME_TYPE_COUNT = _env_int("RECURRENCE_WATCH_SAME_TYPE_COUNT", 2)
 
 #: Intervalle moyen (jours) sous lequel, combiné à une diminution, on alerte.
-MEAN_INTERVAL_ALERT_DAYS = 30.0
+#: Override ENV : RECURRENCE_MEAN_INTERVAL_ALERT_DAYS (défaut historique 30.0).
+MEAN_INTERVAL_ALERT_DAYS = _env_float("RECURRENCE_MEAN_INTERVAL_ALERT_DAYS", 30.0)
 
 #: Historique agrégé : pannes cumulées → "high" (cohérence decision_agent).
-AGGREGATE_HIGH_INCIDENT_COUNT = 4
+#: Override ENV : RECURRENCE_AGGREGATE_HIGH_INCIDENT_COUNT (défaut historique 4).
+AGGREGATE_HIGH_INCIDENT_COUNT = _env_int("RECURRENCE_AGGREGATE_HIGH_INCIDENT_COUNT", 4)
 
 #: Historique agrégé : pannes cumulées → "watch" (cohérence decision_agent).
-AGGREGATE_WATCH_INCIDENT_COUNT = 2
+#: Override ENV : RECURRENCE_AGGREGATE_WATCH_INCIDENT_COUNT (défaut historique 2).
+AGGREGATE_WATCH_INCIDENT_COUNT = _env_int("RECURRENCE_AGGREGATE_WATCH_INCIDENT_COUNT", 2)
 
 #: Historique agrégé : jours sans service → "high" (cohérence decision_agent).
-AGGREGATE_CRITICAL_DAYS_OFF = 30
+#: Override ENV : RECURRENCE_AGGREGATE_CRITICAL_DAYS_OFF (défaut historique 30).
+AGGREGATE_CRITICAL_DAYS_OFF = _env_int("RECURRENCE_AGGREGATE_CRITICAL_DAYS_OFF", 30)
 
 
 #: Champs reconnus pour le type de panne (ordre de priorité).
@@ -92,48 +123,11 @@ _TYPE_FIELDS = ("issue_type", "category", "issue", "type")
 #: Champs reconnus pour la date de panne (ordre de priorité).
 _DATE_FIELDS = ("occurred_at", "reported_at", "created_at", "incident_date", "date")
 
-#: Libellés français pluriels par type (pour des raisons explicites).
-_ISSUE_LABELS = {
-    "leak": "fuites",
-    "total_breakdown": "pannes totales",
-    "contamination": "contaminations",
-    "blockage": "obstructions",
-    "dry_well": "assèchements de puits",
-    "vandalism": "actes de vandalisme",
-    "other": "pannes",
-}
-
-#: Alias tolérés (codes + libellés français courants) → type canonique.
-_ISSUE_ALIASES = {
-    "leak": "leak",
-    "fuite": "leak",
-    "fuites": "leak",
-    "total_breakdown": "total_breakdown",
-    "total breakdown": "total_breakdown",
-    "breakdown": "total_breakdown",
-    "panne totale": "total_breakdown",
-    "pompe hs": "total_breakdown",
-    "pompe cassee": "total_breakdown",
-    "contamination": "contamination",
-    "eau contaminee": "contamination",
-    "pollution": "contamination",
-    "blockage": "blockage",
-    "obstruction": "blockage",
-    "bouchon": "blockage",
-    "bouche": "blockage",
-    "bouchee": "blockage",
-    "dry_well": "dry_well",
-    "dry well": "dry_well",
-    "assechement": "dry_well",
-    "puits sec": "dry_well",
-    "vandalism": "vandalism",
-    "vandalisme": "vandalism",
-    "vol": "vandalism",
-    "other": "other",
-    "autre": "other",
-    "unknown": "other",
-    "": "other",
-}
+#: Table pannes canonique (LOT 3) : définie UNE SEULE FOIS dans
+#: app/extractor.py (ISSUE_TYPE_LABELS / ISSUE_TYPE_ALIASES), importée ici
+#: sous les noms historiques privés (mêmes objets, comportement inchangé).
+_ISSUE_LABELS = ISSUE_TYPE_LABELS
+_ISSUE_ALIASES = ISSUE_TYPE_ALIASES
 
 
 #: Table interne des actions préventives par type de panne.

@@ -27,6 +27,7 @@ Limites honnêtes :
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from typing import Any
 
@@ -64,21 +65,41 @@ Règles :
 # Constantes de réglage (justification sous chacune — validées le 2026-10-31)
 # ---------------------------------------------------------------------------
 
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 #: Incidents pris en compte : signalés il y a au plus 7 jours (inclus).
 #: Justification : incubation choléra/diarrhées (quelques heures à 5 j) +
 #: délai de remontée terrain ; au-delà, le lien épidémiologique est douteux
 #: et les vieux incidents gonfleraient artificiellement les grappes.
-CLUSTER_WINDOW_DAYS = 7
+#: Override ENV : EPIDEMIC_CLUSTER_WINDOW_DAYS (défaut historique 7).
+CLUSTER_WINDOW_DAYS = _env_int("EPIDEMIC_CLUSTER_WINDOW_DAYS", 7)
 
 #: Écoles distinctes avec signal FORT requises pour le niveau maximal.
 #: Justification : 3 écoles = diffusion communautaire probable (source
 #: commune : nappe, réseau), pas un incident isolé ; calibre la fixture (a).
-OUTBREAK_MIN_STRONG_SCHOOLS = 3
+#: Override ENV : EPIDEMIC_OUTBREAK_MIN_STRONG_SCHOOLS (défaut historique 3).
+OUTBREAK_MIN_STRONG_SCHOOLS = _env_int("EPIDEMIC_OUTBREAK_MIN_STRONG_SCHOOLS", 3)
 
 #: Écoles distinctes avec signal FORT requises pour le niveau ``high``.
 #: Justification : 2 écoles = suspicion sérieuse mais pas encore de grappe
 #: avérée ; déclenche l'alerte (riposte) sans le niveau maximal.
-HIGH_MIN_STRONG_SCHOOLS = 2
+#: Override ENV : EPIDEMIC_HIGH_MIN_STRONG_SCHOOLS (défaut historique 2).
+HIGH_MIN_STRONG_SCHOOLS = _env_int("EPIDEMIC_HIGH_MIN_STRONG_SCHOOLS", 2)
+
+#: Écoles avec signal (fort OU faible) requises pour le niveau ``moderate``.
+#: Justification : 1 école = signal isolé à surveiller, sans riposte ;
+#: en dessous (0), bruit de fond -> ``normal``.
+#: Override ENV : EPIDEMIC_MODERATE_MIN_SCHOOLS (défaut historique 1).
+MODERATE_MIN_SCHOOLS = _env_int("EPIDEMIC_MODERATE_MIN_SCHOOLS", 1)
 
 #: Table unique des signaux sanitaires (AXE 3, cf. textnorm.HEALTH_SIGNALS) :
 #: (motif replié, force, frontière word|subword, niable). Partagée avec
@@ -174,7 +195,7 @@ class EpidemicDetector:
             return "outbreak_warning", True
         if strong_schools >= HIGH_MIN_STRONG_SCHOOLS:
             return "high", True
-        if strong_schools >= 1 or weak_schools >= 1:
+        if strong_schools >= MODERATE_MIN_SCHOOLS or weak_schools >= MODERATE_MIN_SCHOOLS:
             return "moderate", False
         return "normal", False
 

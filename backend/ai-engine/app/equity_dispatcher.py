@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 from .providers import BaseLLMProvider
 from .schemas import (
@@ -25,6 +26,82 @@ Ton ton doit être républicain, impartial, factuel et bienveillant.
 """
 
 
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+# --- LOT 3 : formule d'équité centralisée (valeurs historiques inchangées) ---
+
+#: Normalisation de la privation d'eau : saturation à 20 jours sans eau.
+EQUITY_WATER_NORM_DAYS = _env_float("EQUITY_WATER_NORM_DAYS", 20.0)
+
+#: Table urgence sanitaire -> sous-score /100 (niveaux nommés + override ENV).
+EQUITY_URGENCY_LOW = _env_float("EQUITY_URGENCY_LOW", 15.0)
+EQUITY_URGENCY_MEDIUM = _env_float("EQUITY_URGENCY_MEDIUM", 45.0)
+EQUITY_URGENCY_HIGH = _env_float("EQUITY_URGENCY_HIGH", 75.0)
+EQUITY_URGENCY_CRITICAL = _env_float("EQUITY_URGENCY_CRITICAL", 100.0)
+EQUITY_URGENCY_SCORES = {
+    "low": EQUITY_URGENCY_LOW,
+    "medium": EQUITY_URGENCY_MEDIUM,
+    "high": EQUITY_URGENCY_HIGH,
+    "critical": EQUITY_URGENCY_CRITICAL,
+}
+
+#: Clamp du ratio de filles (évite les extrêmes 0 % / 100 %).
+EQUITY_FEMALE_RATIO_MIN = _env_float("EQUITY_FEMALE_RATIO_MIN", 0.3)
+EQUITY_FEMALE_RATIO_MAX = _env_float("EQUITY_FEMALE_RATIO_MAX", 0.7)
+
+#: Normalisation latrines HS : saturation à 4 WC ; plancher 0.1 sans panne.
+EQUITY_LATRINE_NORM_COUNT = _env_float("EQUITY_LATRINE_NORM_COUNT", 4.0)
+EQUITY_LATRINE_BASELINE_SCORE = _env_float("EQUITY_LATRINE_BASELINE_SCORE", 0.1)
+
+#: Amplificateur genre (pondère le risque de décrochage des filles).
+EQUITY_GENDER_AMPLIFIER = _env_float("EQUITY_GENDER_AMPLIFIER", 1.5)
+
+#: Rattrapage isolement : 70 km -> 50 pts max, 18 mois d'oubli -> 50 pts max.
+EQUITY_DISTANCE_NORM_KM = _env_float("EQUITY_DISTANCE_NORM_KM", 70.0)
+EQUITY_DISTANCE_MAX_POINTS = _env_float("EQUITY_DISTANCE_MAX_POINTS", 50.0)
+EQUITY_ABANDON_NORM_MONTHS = _env_float("EQUITY_ABANDON_NORM_MONTHS", 18.0)
+EQUITY_ABANDON_MAX_POINTS = _env_float("EQUITY_ABANDON_MAX_POINTS", 50.0)
+
+#: Poids du score global (somme = 1.0) : eau 30 / urgence 25 / genre 25 / isolement 20.
+EQUITY_WEIGHT_WATER = _env_float("EQUITY_WEIGHT_WATER", 0.30)
+EQUITY_WEIGHT_URGENCY = _env_float("EQUITY_WEIGHT_URGENCY", 0.25)
+EQUITY_WEIGHT_GENDER = _env_float("EQUITY_WEIGHT_GENDER", 0.25)
+EQUITY_WEIGHT_ISOLATION = _env_float("EQUITY_WEIGHT_ISOLATION", 0.20)
+
+#: Seuils du motif d'équité affiché : ≥10 j sans eau, ≥2 latrines HS, ≥40 km.
+EQUITY_REASON_MIN_DAYS_WITHOUT_WATER = _env_int("EQUITY_REASON_MIN_DAYS_WITHOUT_WATER", 10)
+EQUITY_REASON_MIN_BROKEN_TOILETS = _env_int("EQUITY_REASON_MIN_BROKEN_TOILETS", 2)
+EQUITY_REASON_MIN_ISOLATION_KM = _env_int("EQUITY_REASON_MIN_ISOLATION_KM", 40)
+
+#: Tournées : écoles groupées si écart ≤18 km, économie aller-retour ×1.6, max 2 embarquées.
+EQUITY_ROUTE_MAX_DIST_DIFF_KM = _env_float("EQUITY_ROUTE_MAX_DIST_DIFF_KM", 18.0)
+EQUITY_ROUTE_SAVED_KM_FACTOR = _env_float("EQUITY_ROUTE_SAVED_KM_FACTOR", 1.6)
+EQUITY_ROUTE_MAX_PIGGYBACK = _env_int("EQUITY_ROUTE_MAX_PIGGYBACK", 2)
+
+#: Longueur min d'une note de transparence LLM recevable (sinon repli statique).
+EQUITY_TRANSPARENCY_NOTE_MIN_CHARS = _env_int("EQUITY_TRANSPARENCY_NOTE_MIN_CHARS", 100)
+
+
 class EquityDispatcher:
     def __init__(self, llm: BaseLLMProvider):
         self.llm = llm
@@ -38,39 +115,38 @@ class EquityDispatcher:
         - 20% Rattrapage de l'isolement géographique et historique d'abandon
         """
         # 1. Privation Eau (Poids 30%)
-        water_score = min(school.days_without_water / 20.0, 1.0) * 100.0
+        water_score = min(school.days_without_water / EQUITY_WATER_NORM_DAYS, 1.0) * 100.0
 
         # 2. Urgence sanitaire (Poids 25%)
-        urgency_weights = {"low": 15.0, "medium": 45.0, "high": 75.0, "critical": 100.0}
-        urgency_score = urgency_weights.get(school.urgency_level, 45.0)
+        urgency_score = EQUITY_URGENCY_SCORES.get(school.urgency_level, EQUITY_URGENCY_MEDIUM)
 
         # 3. Impact Genre & Latrines (Poids 25%)
         tot = max(school.total_students, 1)
-        female_ratio = min(max(school.female_students / float(tot), 0.3), 0.7)
-        latrine_penalty = min(school.broken_toilets / 4.0, 1.0) if school.broken_toilets > 0 else 0.1
-        gender_score = (female_ratio * 1.5) * latrine_penalty * 100.0
+        female_ratio = min(max(school.female_students / float(tot), EQUITY_FEMALE_RATIO_MIN), EQUITY_FEMALE_RATIO_MAX)
+        latrine_penalty = min(school.broken_toilets / EQUITY_LATRINE_NORM_COUNT, 1.0) if school.broken_toilets > 0 else EQUITY_LATRINE_BASELINE_SCORE
+        gender_score = (female_ratio * EQUITY_GENDER_AMPLIFIER) * latrine_penalty * 100.0
 
         # 4. Rattrapage Isolement géographique & Oubli historique (Poids 20%)
-        distance_comp = min(school.distance_from_center_km / 70.0, 1.0) * 50.0
-        abandon_comp = min(school.months_since_last_intervention / 18.0, 1.0) * 50.0
+        distance_comp = min(school.distance_from_center_km / EQUITY_DISTANCE_NORM_KM, 1.0) * EQUITY_DISTANCE_MAX_POINTS
+        abandon_comp = min(school.months_since_last_intervention / EQUITY_ABANDON_NORM_MONTHS, 1.0) * EQUITY_ABANDON_MAX_POINTS
         isolation_score = distance_comp + abandon_comp
 
         # Score global pondéré
         total_score = (
-            (water_score * 0.30)
-            + (urgency_score * 0.25)
-            + (gender_score * 0.25)
-            + (isolation_score * 0.20)
+            (water_score * EQUITY_WEIGHT_WATER)
+            + (urgency_score * EQUITY_WEIGHT_URGENCY)
+            + (gender_score * EQUITY_WEIGHT_GENDER)
+            + (isolation_score * EQUITY_WEIGHT_ISOLATION)
         )
         total_score = round(min(max(total_score, 0.0), 100.0), 1)
 
         # Motif principal d'équité
         reasons = []
-        if school.days_without_water >= 10:
+        if school.days_without_water >= EQUITY_REASON_MIN_DAYS_WITHOUT_WATER:
             reasons.append(f"{school.days_without_water}j sans eau")
-        if school.broken_toilets >= 2:
+        if school.broken_toilets >= EQUITY_REASON_MIN_BROKEN_TOILETS:
             reasons.append(f"Latrines HS ({school.female_students} filles menacées de décrochage)")
-        if school.distance_from_center_km >= 40:
+        if school.distance_from_center_km >= EQUITY_REASON_MIN_ISOLATION_KM:
             reasons.append(f"Zone isolée ({school.distance_from_center_km}km)")
         if school.urgency_level == "critical":
             reasons.append("Urgence critique immédiate")
@@ -109,12 +185,12 @@ class EquityDispatcher:
 
                 # Calcul de proximité relative
                 dist_diff = abs(primary_profile.distance_from_center_km - other_profile.distance_from_center_km)
-                if dist_diff <= 18.0:
+                if dist_diff <= EQUITY_ROUTE_MAX_DIST_DIFF_KM:
                     visited.add(other_item.school_id)
                     piggybacked.append(other_item.school_name)
                     # Économie d'un aller-retour complet
-                    saved_km += round(other_profile.distance_from_center_km * 1.6, 1)
-                    if len(piggybacked) >= 2:
+                    saved_km += round(other_profile.distance_from_center_km * EQUITY_ROUTE_SAVED_KM_FACTOR, 1)
+                    if len(piggybacked) >= EQUITY_ROUTE_MAX_PIGGYBACK:
                         break
 
             axis_name = f"Axe {primary_profile.district} (Direction {primary_profile.school_name})"
@@ -192,7 +268,7 @@ Top 3 des écoles prioritaires selon l'algorithme d'équité :
         except Exception:
             transparency_note = ""
 
-        if not transparency_note or len(transparency_note) < 100:
+        if not transparency_note or len(transparency_note) < EQUITY_TRANSPARENCY_NOTE_MIN_CHARS:
             top_school = ranked[0].school_name if ranked else "N/A"
             transparency_note = (
                 f"NOTE OFFICIELLE DE TRANSPARENCE TERRITORIALE - DISTRICT {req.district.upper()}\n\n"
