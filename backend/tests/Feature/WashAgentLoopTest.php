@@ -6,6 +6,7 @@ use App\Models\AiAnalysis;
 use App\Models\Incident;
 use App\Models\School;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -93,6 +94,63 @@ class WashAgentLoopTest extends TestCase
             str_ends_with($request->url(), '/v1/agent/chat')
             && ($request->data()['guided'] ?? null) === true
         );
+    }
+
+    public function test_transcribe_accepts_english_language(): void
+    {
+        Http::fake([
+            '*/v1/voice/transcribe' => Http::response([
+                'transcript' => 'There is a leak at the borehole.',
+                'language' => 'en',
+                'language_effective' => 'en',
+            ], 200),
+        ]);
+
+        $response = $this->post('/api/v1/wash/agent/transcribe', [
+            'audio' => UploadedFile::fake()->create('note.wav', 10, 'audio/wav'),
+            'language' => 'en',
+        ]);
+
+        $response->assertOk();
+        $response->assertJsonPath('language', 'en');
+        Http::assertSent(fn ($request) =>
+            str_ends_with($request->url(), '/v1/voice/transcribe')
+        );
+    }
+
+    public function test_synthesize_accepts_english_language(): void
+    {
+        Http::fake([
+            '*/v1/voice/synthesize' => Http::response([
+                'audio_base64' => base64_encode('RIFFfake'),
+                'mime_type' => 'audio/wav',
+                'language_effective' => 'en',
+            ], 200),
+        ]);
+
+        $response = $this->postJson('/api/v1/wash/agent/synthesize', [
+            'text' => 'There is a leak at the borehole.',
+            'language' => 'en',
+        ]);
+
+        $response->assertOk();
+        Http::assertSent(fn ($request) =>
+            str_ends_with($request->url(), '/v1/voice/synthesize')
+            && ($request->data()['language'] ?? null) === 'en'
+        );
+    }
+
+    public function test_voice_endpoints_reject_unknown_language(): void
+    {
+        $this->post('/api/v1/wash/agent/transcribe', [
+            'audio' => UploadedFile::fake()->create('note.wav', 10, 'audio/wav'),
+            'language' => 'klingon',
+        ])->assertStatus(422);
+
+        $this->postJson('/api/v1/wash/agent/synthesize', [
+            'text' => 'bonjour',
+            'language' => 'klingon',
+        ])->assertStatus(422);
     }
 
     public function test_converse_guided_absent_payload_unchanged(): void

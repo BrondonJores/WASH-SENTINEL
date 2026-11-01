@@ -70,7 +70,8 @@ GUIDANCE: dict[str, str] = {
     ),
     STT_LANGUAGE: (
         "Cette langue n'est pas encore prise en charge. Voix disponibles : "
-        "français, douala, bassa, ewondo — choisissez-en une, puis réessayez."
+        "français, anglais, douala, bassa, ewondo — choisissez-en une, "
+        "puis réessayez."
     ),
     TTS_EMPTY_TEXT: (
         "Rien à lire pour l'instant. Écrivez ou dictez un message, puis "
@@ -104,11 +105,14 @@ VOICE_LANGUAGE_ALIASES: dict[str, str] = {
     "basaa": "bassa",
     "francais": "fr",
     "français": "fr",
+    "anglais": "en",
+    "english": "en",
 }
 
 #: Libellés FR des langues pour le message de repli MMS explicite.
 VOICE_LANGUAGE_LABELS: dict[str, str] = {
     "fr": "français",
+    "en": "anglaise",
     "dua_Latn": "douala",
     "bassa": "bassa",
     "ewondo": "ewondo",
@@ -143,6 +147,9 @@ TTS_SYNTHESIS_TIMEOUT = 60.0
 #: (TTS_VOICE_UNAVAILABLE), jamais en français silencieux.
 BUILTIN_VOICE_REGISTRY: dict[str, list[str]] = {
     "fr": [DEFAULT_TTS_VOICE],
+    # EN : voix MMS "eng" via driver mms ; en Piper seul, échec bruyant
+    # (jamais de français déguisé en anglais).
+    "en": ["en-medium"],
     "dua_Latn": ["dua_Latn-medium"],
     "bassa": ["bassa-medium"],
     "ewondo": ["ewondo-medium"],
@@ -388,11 +395,11 @@ class VoiceService:
         language: str,
         provider: BaseTTSProvider,
     ) -> VoiceSynthesisResponse:
-        """Voie MMS : langues locales via Meta MMS-TTS, FR via Piper.
+        """Voie MMS : anglais (eng) + langues locales via Meta MMS-TTS, FR via Piper.
 
         MMS indisponible (dépendances, modèle ou synthèse) : repli Piper FR
         automatique + notice FR explicite. Jamais de crash, jamais de silence,
-        jamais de français déguisé en langue locale.
+        jamais de français déguisé en langue demandée.
         """
         if not text or not text.strip():
             raise guided_error(TTS_EMPTY_TEXT)

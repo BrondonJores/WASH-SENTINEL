@@ -130,12 +130,16 @@ class WashAgentController extends Controller
         return response()->json($response);
     }
 
+    // Langues vocales : miroir de SUPPORTED_VOICE_LANGUAGES du moteur
+    // (fr, en, dua_Latn, bassa, ewondo). Le Cameroun est bilingue FR/EN :
+    // schools.default_language peut aussi valoir 'en' pour une école
+    // anglophone (le relais transmet alors language=en au moteur).
     public function synthesize(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate([
             'text' => ['required', 'string', 'max:1000'],
             'voice' => ['nullable', 'string', 'max:64'],
-            'language' => ['nullable', 'string', 'max:16', 'in:fr,dua_Latn,bassa,ewondo'],
+            'language' => ['nullable', 'string', 'max:16', 'in:fr,en,dua_Latn,bassa,ewondo'],
         ]);
 
         return response()->json($ai->synthesize(
@@ -149,7 +153,7 @@ class WashAgentController extends Controller
     {
         $validated = $request->validate([
             'audio' => 'required|file|max:10240',
-            'language' => 'nullable|string|max:16|in:fr,dua_Latn,bassa,ewondo',
+            'language' => 'nullable|string|max:16|in:fr,en,dua_Latn,bassa,ewondo',
         ]);
 
         return response()->json($ai->transcribe(

@@ -11,17 +11,47 @@ import httpx
 
 
 #: Langues vocales prises en charge de bout en bout (console -> relais -> moteur).
-SUPPORTED_VOICE_LANGUAGES: set[str] = {"fr", "dua_Latn", "bassa", "ewondo"}
+#: Le Cameroun est bilingue FR/EN : "en" est accepté partout (STT -l en,
+#: TTS MMS eng, validation Laravel, schools.default_language='en').
+SUPPORTED_VOICE_LANGUAGES: set[str] = {"fr", "en", "dua_Latn", "bassa", "ewondo"}
 
 #: Code langue réellement envoyé au binaire whisper.cpp (-l). Whisper.cpp ne
 #: fournit aucun modèle dua/bassa/ewondo : "auto" est un choix délibéré et
 #: documenté (pas une substitution silencieuse), exposé via language_effective.
 WHISPER_LANG_MAP: dict[str, str] = {
     "fr": "fr",
+    "en": "en",
     "dua_Latn": "auto",
     "bassa": "auto",
     "ewondo": "auto",
 }
+
+#: Prompt métier WASH injecté à Whisper (initial_prompt : --prompt côté
+#: whisper.cpp, champ "prompt" côté API /audio/transcriptions). Il guide la
+#: reconnaissance des noms propres seedés (Bonanjo, Libermann, Bali, Ngok,
+#: Nkol, Édéa, Pouuma, Nyo — cf. WashDemoSeeder) et du vocabulaire eau /
+#: assainissement FR + EN ("Bonanjo" ne doit plus devenir "bon anjon").
+WASH_WHISPER_PROMPT_FR = (
+    "Signalement WASH école : École Publique de Bonanjo, Collège Libermann, "
+    "École Publique de Bali, École Rurale de Ngok, École de Nkol, "
+    "École Publique d'Édéa, École Rurale de Pouuma, École de Nyo. "
+    "Robinet, fuite, panne d'eau, forage, pompe, puits, latrines, "
+    "toilettes, château d'eau, bloc A, bidons, élèves sans eau."
+)
+WASH_WHISPER_PROMPT_EN = (
+    "WASH school report: Bonanjo Public School, Libermann College, "
+    "Bali Public School, Ngok Rural School, Nkol School, Edea Public "
+    "School, Pouuma Rural School, Nyo School. Leak, tap, water outage, "
+    "borehole, pump, well, latrines, toilets, water tower, block A, "
+    "jerrycans, pupils without water."
+)
+
+
+def wash_whisper_prompt(language: str) -> str:
+    """Prompt métier WASH adapté à la langue demandée (EN si "en", FR sinon)."""
+    if (language or "").strip().lower() == "en":
+        return WASH_WHISPER_PROMPT_EN
+    return WASH_WHISPER_PROMPT_FR
 
 #: Valeur renvoyée quand un driver ne peut pas honorer la langue demandée.
 LANGUAGE_AUTO_EFFECTIVE = "auto"
@@ -98,10 +128,20 @@ class WhisperCppProvider(BaseSTTProvider):
 
     driver_name = "whisper_cpp"
 
-    def __init__(self, binary: str | None = None, model: str | None = None, timeout: float = 120.0):
+    def __init__(
+        self,
+        binary: str | None = None,
+        model: str | None = None,
+        timeout: float = 120.0,
+        prompt: str | None = None,
+    ):
         self.binary = binary or os.getenv("VOICE_STT_BINARY", "/opt/voice/bin/whisper-cli")
         self.model = model or os.getenv("VOICE_STT_MODEL", "/models/whisper/ggml-base.bin")
         self.timeout = timeout
+        # Prompt initial métier : mapping > env VOICE_STT_PROMPT > défaut WASH
+        # (FR/EN selon langue). Vide = prompt métier auto (jamais désactivé
+        # par accident depuis un champ console laissé vide).
+        self.prompt = prompt or os.getenv("VOICE_STT_PROMPT") or None
 
     @classmethod
     def from_mapping(cls, mapping: dict[str, Any]) -> "WhisperCppProvider":
@@ -109,19 +149,25 @@ class WhisperCppProvider(BaseSTTProvider):
             binary=mapping.get("binary") or None,
             model=mapping.get("model") or None,
             timeout=float(mapping.get("timeout") or 120.0),
+            prompt=mapping.get("prompt") or None,
         )
 
     def transcribe(self, audio_bytes: bytes, filename: str, language: str) -> dict[str, Any]:
         if not os.path.isfile(self.binary) or not os.path.isfile(self.model):
             raise RuntimeError(f"Whisper indisponible (binaire ou modèle introuvable : {self.model}).")
         effective = WHISPER_LANG_MAP.get(language, LANGUAGE_AUTO_EFFECTIVE)
+        prompt_text = self.prompt if self.prompt is not None else wash_whisper_prompt(language)
         with tempfile.TemporaryDirectory(prefix="wash-stt-") as tmpdir:
             wav_file = normalize_to_wav(audio_bytes, filename, tmpdir)
             out_base = os.path.join(tmpdir, "output")
+            argv = [self.binary, "-m", self.model, "-f", wav_file,
+                   "-l", effective,
+                   "-otxt", "-of", out_base]
+            if prompt_text:
+                # whisper.cpp : -p / --prompt = initial_prompt (noms propres WASH).
+                argv += ["--prompt", prompt_text]
             res = subprocess.run(
-                [self.binary, "-m", self.model, "-f", wav_file,
-                 "-l", effective,
-                 "-otxt", "-of", out_base],
+                argv,
                 capture_output=True, text=True, check=False, timeout=self.timeout,
             )
             transcript = ""
@@ -220,11 +266,16 @@ class CloudWhisperProvider(BaseSTTProvider):
         model: str | None = None,
         api_key: str | None = None,
         timeout: float = 120.0,
+        prompt: str | None = None,
     ):
         self.base_url = (base_url or os.getenv("CLOUD_STT_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
         self.model = model or os.getenv("CLOUD_STT_MODEL", "whisper-1")
         self.api_key = api_key or os.getenv("CLOUD_STT_API_KEY")
         self.timeout = timeout
+        # Prompt initial métier : mapping > env VOICE_STT_PROMPT > défaut WASH
+        # (FR/EN selon langue). Vide = prompt métier auto (jamais désactivé
+        # par accident depuis un champ console laissé vide).
+        self.prompt = prompt or os.getenv("VOICE_STT_PROMPT") or None
 
     @classmethod
     def from_mapping(cls, mapping: dict[str, Any]) -> "CloudWhisperProvider":
@@ -233,6 +284,7 @@ class CloudWhisperProvider(BaseSTTProvider):
             model=mapping.get("model") or None,
             api_key=mapping.get("api_key") or None,
             timeout=float(mapping.get("timeout") or 120.0),
+            prompt=mapping.get("prompt") or None,
         )
 
     def transcribe(self, audio_bytes: bytes, filename: str, language: str) -> dict[str, Any]:
@@ -245,6 +297,10 @@ class CloudWhisperProvider(BaseSTTProvider):
             effective = language
         else:
             effective = LANGUAGE_AUTO_EFFECTIVE
+        prompt_text = self.prompt if self.prompt is not None else wash_whisper_prompt(language)
+        if prompt_text:
+            # API /audio/transcriptions : champ "prompt" = initial_prompt.
+            data["prompt"] = prompt_text
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(
                 f"{self.base_url}/audio/transcriptions",
@@ -280,6 +336,7 @@ def _mapping_from_headers(headers: Any) -> dict[str, Any]:
         "api_key": get("x-stt-api-key") or None,
         "threads": get("x-stt-threads") or None,
         "timeout": get("x-stt-timeout") or None,
+        "prompt": get("x-stt-prompt") or None,
     }
 
 
@@ -303,13 +360,14 @@ def default_stt() -> BaseSTTProvider:
 STT_PROVIDER_TYPES: list[dict[str, Any]] = [
     {
         "id": "whisper_cpp",
-        "label": "Whisper local (français)",
-        "description": "Whisper.cpp sur CPU : rapide et léger, idéal pour le français.",
+        "label": "Whisper local (français, anglais)",
+        "description": "Whisper.cpp sur CPU : rapide et léger, idéal pour le français et l'anglais (prompt métier WASH : noms d'écoles + vocabulaire eau/assainissement).",
         "api_key_required": False,
         "local_languages": False,
         "fields": [
             {"name": "model", "label": "Modèle Whisper (.bin)", "type": "text", "default": "/models/whisper/ggml-base.bin", "required": True},
             {"name": "timeout", "label": "Timeout (s)", "type": "number", "default": "120", "required": False},
+            {"name": "prompt", "label": "Prompt initial Whisper (vide = prompt métier WASH auto FR/EN)", "type": "text", "default": "", "required": False},
         ],
     },
     {
@@ -335,6 +393,7 @@ STT_PROVIDER_TYPES: list[dict[str, Any]] = [
             {"name": "base_url", "label": "URL de base (/v1)", "type": "url", "default": "https://api.openai.com/v1", "required": True},
             {"name": "model", "label": "Modèle (ex: whisper-1)", "type": "text", "default": "whisper-1", "required": True},
             {"name": "timeout", "label": "Timeout (s)", "type": "number", "default": "120", "required": False},
+            {"name": "prompt", "label": "Prompt initial Whisper (vide = prompt métier WASH auto FR/EN)", "type": "text", "default": "", "required": False},
         ],
     },
 ]

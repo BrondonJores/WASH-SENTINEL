@@ -87,7 +87,7 @@ class TtsMmsTest(unittest.TestCase):
     def test_mms_language_map_covers_voice_languages(self) -> None:
         self.assertEqual(
             MMS_LANGUAGE_MAP,
-            {"fr": "fra", "dua_Latn": "dua", "bassa": "bas", "ewondo": "ewo"},
+            {"fr": "fra", "en": "eng", "dua_Latn": "dua", "bassa": "bas", "ewondo": "ewo"},
         )
 
     def test_missing_pretrained_documents_meta_gap(self) -> None:

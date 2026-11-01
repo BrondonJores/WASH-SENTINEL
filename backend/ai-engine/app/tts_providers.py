@@ -16,8 +16,12 @@ from .stt_providers import SUPPORTED_VOICE_LANGUAGES
 
 
 #: Langue console -> code ISO 639-3 MMS-TTS.
+#: "en" -> "eng" : Meta publie facebook/mms-tts-eng (checkpoint réel,
+#: PAS dans MMS_MISSING_PRETRAINED). Synthèse anglaise via MMS, repli
+#: Piper FR explicite si indisponible (jamais de FR déguisé en EN).
 MMS_LANGUAGE_MAP: dict[str, str] = {
     "fr": "fra",
+    "en": "eng",
     "dua_Latn": "dua",
     "bassa": "bas",
     "ewondo": "ewo",
@@ -281,7 +285,7 @@ TTS_PROVIDER_TYPES: list[dict[str, Any]] = [
     {
         "id": "mms",
         "label": "Meta MMS (langues locales)",
-        "description": "Meta MMS-TTS (VITS monolingue) : douala (dua), bassa (bas), ewondo (ewo). Repli français Piper automatique si indisponible.",
+        "description": "Meta MMS-TTS (VITS monolingue) : anglais (eng), douala (dua), bassa (bas), ewondo (ewo). Repli français Piper automatique + notice explicite si indisponible.",
         "api_key_required": False,
         "local_languages": True,
         "fields": [
