@@ -14,6 +14,7 @@ from .extractor import WashExtractor
 from .image_analyzer import ImageAnalyzer, is_vision_unavailable, visual_boost, visual_severity
 from .providers import PROVIDER_TYPES, OllamaProvider, llm_from_headers, provider_from_profile
 from .stt_providers import STT_PROVIDER_TYPES, stt_from_headers, stt_from_profile
+from .tts_providers import TTS_PROVIDER_TYPES, tts_from_headers
 from .rag_store import RAGStore
 from .recurrence_watch import watch_recurrence
 from .repair_advisor import RepairAdvisor
@@ -281,10 +282,12 @@ async def transcribe_audio(
         ) from exc
 
 @app.post("/v1/voice/synthesize", response_model=VoiceSynthesisResponse)
-def synthesize_voice(payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
-    """Génère un message audio de confirmation via Piper TTS."""
+def synthesize_voice(request: Request, payload: VoiceSynthesisRequest) -> VoiceSynthesisResponse:
+    """Génère un message audio de confirmation (Piper FR par défaut, MMS si X-TTS-Driver: mms)."""
     try:
-        return voice_service.synthesize(payload.text, payload.voice, payload.language)
+        return voice_service.synthesize(
+            payload.text, payload.voice, payload.language, tts=tts_from_headers(request.headers)
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -410,6 +413,11 @@ async def test_stt(payload: SttTestRequest) -> SttTestResponse:
         )
     except Exception as exc:
         return SttTestResponse(ok=False, error=f"{type(exc).__name__}: {str(exc)[:300]}", language=payload.language)
+
+@app.get("/v1/admin/tts-types")
+def list_tts_types() -> dict[str, Any]:
+    """Descripteurs des moteurs de synthèse : pilote le formulaire dynamique de la page Settings."""
+    return {"drivers": TTS_PROVIDER_TYPES}
 # ==========================================
 # 12. Q&R Documentaire Sourcée (RAG)
 # ==========================================

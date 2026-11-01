@@ -261,6 +261,10 @@ class VoiceSynthesisResponse(BaseModel):
     audio_base64: str
     mime_type: str = "audio/wav"
     text: str
+    driver: str | None = None
+    language_effective: str = "fr"
+    fallback: bool = False
+    notice: str | None = None
 
 
 # ==========================================

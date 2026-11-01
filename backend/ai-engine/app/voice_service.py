@@ -16,6 +16,11 @@ from .stt_providers import (
     BaseSTTProvider,
     default_stt,
 )
+from .tts_providers import (
+    MMS_LANGUAGE_MAP,
+    MMS_MISSING_PRETRAINED,
+    BaseTTSProvider,
+)
 
 
 # ============================================================================
@@ -101,6 +106,14 @@ VOICE_LANGUAGE_ALIASES: dict[str, str] = {
     "français": "fr",
 }
 
+#: Libellés FR des langues pour le message de repli MMS explicite.
+VOICE_LANGUAGE_LABELS: dict[str, str] = {
+    "fr": "français",
+    "dua_Latn": "douala",
+    "bassa": "bassa",
+    "ewondo": "ewondo",
+}
+
 #: Voix TTS par défaut (français).
 DEFAULT_TTS_VOICE = "fr_FR-upmc-medium"
 
@@ -139,6 +152,25 @@ BUILTIN_VOICE_REGISTRY: dict[str, list[str]] = {
 def guided_error(code: str) -> RuntimeError:
     """Construit l'erreur guidée FR pour un code stable."""
     return RuntimeError(f"[{code}] {GUIDANCE[code]}")
+
+
+def mms_fallback_notice(language: str) -> str:
+    """Message FR explicite joint à l'audio quand MMS replie vers Piper FR.
+
+    Deux cas honnêtes : pas de checkpoint pré-entraîné connu chez Meta pour
+    cette langue (dua/ewo/bas), ou modèle MMS non installé. Jamais de
+    français déguisé en langue locale : le repli est toujours annoncé.
+    """
+    label = VOICE_LANGUAGE_LABELS.get(language, language)
+    if MMS_LANGUAGE_MAP.get(language) in MMS_MISSING_PRETRAINED:
+        return (
+            f"Pas encore de voix {label} disponible (Meta MMS ne la propose "
+            "pas) : lecture en français standard."
+        )
+    return (
+        f"La voix {label} est indisponible pour le moment (modèle Meta MMS "
+        "non installé) : lecture en français standard."
+    )
 
 
 def normalize_voice_language(language: str | None) -> str:
@@ -309,11 +341,107 @@ class VoiceService:
         text: str,
         voice: str = DEFAULT_TTS_VOICE,
         language: str = "fr",
+        tts: BaseTTSProvider | None = None,
     ) -> VoiceSynthesisResponse:
-        """Synthétise un texte en audio via Piper TTS pour confirmation vocale.
+        """Synthétise un texte en audio pour confirmation vocale.
 
-        Chaque panne lève un RuntimeError guidé en français ([CODE] + conseil).
+        Sans provider (défaut) : Piper FR historique, inchangé. Avec un
+        provider MMS : langues locales via Meta MMS-TTS, repli Piper FR
+        automatique + message explicite si MMS indisponible. Chaque panne
+        lève un RuntimeError guidé en français ([CODE] + conseil).
         Ne JAMAIS renvoyer un faux WAV silencieux.
+        """
+        if tts is not None and tts.driver_name == "mms":
+            return self._synthesize_mms(text, voice, language, tts)
+        if tts is not None and tts.driver_name != "piper":
+            raise guided_error(TTS_VOICE_UNAVAILABLE)
+        if tts is not None:
+            audio_data = tts.synthesize(text, voice, language)
+            try:
+                language = normalize_voice_language(language)
+            except RuntimeError:
+                raise guided_error(TTS_VOICE_UNAVAILABLE) from None
+            return VoiceSynthesisResponse(
+                audio_base64=base64.b64encode(audio_data).decode("utf-8"),
+                mime_type="audio/wav",
+                text=text.strip()[:MAX_TTS_CHARS],
+                driver="piper",
+                language_effective=language,
+            )
+        try:
+            language = normalize_voice_language(language)
+        except RuntimeError:
+            raise guided_error(TTS_VOICE_UNAVAILABLE) from None
+        audio_data = self._synthesize_piper_bytes(text, voice, language)
+        return VoiceSynthesisResponse(
+            audio_base64=base64.b64encode(audio_data).decode("utf-8"),
+            mime_type="audio/wav",
+            text=text.strip()[:MAX_TTS_CHARS],
+            driver="piper",
+            language_effective=language,
+        )
+
+    def _synthesize_mms(
+        self,
+        text: str,
+        voice: str,
+        language: str,
+        provider: BaseTTSProvider,
+    ) -> VoiceSynthesisResponse:
+        """Voie MMS : langues locales via Meta MMS-TTS, FR via Piper.
+
+        MMS indisponible (dépendances, modèle ou synthèse) : repli Piper FR
+        automatique + notice FR explicite. Jamais de crash, jamais de silence,
+        jamais de français déguisé en langue locale.
+        """
+        if not text or not text.strip():
+            raise guided_error(TTS_EMPTY_TEXT)
+        try:
+            language = normalize_voice_language(language)
+        except RuntimeError:
+            raise guided_error(TTS_VOICE_UNAVAILABLE) from None
+        text = text.strip()[:MAX_TTS_CHARS]
+        if language == "fr":
+            audio_data = self._synthesize_piper_bytes(text, voice, language)
+            return VoiceSynthesisResponse(
+                audio_base64=base64.b64encode(audio_data).decode("utf-8"),
+                mime_type="audio/wav",
+                text=text,
+                driver="piper",
+                language_effective="fr",
+            )
+        try:
+            audio_data = provider.synthesize(text, voice, language)
+        except Exception:
+            audio_data = self._synthesize_piper_bytes(text, DEFAULT_TTS_VOICE, "fr")
+            return VoiceSynthesisResponse(
+                audio_base64=base64.b64encode(audio_data).decode("utf-8"),
+                mime_type="audio/wav",
+                text=text,
+                driver="mms",
+                language_effective="fr",
+                fallback=True,
+                notice=mms_fallback_notice(language),
+            )
+        return VoiceSynthesisResponse(
+            audio_base64=base64.b64encode(audio_data).decode("utf-8"),
+            mime_type="audio/wav",
+            text=text,
+            driver="mms",
+            language_effective=language,
+        )
+
+    def _synthesize_piper_bytes(
+        self,
+        text: str,
+        voice: str,
+        language: str,
+    ) -> bytes:
+        """Invocation Piper historique -> WAV brut.
+
+        Normalise la langue (inconnue -> TTS_VOICE_UNAVAILABLE). Lève les
+        erreurs guidées TTS_EMPTY_TEXT / TTS_VOICE_UNAVAILABLE /
+        TTS_UNAVAILABLE. Ne JAMAIS renvoyer un faux WAV silencieux.
         """
         if not text or not text.strip():
             raise guided_error(TTS_EMPTY_TEXT)
@@ -368,8 +496,4 @@ class VoiceService:
             if not audio_data:
                 raise guided_error(TTS_UNAVAILABLE)
 
-            return VoiceSynthesisResponse(
-                audio_base64=base64.b64encode(audio_data).decode("utf-8"),
-                mime_type="audio/wav",
-                text=text,
-            )
+            return audio_data
