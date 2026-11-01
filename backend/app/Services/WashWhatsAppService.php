@@ -53,6 +53,31 @@ class WashWhatsAppService
 
     public const BUTTON_NO = 'wash_non';
 
+    /** Référence explicite d'incident (ex. WASH-2026-RCLD5U) : intention suivi. */
+    protected const SUIVI_REFERENCE_PATTERN = '/WASH-\d{4}-[A-Z0-9]{4,}/i';
+
+    /** Mots-clés d'intention suivi (FR + EN), testés AVANT le filtre hors-sujet. */
+    protected const SUIVI_KEYWORDS = [
+        'suivi', 'suivre', 'statut', 'status', 'où en est', 'ou en est',
+        'mon signalement', 'mes signalements', 'mon dossier',
+        'avancé', 'avance', 'réparé', 'reparé', 'répare', 'repare',
+        'where is', 'my report', 'track', 'tracking',
+        'follow up', 'follow-up', 'followup',
+    ];
+
+    /** Marqueurs FR : présents → fiche en français (prioritaire sur l'anglais). */
+    protected const SUIVI_FRENCH_MARKERS = [
+        'suivi', 'suivre', 'statut', 'où en est', 'ou en est',
+        'mon signalement', 'mes signalements', 'mon dossier',
+        'avancé', 'avance', 'réparé', 'reparé', 'répare', 'repare',
+    ];
+
+    /** Marqueurs uniquement-EN : présents (sans marqueur FR) → fiche en anglais. */
+    protected const SUIVI_ENGLISH_MARKERS = [
+        'where is', 'my report', 'track', 'tracking',
+        'follow up', 'follow-up', 'followup',
+    ];
+
     /** Indices eau/hygiène : un texte sans aucun est traité comme hors-sujet. */
     protected const WASH_KEYWORDS = [
         'eau', 'robinet', 'fuite', 'fuit', 'fuir', 'coul', 'goutt', 'pompe',
@@ -185,6 +210,17 @@ class WashWhatsAppService
                 // (Clé expirée/silence = plus rien en cache : triage normal pur.)
                 $this->forgetClarification($from);
                 $staleClarification = true;
+            }
+        }
+
+        // SUIVI : détecté AVANT le filtre hors-sujet et AVANT le triage, pour
+        // texte ET vocal-transcrit. Ne crée JAMAIS d'incident ni de Report.
+        // (La clarification en attente ci-dessus garde priorité : le suivi
+        // attend le tour suivant.)
+        if (($channel === 'text' || $channel === 'voice') && $text) {
+            $suivi = $this->suiviIntent((string) $text);
+            if ($suivi['is_suivi']) {
+                return $this->handleSuivi($from, $contact, (string) $text, $suivi['reference']);
             }
         }
 
@@ -337,6 +373,165 @@ class WashWhatsAppService
         Log::info("WhatsApp clarification applied to incident {$incident->id}.", ['from' => $from]);
 
         return ['status' => 'clarification_applied', 'from' => $from, 'incident_id' => $incident->id, 'is_duplicate' => false];
+    }
+
+    // ------------------------------------------------------------------
+    // SUIVI d'incident (FR + EN) : fiche statut, zéro création.
+    // ------------------------------------------------------------------
+
+    /** Intention suivi : référence explicite WASH-… ou mot-clé FR/EN. */
+    protected function suiviIntent(string $text): array
+    {
+        $reference = null;
+        if (preg_match(self::SUIVI_REFERENCE_PATTERN, $text, $m)) {
+            $reference = strtoupper($m[0]);
+        }
+
+        $lower = mb_strtolower($text);
+        $hasKeyword = false;
+        foreach (self::SUIVI_KEYWORDS as $keyword) {
+            if (str_contains($lower, $keyword)) {
+                $hasKeyword = true;
+                break;
+            }
+        }
+
+        return ['is_suivi' => $reference !== null || $hasKeyword, 'reference' => $reference];
+    }
+
+    /** True si le message de suivi est en anglais (marqueurs EN, aucun FR). */
+    protected function isEnglishSuivi(string $text): bool
+    {
+        $lower = mb_strtolower($text);
+        foreach (self::SUIVI_FRENCH_MARKERS as $marker) {
+            if (str_contains($lower, $marker)) {
+                return false;
+            }
+        }
+        foreach (self::SUIVI_ENGLISH_MARKERS as $marker) {
+            if (str_contains($lower, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Fiche statut SMS (≤ MAX_REPLY_LENGTH via reply()). Avec référence :
+     * incident par reference_code (école du contact d'abord, sinon global).
+     * Sans référence : DERNIER incident de l'école du contact. Ne crée ni
+     * incident ni Report ; statut retourné 'suivi'.
+     */
+    protected function handleSuivi(string $from, SchoolContact $contact, string $text, ?string $reference): array
+    {
+        $english = $this->isEnglishSuivi($text);
+
+        if ($reference !== null) {
+            $incident = Incident::where('school_id', $contact->school_id)
+                ->whereRaw('UPPER(reference_code) = ?', [$reference])
+                ->first()
+                ?? Incident::whereRaw('UPPER(reference_code) = ?', [$reference])->first();
+
+            if (!$incident) {
+                $this->reply($from, $this->suiviUnknownReferenceReply($reference, $english));
+
+                return ['status' => 'suivi', 'from' => $from, 'reference' => $reference];
+            }
+
+            $this->reply($from, $this->suiviStatusReply($incident, $english));
+
+            return ['status' => 'suivi', 'from' => $from, 'incident_id' => $incident->id];
+        }
+
+        $incident = Incident::where('school_id', $contact->school_id)->latest('id')->first();
+        if (!$incident) {
+            $this->reply($from, $this->suiviEmptyReply($english));
+
+            return ['status' => 'suivi', 'from' => $from];
+        }
+
+        $this->reply($from, $this->suiviStatusReply($incident, $english));
+
+        return ['status' => 'suivi', 'from' => $from, 'incident_id' => $incident->id];
+    }
+
+    /** Fiche statut : référence + résumé court + statut humain + prochaine étape. */
+    protected function suiviStatusReply(Incident $incident, bool $english): string
+    {
+        $summary = rtrim(Str::limit((string) ($incident->ai_summary ?: $incident->title), 90), '.');
+        $terminal = in_array($incident->status, ['resolved', 'closed'], true);
+
+        if ($english) {
+            $human = [
+                'reported' => 'well received, awaiting triage',
+                'triaged' => 'acknowledged by our team',
+                'assigned' => 'technician assigned',
+                'in_progress' => 'team on site',
+                'resolved' => 'resolved — please confirm everything works',
+                'closed' => 'closed',
+            ][$incident->status] ?? $incident->status;
+            $next = [
+                'reported' => "triage by our team, we'll write here when it moves",
+                'triaged' => "technician assignment, we'll write here when it moves",
+                'assigned' => "technician visit planned, we'll write here when done",
+                'in_progress' => "fix in progress, we'll write here when done",
+                'resolved' => 'please confirm here that all is well, thanks',
+                'closed' => 'nothing to do, thanks',
+            ][$incident->status] ?? "we'll write here when it moves";
+            $since = $terminal ? '' : ' since ' . ($incident->updated_at ?? now())->format('M j');
+
+            return "{$incident->reference_code} — {$summary}. Status: {$human}{$since}. Next step: {$next}.";
+        }
+
+        $human = [
+            'reported' => 'bien reçu, en attente de tri',
+            'triaged' => 'pris en compte par notre équipe',
+            'assigned' => 'technicien assigné',
+            'in_progress' => 'équipe en intervention',
+            'resolved' => 'résolu — merci de confirmer que tout marche',
+            'closed' => 'clôturé',
+        ][$incident->status] ?? $incident->status;
+        $next = [
+            'reported' => "tri par notre équipe, on vous écrit ici dès que ça avance",
+            'triaged' => "assignation d'un technicien, on vous écrit ici dès que ça avance",
+            'assigned' => "intervention du technicien prévue, on vous écrit ici dès que c'est fini",
+            'in_progress' => "réparation en cours, on vous écrit ici dès que c'est fini",
+            'resolved' => 'confirmez ici que tout marche, merci',
+            'closed' => 'rien à faire, merci',
+        ][$incident->status] ?? "on vous écrit ici dès que ça avance";
+        $since = $terminal ? '' : ' depuis le ' . $this->frenchDay($incident->updated_at ?? now());
+
+        return "{$incident->reference_code} — {$summary}. Statut : {$human}{$since}. Prochaine étape : {$next}.";
+    }
+
+    protected function suiviEmptyReply(bool $english): string
+    {
+        if ($english) {
+            return 'No report yet for your school, describe your issue in one sentence: what + where (e.g. leaking tap in block A).';
+        }
+
+        return "Aucun signalement pour l'instant pour votre école, décrivez votre panne en une phrase : quoi + où (ex. robinet qui fuit au bloc A).";
+    }
+
+    protected function suiviUnknownReferenceReply(string $reference, bool $english): string
+    {
+        if ($english) {
+            return "We can't find reference {$reference}. Check the code or describe your issue in one sentence: what + where.";
+        }
+
+        return "On ne retrouve pas la référence {$reference}. Vérifiez le code ou décrivez votre panne en une phrase : quoi + où.";
+    }
+
+    /** Jour + mois FR abrégé (ex. « 2 nov. »). */
+    protected function frenchDay(\DateTimeInterface $date): string
+    {
+        $months = [
+            1 => 'janv.', 2 => 'févr.', 3 => 'mars', 4 => 'avr.', 5 => 'mai', 6 => 'juin',
+            7 => 'juil.', 8 => 'août', 9 => 'sept.', 10 => 'oct.', 11 => 'nov.', 12 => 'déc.',
+        ];
+
+        return ((int) $date->format('j')) . ' ' . ($months[(int) $date->format('n')] ?? $date->format('M'));
     }
 
     protected function staleClarificationNote(): string
