@@ -7,6 +7,12 @@ Seuils constatés (hérités du code, NON calibrés empiriquement — heuristiqu
 - Inscription en liste `matches` : 0.70 (interne, fixe).
 - Repli textuel Jaccard (embeddings indisponibles) : 0.50 (interne, fixe,
   indépendant du seuil cosinus).
+
+Latence : UN seul appel batch (`get_embeddings`, requête + candidats) au lieu
+de N+1 appels unitaires. Pas de pré-filtre Jaccard volontairement : il casserait
+le rappel sur paraphrases (« la pompe fuit » vs « plus d'eau au robinet » ont un
+Jaccard de 0 mais sont un vrai doublon), et le batch natif coûte 1 appel quel
+que soit N (Laravel filtre déjà : même école, < 7 jours).
 """
 from __future__ import annotations
 
@@ -36,13 +42,19 @@ class DuplicateDetector:
         if not request.active_incidents:
             return DuplicateCheckResponse(is_duplicate=False)
 
-        # 1. Vecteur du nouveau rapport
-        query_vec = await self.llm.get_embedding(request.incoming_summary)
-        if not query_vec:
-            # Fallback textuel simple si pas de modèle d'embedding disponible
+        # 1. Batch unique : requête + tous les candidats en un seul appel.
+        try:
+            vectors = await self.llm.get_embeddings(
+                [request.incoming_summary]
+                + [inc.summary for inc in request.active_incidents]
+            )
+        except RuntimeError:
+            # Embeddings indisponibles -> repli textuel documenté (Jaccard 0.50).
+            return self._fallback_text_match(request)
+        if not vectors or not vectors[0]:
             return self._fallback_text_match(request)
 
-        q_arr = np.array(query_vec, dtype=float)
+        q_arr = np.array(vectors[0], dtype=float)
         q_norm = np.linalg.norm(q_arr)
         if q_norm == 0:
             return DuplicateCheckResponse(is_duplicate=False)
@@ -51,8 +63,7 @@ class DuplicateDetector:
         best_match_id: int | None = None
         max_similarity = 0.0
 
-        for inc in request.active_incidents:
-            inc_vec = await self.llm.get_embedding(inc.summary)
+        for inc, inc_vec in zip(request.active_incidents, vectors[1:]):
             if not inc_vec:
                 continue
 

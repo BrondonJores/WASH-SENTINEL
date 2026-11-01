@@ -19,6 +19,9 @@ class StubEmbedder:
     async def get_embedding(self, text: str) -> list[float]:
         return list(self.vectors.get(text, []))
 
+    async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+        return [list(self.vectors.get(t, [])) for t in texts]
+
 
 def _req(incoming: str, incidents: list[IncidentItem], **kw) -> DuplicateCheckRequest:
     return DuplicateCheckRequest(incoming_summary=incoming, active_incidents=incidents, **kw)
@@ -77,6 +80,48 @@ class DuplicateVerdictTest(unittest.IsolatedAsyncioTestCase):
         llm = StubEmbedder({})
         res = await DuplicateDetector(llm).check(_req("in", []))  # type: ignore[arg-type]
         self.assertFalse(res.is_duplicate)
+
+
+class BatchSingleCallTest(unittest.IsolatedAsyncioTestCase):
+    async def test_check_uses_one_batch_call(self) -> None:
+        llm = StubEmbedder({
+            "in": [1.0, 0.0],
+            "a": [1.0, 0.0],
+            "b": [0.0, 1.0],
+            "c": [1.0, 0.0],
+        })
+        calls: list[list[str]] = []
+        orig = llm.get_embeddings
+
+        async def spy(texts: list[str]) -> list[list[float]]:
+            calls.append(list(texts))
+            return await orig(texts)
+
+        llm.get_embeddings = spy  # type: ignore[method-assign]
+        res = await DuplicateDetector(llm).check(  # type: ignore[arg-type]
+            _req("in", [
+                IncidentItem(id=1, summary="a", category="water"),
+                IncidentItem(id=2, summary="b", category="water"),
+                IncidentItem(id=3, summary="c", category="water"),
+            ])
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], ["in", "a", "b", "c"])
+        self.assertTrue(res.is_duplicate)
+
+    async def test_runtime_error_falls_back_to_jaccard(self) -> None:
+        class RaisingEmbedder(StubEmbedder):
+            async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+                raise RuntimeError("Embeddings indisponibles (mock)")
+
+        llm = RaisingEmbedder({})
+        res = await DuplicateDetector(llm).check(  # type: ignore[arg-type]
+            _req(
+                "pompe cassee plus eau",
+                [IncidentItem(id=3, summary="pompe cassee plus eau", category="water")],
+            )
+        )
+        self.assertTrue(res.is_duplicate)
 
 
 class FallbackTextMatchTest(unittest.IsolatedAsyncioTestCase):

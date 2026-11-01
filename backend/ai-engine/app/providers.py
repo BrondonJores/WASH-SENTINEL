@@ -15,6 +15,12 @@ RETRY_MAX_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 WARMUP_TIMEOUT_SECONDS_DEFAULT = 15.0
+# Parallélisme borné du batch embeddings sans endpoint natif (vieux serveurs).
+EMBED_BATCH_CONCURRENCY = 4
+
+
+class _OldEmbedApiError(Exception):
+    """Signal interne : endpoint batch natif absent (404 = vieux serveur)."""
 
 
 def _is_retryable_status(status_code: int) -> bool:
@@ -283,7 +289,8 @@ class BaseLLMProvider:
         return f"{base} : échec transitoire ({detail}). Patientez puis réessayez."
 
     async def _post_with_retry(
-        self, url: str, payload: dict[str, Any], headers: dict[str, str] | None = None
+        self, url: str, payload: dict[str, Any], headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         """POST JSON avec retry exponentiel borné sur erreurs transitoires uniquement.
 
@@ -291,10 +298,11 @@ class BaseLLMProvider:
         timeouts, erreurs de connexion, 408/429/5xx. Ne réessaie JAMAIS sur les
         autres 4xx (erreurs métier : réponse retournée telle quelle à l'appelant).
         En cas d'épuisement, lève RuntimeError avec un message FR actionnable.
+        `timeout` surcharge le timeout du client pour cet appel (None = défaut).
         """
         last_status: int | None = None
         last_exc: Exception | None = None
-        async with self._async_client() as client:
+        async with self._async_client(timeout=timeout) as client:
             for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
                 try:
                     response = await client.post(url, json=payload, headers=headers)
@@ -366,6 +374,21 @@ class BaseLLMProvider:
 
     async def get_embedding(self, text: str) -> list[float]:
         raise NotImplementedError
+
+    async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+        """Batch par défaut : unitaires parallélisés bornés (vieux serveurs).
+
+        Les providers à batch natif le surchargent. Ordre préservé.
+        """
+        if not texts:
+            return []
+        sem = asyncio.Semaphore(EMBED_BATCH_CONCURRENCY)
+
+        async def one(text: str) -> list[float]:
+            async with sem:
+                return await self.get_embedding(text)
+
+        return list(await asyncio.gather(*(one(t) for t in texts)))
 
     async def test(self) -> dict[str, Any]:
         """Ping standard : demande un mini JSON et mesure la latence."""
@@ -495,31 +518,88 @@ class OllamaProvider(BaseLLMProvider):
             ) from exc
 
     async def get_embedding(self, text: str) -> list[float]:
-        """Embeddings Ollama : lève une erreur FR explicite si aucun modèle ne répond.
+        """Embeddings Ollama : batch natif, sinon unitaires ; lève en FR sinon.
 
         Essaie embed_model puis model (repli conservé), mais ne renvoie plus []
         silencieusement : l'appelant décide du repli (Jaccard, abstention RAG...).
         """
+        return (await self.get_embeddings([text]))[0]
+
+    async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+        """Batch Ollama : /api/embed natif, sinon gather borné (vieux serveurs)."""
+        if not texts:
+            return []
         errors: list[str] = []
         for model in [self.embed_model, self.model]:
             try:
-                async with self._async_client(timeout=30.0) as client:
-                    resp = await client.post(
-                        f"{self.base_url}/api/embeddings",
-                        json={"model": model, "prompt": text},
-                    )
-                if resp.status_code != 200:
-                    errors.append(f"{model} : HTTP {resp.status_code}")
-                    continue
-                return resp.json()["embedding"]
-            except KeyError as exc:
-                errors.append(f"{model} : réponse sans embedding ({exc})")
-            except Exception as exc:
-                errors.append(f"{model} : {type(exc).__name__} {str(exc)[:150]}")
+                return await self._embed_batch_native(model, texts)
+            except _OldEmbedApiError:
+                # 404 = endpoint absent (vieux serveur), pas le modèle : repli.
+                return await self._embed_batch_gather(model, texts)
+            except RuntimeError as exc:
+                errors.append(f"{model} : {exc}")
         raise RuntimeError(
             f"Embeddings indisponibles (modèles essayés : {self.embed_model}, {self.model}) — "
             f"{'; '.join(errors)}. Vérifiez 'ollama list' / 'ollama pull {self.embed_model}' puis réessayez."
         )
+
+    async def _embed_batch_native(
+        self, model: str, texts: list[str]
+    ) -> list[list[float]]:
+        response = await self._post_with_retry(
+            f"{self.base_url}/api/embed",
+            {"model": model, "input": list(texts)},
+            timeout=30.0,
+        )
+        if response.status_code == 404:
+            body = response.text.lower()
+            if "model" in body and "not found" in body:
+                # Modèle absent : passer au modèle suivant (message FR dédié).
+                raise_for_ollama(response, model)
+            raise _OldEmbedApiError(model)
+        raise_for_ollama(response, model)
+        try:
+            vectors = response.json()["embeddings"]
+        except (KeyError, TypeError) as exc:
+            raise RuntimeError(f"{model} : réponse sans embeddings ({exc})")
+        if not isinstance(vectors, list) or len(vectors) != len(texts):
+            raise RuntimeError(
+                f"{model} : batch incomplet ({len(vectors) if isinstance(vectors, list) else '?'}"
+                f"/{len(texts)} vecteurs)")
+        return vectors
+
+    async def _embed_batch_gather(
+        self, model: str, texts: list[str]
+    ) -> list[list[float]]:
+        """Repli vieux serveurs : unitaires parallélisés, un seul client."""
+        sem = asyncio.Semaphore(EMBED_BATCH_CONCURRENCY)
+        errors: list[str] = []
+
+        async def one(client: httpx.AsyncClient, text: str) -> list[float] | None:
+            async with sem:
+                try:
+                    resp = await client.post(
+                        f"{self.base_url}/api/embeddings",
+                        json={"model": model, "prompt": text},
+                    )
+                except Exception as exc:  # noqa: BLE001 - agrégée, levée après
+                    errors.append(f"{type(exc).__name__} {str(exc)[:120]}")
+                    return None
+                if resp.status_code != 200:
+                    errors.append(f"HTTP {resp.status_code}")
+                    return None
+                try:
+                    return resp.json()["embedding"]
+                except KeyError:
+                    errors.append("réponse sans embedding")
+                    return None
+
+        async with self._async_client(timeout=30.0) as client:
+            vectors = await asyncio.gather(*(one(client, t) for t in texts))
+        if any(v is None for v in vectors) or len(vectors) != len(texts):
+            raise RuntimeError(
+                f"{model} : batch unitaire incomplet ({'; '.join(errors[:3]) or 'sans détail'})")
+        return [v for v in vectors if v is not None]
 
 
     async def chat(
@@ -720,26 +800,39 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             ) from exc
 
     async def get_embedding(self, text: str) -> list[float]:
-        """Embeddings API externe : lève une erreur FR explicite si aucun modèle ne répond.
+        """Embeddings API externe : batch natif ; lève en FR explicite sinon."""
+        return (await self.get_embeddings([text]))[0]
 
-        Essaie embed_model puis model (repli conservé), mais ne renvoie plus []
-        silencieusement : l'appelant décide du repli (Jaccard, abstention RAG...).
-        """
+    async def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+        """Batch natif /embeddings (input tableau), avec retry transitoires."""
+        if not texts:
+            return []
         errors: list[str] = []
         for model in [self.embed_model, self.model]:
             try:
-                async with self._async_client(timeout=30.0) as client:
-                    resp = await client.post(
-                        f"{self.base_url}/embeddings",
-                        headers=self._headers(),
-                        json={"model": model, "input": text},
-                    )
-                if resp.status_code != 200:
-                    errors.append(f"{model} : HTTP {resp.status_code}")
+                response = await self._post_with_retry(
+                    f"{self.base_url}/embeddings",
+                    {"model": model, "input": list(texts)},
+                    headers=self._headers(),
+                    timeout=30.0,
+                )
+                if response.status_code != 200:
+                    errors.append(f"{model} : HTTP {response.status_code}")
                     continue
-                return resp.json()["data"][0]["embedding"]
+                items = response.json()["data"]
+                vectors = [it["embedding"] for it in
+                           sorted(items, key=lambda d: d.get("index", 0))]
+                if len(vectors) != len(texts):
+                    errors.append(
+                        f"{model} : batch incomplet ({len(vectors)}/{len(texts)})")
+                    continue
+                return vectors
             except (KeyError, IndexError, TypeError) as exc:
                 errors.append(f"{model} : réponse sans embedding ({type(exc).__name__})")
+            except RuntimeError as exc:
+                # Retry épuisé (serveur down/surchargé) : vers le message final.
+                errors.append(f"{model} : {exc}")
+                continue
             except Exception as exc:
                 errors.append(f"{model} : {type(exc).__name__} {str(exc)[:150]}")
         raise RuntimeError(

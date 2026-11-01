@@ -133,6 +133,8 @@ class OpenAIVisionRaiseTest(unittest.IsolatedAsyncioTestCase):
 class EmbeddingExplicitTest(unittest.IsolatedAsyncioTestCase):
     async def test_ollama_success_returns_vector(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/api/embed"):
+                return httpx.Response(200, json={"embeddings": [[0.1, 0.2]]}, request=request)
             return httpx.Response(200, json={"embedding": [0.1, 0.2]}, request=request)
 
         provider = _mock_provider(OllamaProvider, handler)
@@ -143,8 +145,9 @@ class EmbeddingExplicitTest(unittest.IsolatedAsyncioTestCase):
             raise httpx.ConnectError("mock-down", request=request)
 
         provider = _mock_provider(OllamaProvider, handler)
-        with self.assertRaises(RuntimeError) as ctx:
-            await provider.get_embedding("bonjour")
+        with _no_sleep():
+            with self.assertRaises(RuntimeError) as ctx:
+                await provider.get_embedding("bonjour")
         self.assertIn("Embeddings indisponibles", str(ctx.exception))
 
     async def test_openai_success_returns_vector(self) -> None:
@@ -159,9 +162,97 @@ class EmbeddingExplicitTest(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(500, json={"error": "boom"}, request=request)
 
         provider = _mock_provider(OpenAICompatibleProvider, handler)
-        with self.assertRaises(RuntimeError) as ctx:
-            await provider.get_embedding("bonjour")
+        with _no_sleep():
+            with self.assertRaises(RuntimeError) as ctx:
+                await provider.get_embedding("bonjour")
         self.assertIn("Embeddings indisponibles", str(ctx.exception))
+
+
+class EmbeddingBatchTest(unittest.IsolatedAsyncioTestCase):
+    """Batch embeddings : 1 appel natif, repli gather, ordre préservé."""
+
+    async def test_ollama_batch_is_single_call(self) -> None:
+        calls: list = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            calls.append(request)
+            body = _json.loads(request.content.decode())
+            self.assertEqual(request.url.path, "/api/embed")
+            vecs = [[float(i)] for i in range(len(body["input"]))]
+            return httpx.Response(200, json={"embeddings": vecs}, request=request)
+
+        provider = _mock_provider(OllamaProvider, handler)
+        vectors = await provider.get_embeddings(["a", "b", "c"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(vectors, [[0.0], [1.0], [2.0]])
+
+    async def test_ollama_batch_empty_returns_empty_without_call(self) -> None:
+        calls: list = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(200, json={"embeddings": []}, request=request)
+
+        provider = _mock_provider(OllamaProvider, handler)
+        self.assertEqual(await provider.get_embeddings([]), [])
+        self.assertEqual(calls, [])
+
+    async def test_ollama_old_server_falls_back_to_gather(self) -> None:
+        calls: list = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            calls.append(request)
+            if request.url.path.endswith("/api/embed"):
+                return httpx.Response(404, text="404 page not found", request=request)
+            body = _json.loads(request.content.decode())
+            return httpx.Response(
+                200, json={"embedding": [float(len(body["prompt"]))]}, request=request
+            )
+
+        provider = _mock_provider(OllamaProvider, handler)
+        vectors = await provider.get_embeddings(["aa", "bbbb"])
+        self.assertEqual(vectors, [[2.0], [4.0]])
+        singular = [c for c in calls if c.url.path.endswith("/api/embeddings")]
+        self.assertEqual(len(singular), 2)
+
+    async def test_ollama_missing_model_tries_next_model(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            body = _json.loads(request.content.decode())
+            if body.get("model") == "missing-model":
+                return httpx.Response(
+                    404,
+                    json={"error": "model 'missing-model' not found"},
+                    request=request,
+                )
+            return httpx.Response(200, json={"embeddings": [[0.9]]}, request=request)
+
+        provider = _mock_provider(OllamaProvider, handler, embed_model="missing-model")
+        self.assertEqual(await provider.get_embeddings(["x"]), [[0.9]])
+
+    async def test_openai_batch_is_single_call_sorted_by_index(self) -> None:
+        calls: list = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            self.assertEqual(request.url.path, "/embeddings")
+            return httpx.Response(
+                200,
+                json={"data": [
+                    {"index": 1, "embedding": [0.2]},
+                    {"index": 0, "embedding": [0.1]},
+                ]},
+                request=request,
+            )
+
+        provider = _mock_provider(OpenAICompatibleProvider, handler)
+        self.assertEqual(await provider.get_embeddings(["a", "b"]), [[0.1], [0.2]])
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

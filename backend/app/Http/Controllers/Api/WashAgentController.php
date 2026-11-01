@@ -192,16 +192,7 @@ class WashAgentController extends Controller
 
         // Jamais de 500 brut : moteur IA injoignable => 200 + guidage chaleureux.
         try {
-            $response = $ai->agentChat(
-                $validated['message'],
-                $validated['history'] ?? [],
-                [
-                    'schools' => $this->maintenanceProfiles($validated['district'] ?? null),
-                    'incidents' => $this->openIncidentSnapshots($validated['district'] ?? null),
-                    'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
-                    'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
-                ],
-            );
+            $response = $this->agentChatResilient($ai, $validated);
         } catch (ConnectionException|GuzzleConnectException $e) {
             return response()->json($this->degradedGuidance());
         } catch (\Throwable $e) {
@@ -219,6 +210,42 @@ class WashAgentController extends Controller
         ]);
 
         return response()->json($response);
+    }
+
+    /**
+     * Appel moteur avec une 2e chance sur panne de connexion franche.
+     *
+     * Couvre le moteur froid / conteneur en redémarrage (refus de connexion
+     * transitoire). Pas de retry sur timeout : l'utilisateur a déjà attendu
+     * 120 s, on guide au lieu de faire attendre 120 s de plus. Sûr côté
+     * doublons : la persistance (propositions, AiAnalysis) a lieu une seule
+     * fois après le succès, dans converse().
+     */
+    protected function agentChatResilient(AiEngineClient $ai, array $validated): array
+    {
+        $context = [
+            'schools' => $this->maintenanceProfiles($validated['district'] ?? null),
+            'incidents' => $this->openIncidentSnapshots($validated['district'] ?? null),
+            'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
+            'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
+        ];
+
+        try {
+            return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context);
+        } catch (ConnectionException|GuzzleConnectException $e) {
+            if ($this->isTimeoutFailure($e)) {
+                throw $e;
+            }
+            sleep(1);
+            return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context);
+        }
+    }
+
+    protected function isTimeoutFailure(\Throwable $e): bool
+    {
+        $message = strtolower($e->getMessage());
+
+        return str_contains($message, 'curl error 28') || str_contains($message, 'timed out');
     }
 
     protected function softThrottleResponse(Request $request): ?array

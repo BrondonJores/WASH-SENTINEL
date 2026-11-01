@@ -732,6 +732,78 @@ class FollowUpDateRoutingTest(unittest.TestCase):
             self.assertEqual(route_intent(q), "create")
 
 
+class LlmBudgetTest(unittest.IsolatedAsyncioTestCase):
+    """Budget MAX_LLM_CALLS : le pire cas ne dépasse jamais 6 appels."""
+
+    async def test_stubborn_model_capped_at_six_calls(self) -> None:
+        from app.agent_loop import MAX_LLM_CALLS
+
+        stub = StubLLM([_call("summarize_district", {})])
+        loop = AgentLoop(stub)
+        res = await loop.chat(AgentChatRequest(message="résume", context=CONTEXT))
+        self.assertLessEqual(stub.calls, MAX_LLM_CALLS)
+        self.assertEqual(res.tools_executed, ["summarize_district"])
+
+    async def test_chatterbox_correction_path_capped(self) -> None:
+        from app.agent_loop import MAX_LLM_CALLS
+
+        # Modèle bavard : affirme une absence sans outil, persiste, contredit.
+        script = [
+            {"raw": {"role": "assistant", "content": "aucune école sans eau."},
+             "content": "aucune école sans eau.", "tool_calls": []},
+        ]
+        stub = StubLLM(script)
+        loop = AgentLoop(stub)
+        res = await loop.chat(AgentChatRequest(
+            message="quelles écoles n'ont pas d'eau ?", context=CONTEXT))
+        self.assertLessEqual(stub.calls, MAX_LLM_CALLS)
+        self.assertTrue(res.answer.strip())
+
+
+class PayloadScopingTest(unittest.TestCase):
+    """Historique et observations bornés, originaux intacts."""
+
+    def test_history_capped_per_turn_and_total(self) -> None:
+        from app.agent_loop import _scoped_history
+        from app.schemas import ChatTurn
+
+        turns = [ChatTurn(role="user", content=f"m{i} " + "x" * 1500) for i in range(8)]
+        scoped = _scoped_history(turns)
+        self.assertLessEqual(len(scoped), 6)
+        for turn in scoped:
+            self.assertLessEqual(len(turn["content"]), 1200 + len("…[tour tronqué]"))
+        self.assertLessEqual(sum(len(t["content"]) for t in scoped), 4000)
+        # Les tours conservés sont les plus récents.
+        self.assertTrue(scoped[-1]["content"].startswith("m7"))
+
+    def test_history_short_passthrough(self) -> None:
+        from app.agent_loop import _scoped_history
+        from app.schemas import ChatTurn
+
+        turns = [ChatTurn(role="user", content="bonjour")]
+        self.assertEqual(_scoped_history(turns), [{"role": "user", "content": "bonjour"}])
+        self.assertEqual(_scoped_history([]), [])
+
+    def test_long_list_truncated_with_note(self) -> None:
+        from app.agent_loop import _compact_observation
+
+        obs = {"incidents": [{"id": i} for i in range(30)], "total": 30}
+        slim = _compact_observation("list_incidents", obs)
+        self.assertEqual(len(slim["incidents"]), 13)
+        self.assertIn("+18 autres", slim["incidents"][-1])
+        self.assertEqual(slim["total"], 30)
+        self.assertEqual(len(obs["incidents"]), 30)
+
+    def test_long_string_truncated_with_note(self) -> None:
+        from app.agent_loop import _compact_observation
+
+        obs = {"briefing": "y" * 2500}
+        slim = _compact_observation("build_briefing", obs)
+        self.assertLess(len(slim["briefing"]), 2500)
+        self.assertIn("tronqué", slim["briefing"])
+        self.assertEqual(len(obs["briefing"]), 2500)
+
+
 class CompactObservationTest(unittest.TestCase):
     """Le LLM reçoit un résumé, les cartes gardent le détail complet."""
 

@@ -24,6 +24,17 @@ MAX_ITERATIONS = 5
 # Budget wall-clock d'un run (surtout CPU local) : au-delà, on conclut
 # avec le résumé déterministe plutôt que de laisser l'UI pendre.
 RUN_BUDGET_S = 100.0
+# Budget total d'appels LLM par run (boucle + recadrages force/absence) :
+# sans lui, le pire cas monte à 11 appels (5 + 2 + 2 + 2), rédhibitoire
+# sur CPU froid. Au-delà, résumé déterministe honnête (jamais d'invention).
+MAX_LLM_CALLS = 6
+# Payload scoping : l'historique et les observations sont bornés pour ne pas
+# noyer les petits modèles (chaque token ajouté ralentit chaque appel).
+HISTORY_TURNS = 6
+HISTORY_TURN_MAX_CHARS = 1200
+HISTORY_MAX_CHARS = 4000
+OBS_LIST_MAX_ITEMS = 12
+OBS_STR_MAX_CHARS = 2000
 # Petits modèles locaux : descriptions d'outils compactées (le prompt
 # complet à 24 outils les noie et ralentit chaque appel).
 SMALL_MODEL_RE = re.compile(r"1b|2b|3b|mini", re.IGNORECASE)
@@ -380,6 +391,43 @@ def _summarize_ranking(obs: dict[str, Any]) -> str:
     )
 
 
+def _truncate_value(value: Any, depth: int = 0) -> Any:
+    """Troncature générique (copie, jamais de mutation) : listes > 12 items
+    et chaînes > 2000 caractères, avec note explicite. Profondeur ≤ 2."""
+    if isinstance(value, str) and len(value) > OBS_STR_MAX_CHARS:
+        return value[:OBS_STR_MAX_CHARS] + f"…[tronqué, {len(value)} caractères au total]"
+    if isinstance(value, list) and len(value) > OBS_LIST_MAX_ITEMS:
+        head = [_truncate_value(v, depth + 1) for v in value[:OBS_LIST_MAX_ITEMS]]
+        return head + [f"[+{len(value) - OBS_LIST_MAX_ITEMS} autres, voir la carte]"]
+    if isinstance(value, list):
+        return [_truncate_value(v, depth + 1) for v in value] if depth < 2 else list(value)
+    if isinstance(value, dict):
+        if depth >= 2:
+            return dict(value)
+        return {k: _truncate_value(v, depth + 1) for k, v in value.items()}
+    return value
+
+
+def _scoped_history(history: Any) -> list[dict[str, str]]:
+    """Historique borné : 6 derniers tours, 1200 car/tour, 4000 au total.
+
+    Au-delà du total, on abandonne les tours les plus anciens (le message
+    courant, hors historique, n'est jamais touché).
+    """
+    turns = [{"role": t.role, "content": t.content or ""}
+             for t in (history or [])[-HISTORY_TURNS:]]
+    scoped: list[dict[str, str]] = []
+    for turn in turns:
+        content = turn["content"]
+        if len(content) > HISTORY_TURN_MAX_CHARS:
+            content = content[:HISTORY_TURN_MAX_CHARS] + "…[tour tronqué]"
+        scoped.append({"role": turn["role"], "content": content})
+    total = sum(len(t["content"]) for t in scoped)
+    while len(scoped) > 1 and total > HISTORY_MAX_CHARS:
+        total -= len(scoped.pop(0)["content"])
+    return scoped
+
+
 def _compact_observation(name: str, obs: Any) -> Any:
     """Version allégée d'une observation pour le LLM.
 
@@ -412,7 +460,9 @@ def _compact_observation(name: str, obs: Any) -> Any:
             "top_cout_XAF": top.get("cumul_reparations_XAF"),
             "note": "Détail par école dans la carte.",
         }
-    return slim
+    # Troncature générique en dernier (copie) : les compactions spécifiques
+    # ci-dessus travaillent sur les données complètes (ex. jour max réel).
+    return {k: _truncate_value(v) for k, v in slim.items()}
 
 
 def _summarize_analysis(obs: dict[str, Any]) -> str:
@@ -556,8 +606,7 @@ class AgentLoop:
         intent = route_intent(req.message)
         active_tools = compact_tools(tools_for_intent(intent), self.llm.model)
         messages: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(lang)}]
-        for turn in req.history[-6:]:
-            messages.append({"role": turn.role, "content": turn.content})
+        messages.extend(_scoped_history(req.history))
         user_content = req.message
         if req.history and intent == "other":
             user_content += followup_hint(req.message, context)
@@ -569,10 +618,14 @@ class AgentLoop:
         nudged = False
         answer = ""
         used_iterations = 0
+        budget = {"llm_calls": 0}
         for _ in range(MAX_ITERATIONS):
             if time.monotonic() - started > RUN_BUDGET_S:
                 break
+            if budget["llm_calls"] >= MAX_LLM_CALLS:
+                break
             used_iterations += 1
+            budget["llm_calls"] += 1
             reply = await self.llm.chat(messages, active_tools)
             messages.append(reply["raw"])
             calls = reply.get("tool_calls", [])
@@ -603,7 +656,8 @@ class AgentLoop:
         if (not executed and answer.strip()
                 and self._looks_like_data_question(req.message)
                 and not over_budget):
-            answer = await self._force_tool_pass(messages, context, executed, active_tools)
+            answer = await self._force_tool_pass(
+                messages, context, executed, active_tools, budget)
 
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
             answer = self._fallback_answer(executed, context)
@@ -611,7 +665,7 @@ class AgentLoop:
         if answer.strip() and _claims_absence(answer) and not _has_read_tool(executed):
             if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
-                    messages, context, executed, seen, active_tools)
+                    messages, context, executed, seen, active_tools, budget)
             else:
                 answer = UNVERIFIED_HONEST_ANSWER
 
@@ -619,7 +673,7 @@ class AgentLoop:
                 and _has_empty_list_obs(executed)):
             if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
-                    messages, context, executed, seen, active_tools,
+                    messages, context, executed, seen, active_tools, budget,
                     nudge=CONTRADICTION_CORRECTION_NUDGE)
             else:
                 answer = self._fallback_answer(executed, context)
@@ -668,14 +722,20 @@ class AgentLoop:
         context: dict[str, Any],
         executed: list[tuple[str, dict[str, Any]]],
         tools: list[dict[str, Any]] | None = None,
+        budget: dict[str, int] | None = None,
     ) -> str:
         """Dernier recadrage : réponse directe à une question de données.
 
         On exige un appel d'outil immédiat. S'il obéit, on le laisse conclure
         sur les observations ; sinon, réponse honnête (jamais d'invention).
+        Chaque appel LLM consomme le budget partagé (MAX_LLM_CALLS).
         """
         tools = AGENT_TOOLS if tools is None else tools
+        budget = {"llm_calls": 0} if budget is None else budget
+        if budget["llm_calls"] >= MAX_LLM_CALLS:
+            return self._fallback_answer(executed, context)
         messages.append({"role": "user", "content": NO_TOOL_NUDGE})
+        budget["llm_calls"] += 1
         retry = await self.llm.chat(messages, tools)
         messages.append(retry["raw"])
         for call in retry.get("tool_calls", []):
@@ -686,6 +746,9 @@ class AgentLoop:
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not executed:
             return self._fallback_answer(executed, context)
+        if budget["llm_calls"] >= MAX_LLM_CALLS:
+            return self._fallback_answer(executed, context)
+        budget["llm_calls"] += 1
         final = await self.llm.chat(messages, tools)
         messages.append(final["raw"])
         answer = final.get("content", "")
@@ -700,6 +763,7 @@ class AgentLoop:
         executed: list[tuple[str, dict[str, Any]]],
         seen: set[tuple[str, str]],
         tools: list[dict[str, Any]],
+        budget: dict[str, int] | None = None,
         nudge: str = ABSENCE_CORRECTION_NUDGE,
     ) -> str:
         """Recadrage anti-hallucination : absence affirmée sans lecture
@@ -708,8 +772,13 @@ class AgentLoop:
         Une seule tentative (bornée par MAX_ITERATIONS à l'appel) : on exige un
         outil de lecture puis on conclut ; si le modèle persiste sans observer,
         réponse honnête (jamais d'invention).
+        Chaque appel LLM consomme le budget partagé (MAX_LLM_CALLS).
         """
+        budget = {"llm_calls": 0} if budget is None else budget
+        if budget["llm_calls"] >= MAX_LLM_CALLS:
+            return self._fallback_answer(executed, context)
         messages.append({"role": "user", "content": nudge})
+        budget["llm_calls"] += 1
         retry = await self.llm.chat(messages, tools)
         messages.append(retry["raw"])
         for call in retry.get("tool_calls", []):
@@ -726,6 +795,9 @@ class AgentLoop:
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not _has_read_tool(executed):
             return UNVERIFIED_HONEST_ANSWER
+        if budget["llm_calls"] >= MAX_LLM_CALLS:
+            return self._fallback_answer(executed, context)
+        budget["llm_calls"] += 1
         final = await self.llm.chat(messages, tools)
         messages.append(final["raw"])
         answer = final.get("content", "")

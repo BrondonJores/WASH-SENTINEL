@@ -35,6 +35,50 @@ class WashAgentGuidanceTest extends TestCase
         $this->assertStringContainsString('Réessayez', $response->json('answer'));
     }
 
+    public function test_transient_connection_failure_retries_once_then_succeeds(): void
+    {
+        $attempts = 0;
+        Http::fake([
+            '*/v1/agent/chat' => function () use (&$attempts) {
+                $attempts++;
+                if ($attempts === 1) {
+                    throw new ConnectionException('cURL error 7: Failed to connect');
+                }
+
+                return Http::response([
+                    'answer' => 'Moteur revenu.',
+                    'tools_executed' => [],
+                    'cards' => [],
+                    'model_used' => 'test-llm',
+                ], 200);
+            },
+        ]);
+
+        $this->postJson('/api/v1/wash/agent/converse', ['message' => 'Bonjour'])
+            ->assertOk()
+            ->assertJsonPath('answer', 'Moteur revenu.')
+            ->assertJsonMissing(['degraded']);
+
+        $this->assertSame(2, $attempts);
+    }
+
+    public function test_timeout_does_not_retry(): void
+    {
+        $attempts = 0;
+        Http::fake([
+            '*/v1/agent/chat' => function () use (&$attempts) {
+                $attempts++;
+                throw new ConnectionException('cURL error 28: Operation timed out');
+            },
+        ]);
+
+        $this->postJson('/api/v1/wash/agent/converse', ['message' => 'Bonjour'])
+            ->assertOk()
+            ->assertJsonPath('degraded', true);
+
+        $this->assertSame(1, $attempts);
+    }
+
     public function test_validation_errors_speak_french(): void
     {
         $this->postJson('/api/v1/wash/agent/converse', [])
