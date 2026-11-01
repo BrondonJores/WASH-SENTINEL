@@ -2273,19 +2273,30 @@ function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<
         />
       ) : (
         <ul className="space-y-2">
-          {pending.map((p, i) => (
-            <li key={i} className="flex items-start gap-2.5 border-b border-stone-200/60 pb-2 last:border-0 last:pb-0 dark:border-white/[0.06]">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold leading-snug">{fmtOpt(p.school) ?? fmtOpt(p.school_name) ?? `Signalement ${i + 1}`}</p>
-                {(fmtOpt(p.summary) ?? fmtOpt(p.title)) !== undefined && (
-                  <p className="mt-0.5 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(p.summary) ?? fmtOpt(p.title)}</p>
-                )}
-                <p className="mt-0.5 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-                  {[fmtOpt(p.created_at), fmtOpt(p.status)].filter((s) => s !== undefined).join(' · ')}
-                </p>
-              </div>
-            </li>
-          ))}
+          {pending.map((p, i) => {
+            const urg = fmtOpt(p.urgency) ?? fmtOpt(p.urgency_level) ?? 'medium';
+            const cat = fmtOpt(p.category) ?? fmtOpt(p.issue_type);
+            return (
+              <li key={i} className="flex items-start gap-2.5 border-b border-stone-200/60 pb-2 last:border-0 last:pb-0 dark:border-white/[0.06]">
+                <UrgencyDot level={urg} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold leading-snug">{fmtOpt(p.school) ?? fmtOpt(p.school_name) ?? `Signalement ${i + 1}`}</p>
+                  {(fmtOpt(p.summary) ?? fmtOpt(p.title)) !== undefined && (
+                    <p className="mt-0.5 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(p.summary) ?? fmtOpt(p.title)}</p>
+                  )}
+                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <Badge tone={URGENCY_TONE[urg] ?? 'neutral'}>{URGENCY_LABEL[urg] ?? urg}</Badge>
+                    {cat !== undefined && (
+                      <Badge>{CATEGORY_LABEL[cat] ?? cat}</Badge>
+                    )}
+                  </span>
+                  <p className="mt-0.5 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+                    {[fmtOpt(p.created_at), fmtOpt(p.status)].filter((s) => s !== undefined).join(' · ')}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
       {pending.length > 0 && (

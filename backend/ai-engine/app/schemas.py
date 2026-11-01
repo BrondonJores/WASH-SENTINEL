@@ -330,8 +330,55 @@ class AgentChatRequest(BaseModel):
     context: AgentContext = Field(default_factory=AgentContext, description="Données factuelles fournies par Laravel")
 
 
+# Source unique de vérité des types de cartes (AXE 7) : tout type émis
+# par agent_loop.py, guidance.py ou un CARD_BUILDERS de app/tools/*
+# DOIT figurer ici ; tout membre non émis DOIT figurer dans
+# FRONTEND_RESERVED. Voir tests/test_card_contracts.py.
+CardType = Literal[
+    # Historiques documentés.
+    "school_analysis",
+    "school_ranking",
+    "district_summary",
+    "incident_detail",
+    "report_confirmation",
+    "action_confirmation",
+    # Plugins (un par CARD_BUILDERS).
+    "compare_schools",
+    "epidemic_alerts",
+    "document_briefing",
+    "district_alerts",
+    "saisie_assistee",
+    "maintenance_team",
+    "observatoire",
+    "relances",
+    "chantier_dossier",
+    "mission_timeline",
+    "capabilities_list",
+    "offline_queue",
+    "copilot_answer",
+    # Codés en dur dans agent_loop._build_cards.
+    "incident_timeline",
+    "incident_picker",
+    "briefing_deck",
+    "territory_map",
+    "trend_chart",
+    "calendar_heatmap",
+    "budget_compare",
+    "maintenance_logs",
+    # Divers.
+    "guidance",
+    "place_suggestions",
+    # Réservé frontend (accepté, jamais émis par le backend).
+    "action_result",
+]
+
+# Membres de CardType acceptés mais jamais émis par le backend
+# (rendus frontend existants, conservés pour compatibilité).
+FRONTEND_RESERVED = frozenset({"report_confirmation", "action_result"})
+
+
 class AgentCard(BaseModel):
-    type: str = Field(..., description="school_analysis, school_ranking, district_summary, incident_detail, report_confirmation, action_confirmation")
+    type: str = Field(..., description="Type de carte, voir CardType (contrat verrouillé AXE 7)")
     title: str
     data: dict[str, Any] = Field(default_factory=dict)
 

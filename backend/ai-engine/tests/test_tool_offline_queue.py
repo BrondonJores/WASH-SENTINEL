@@ -37,6 +37,49 @@ class OfflineQueueExecuteTest(unittest.TestCase):
         self.assertIn("hors-ligne", res["error"].lower())
         self.assertIn("inconnue", res["error"].lower())
 
+    def test_execute_preserves_urgency_and_category(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        ctx = {
+            "offline_queue": [
+                {"temp_id": "tmp-001", "school": "EP Bonanjo",
+                 "summary": "Eau trouble, suspicion choléra",
+                 "created_at": "2026-10-31T08:00:00+00:00",
+                 "status": "pending", "urgency": "CRITICAL",
+                 "category": "water_point", "affected_students": 450},
+                {"id": 42, "school": "EP Mendong",
+                 "summary": "Robinet qui fuit",
+                 "created_at": "2026-10-31T09:15:00+00:00",
+                 "status": "pending", "urgency_level": "low",
+                 "issue_type": "leak"},
+            ],
+            "sync_status": {"online": False},
+        }
+        res = TOOL_EXECUTORS["offline_queue"]({}, ctx)
+        self.assertEqual(res["count"], 2)
+        first, second = res["pending"]
+        self.assertEqual(first["urgency"], "critical")
+        self.assertEqual(first["category"], "water_point")
+        self.assertEqual(first["affected_students"], 450)
+        self.assertEqual(second["urgency"], "low")
+        self.assertEqual(second["category"], "leak")
+        self.assertIsNone(second["affected_students"])
+        self.assertIn("1 critique", res["insight"])
+
+    def test_execute_unknown_urgency_normalized_to_none(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        ctx = {
+            "offline_queue": [
+                {"temp_id": "tmp-001", "school": "EP Bonanjo",
+                 "summary": "Fuite", "urgency": "URGENT!!!",
+                 "category": "  ", "status": "pending"},
+            ],
+            "sync_status": {"online": True},
+        }
+        res = TOOL_EXECUTORS["offline_queue"]({}, ctx)
+        self.assertIsNone(res["pending"][0]["urgency"])
+        self.assertIsNone(res["pending"][0]["category"])
+        self.assertNotIn("Dont", res["insight"])
+
     def test_execute_empty_queue_known(self) -> None:
         from app.agent_tools import TOOL_EXECUTORS
         res = TOOL_EXECUTORS["offline_queue"](

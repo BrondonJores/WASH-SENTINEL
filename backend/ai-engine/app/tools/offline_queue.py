@@ -55,6 +55,18 @@ INTENT_HINTS = frozenset({
 })
 
 
+_URGENCES_SYSTEME = frozenset({"low", "medium", "high", "critical"})
+
+
+def _pending_urgency(row: dict[str, Any]) -> str | None:
+    """Urgence normalisée (liste blanche, jamais inventée : None sinon)."""
+    raw = row.get("urgency")
+    if raw is None:
+        raw = row.get("urgency_level")
+    low = str(raw or "").strip().lower()
+    return low if low in _URGENCES_SYSTEME else None
+
+
 def _pending_of(row: dict[str, Any]) -> dict[str, Any]:
     """Normalise un element de la file (cles id|temp_id, school, summary...)."""
     pid = row.get("id")
@@ -66,12 +78,18 @@ def _pending_of(row: dict[str, Any]) -> dict[str, Any]:
         row.get("created_at") or row.get("createdAt") or row.get("date")
     )
     status = row.get("status") or "pending"
+    category = row.get("category") or row.get("issue_type")
+    category = str(category).strip().lower() or None if category is not None else None
+    affected = row.get("affected_students")
     return {
         "id": pid,
         "school": school,
         "summary": summary,
         "created_at": created_at,
         "status": status,
+        "urgency": _pending_urgency(row),
+        "category": category,
+        "affected_students": affected,
     }
 
 
@@ -156,6 +174,18 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                     f"{count} signalements en attente de synchronisation : "
                     "appareil hors-ligne, ils partiront a la reconnexion."
                 )
+        if count >= 1:
+            n_crit = sum(1 for p in pending if p.get("urgency") == "critical")
+            n_high = sum(1 for p in pending if p.get("urgency") == "high")
+            severe: list[str] = []
+            if n_crit:
+                severe.append(f"{n_crit} critique{'s' if n_crit > 1 else ''}")
+            if n_high:
+                many = n_high > 1
+                severe.append(f"{n_high} haute{'s' if many else ''} "
+                              f"urgence{'s' if many else ''}")
+            if severe:
+                insight += f" Dont {' et '.join(severe)}."
         if last_sync:
             insight += f" Derniere synchro : {last_sync}."
         result: dict[str, Any] = {

@@ -50,17 +50,93 @@ class DistrictAlertsExecuteTest(unittest.TestCase):
         self.assertEqual(res["total"], 3)
         self.assertTrue(all(a.get("action") for a in res["alerts"]))
 
-    def test_execute_empty_returns_error(self) -> None:
+    def test_execute_empty_returns_typed_empty(self) -> None:
         from app.agent_tools import TOOL_EXECUTORS
         ctx = {"schools": [], "incidents": [], "recent_incidents": []}
         res = TOOL_EXECUTORS["district_alerts"]({}, ctx)
-        self.assertIn("error", res)
+        # Vide valide (AXE 7 / P1b) : pas d'erreur, carte typée vide.
+        self.assertNotIn("error", res)
         self.assertEqual(res["alerts"], [])
+        self.assertEqual(res["total"], 0)
+        self.assertIn("Aucune alerte", res["insight"])
 
     def test_execute_no_data_returns_error_without_exception(self) -> None:
         from app.agent_tools import TOOL_EXECUTORS
         res = TOOL_EXECUTORS["district_alerts"]({}, {})
         self.assertIn("error", res)
+
+    def test_execute_dateless_critical_kept(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        ctx = {
+            "schools": [
+                {"school_id": 1, "school_name": "École de Ngok",
+                 "district": "Douala"},
+            ],
+            "incidents": [
+                {"id": 11, "school_id": 1, "school_name": "École de Ngok",
+                 "district": "Douala", "reference_code": "WASH-2026-DATE",
+                 "title": "Pompe cassée", "summary": "Pompe cassée",
+                 "issue_type": "total_breakdown", "urgency": "critical",
+                 "affected_students": 120},  # sans reported_at
+            ],
+            "recent_incidents": [],
+        }
+        res = TOOL_EXECUTORS["district_alerts"]({"district": "Douala"}, ctx)
+        self.assertNotIn("error", res)
+        kinds = [a["kind"] for a in res["alerts"]]
+        self.assertIn("critical_stale", kinds)
+        stale = next(a for a in res["alerts"]
+                     if a["kind"] == "critical_stale")
+        self.assertIsNone(stale["age_days"])
+        self.assertEqual(stale["severity"], "critical")
+        self.assertIn("sans date", stale["action"])
+
+    def test_execute_spike_from_incidents_only(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        ctx = {
+            "schools": [
+                {"school_id": 1, "school_name": "École de Ngok",
+                 "district": "Douala"},
+            ],
+            "incidents": [
+                {"id": 11, "school_id": 1, "school_name": "École de Ngok",
+                 "district": "Douala", "title": f"Petite fuite {i}",
+                 "summary": "Petite fuite", "issue_type": "leak",
+                 "urgency": "low", "reported_at": _iso(1)}
+                for i in range(3)
+            ],
+            "recent_incidents": [],
+        }
+        # Ids distincts requis pour 3 incidents frais.
+        for pos, incident in enumerate(ctx["incidents"]):
+            incident["id"] = 11 + pos
+        res = TOOL_EXECUTORS["district_alerts"]({"district": "Douala"}, ctx)
+        self.assertNotIn("error", res)
+        spikes = [a for a in res["alerts"] if a["kind"] == "spike"]
+        self.assertEqual(len(spikes), 1)
+        self.assertIn("3 incidents", spikes[0]["title"])
+
+    def test_execute_spike_dedups_across_pools(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        incident = {"id": 11, "school_id": 1, "school_name": "École de Ngok",
+                    "district": "Douala", "title": "Fuite",
+                    "summary": "Fuite", "issue_type": "leak",
+                    "urgency": "low", "reported_at": _iso(1)}
+        ctx = {
+            "schools": [{"school_id": 1, "school_name": "École de Ngok",
+                         "district": "Douala"}],
+            "incidents": [dict(incident, id=11), dict(incident, id=12),
+                          dict(incident, id=13)],
+            # Mêmes ids dans recent_incidents : doublons à dédupliquer.
+            "recent_incidents": [{"id": 11, "school_id": 1,
+                                  "reported_at": _iso(1)},
+                                 {"id": 12, "school_id": 1,
+                                  "reported_at": _iso(1)}],
+        }
+        res = TOOL_EXECUTORS["district_alerts"]({"district": "Douala"}, ctx)
+        spikes = [a for a in res["alerts"] if a["kind"] == "spike"]
+        self.assertEqual(len(spikes), 1)
+        self.assertIn("3 incidents", spikes[0]["title"])
 
 
 class DistrictAlertsRouterTest(unittest.TestCase):
@@ -92,9 +168,23 @@ class DistrictAlertsCardTest(unittest.TestCase):
         self.assertEqual(len(cards), 1)
         self.assertEqual(cards[0].type, "district_alerts")
 
-    def test_card_none_when_empty(self) -> None:
+    def test_card_none_on_error(self) -> None:
         from app.tools.district_alerts import CARD_BUILDERS
-        self.assertIsNone(CARD_BUILDERS["district_alerts"]({"alerts": [], "error": "x"}))
+        build = CARD_BUILDERS["district_alerts"]
+        self.assertIsNone(build({"alerts": [], "error": "x"}))
+        self.assertIsNone(build({}))
+
+    def test_card_typed_when_empty(self) -> None:
+        from app.agent_loop import AgentLoop
+        from app.agent_tools import TOOL_EXECUTORS
+        ctx = {"schools": [], "incidents": [], "recent_incidents": []}
+        obs = TOOL_EXECUTORS["district_alerts"]({"district": "Douala"}, ctx)
+        self.assertNotIn("error", obs)
+        loop = AgentLoop.__new__(AgentLoop)
+        cards = AgentLoop._build_cards(loop, [("district_alerts", obs)])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "district_alerts")
+        self.assertEqual(cards[0].data["alerts"], [])
 
 
 if __name__ == "__main__":

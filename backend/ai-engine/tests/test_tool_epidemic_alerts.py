@@ -43,20 +43,46 @@ class EpidemicAlertsExecuteTest(unittest.TestCase):
         self.assertEqual(cluster["incident_count"], 2)
         self.assertIn("Wouri", res["insight"])
 
-    def test_isolated_incident_returns_error(self) -> None:
+    def test_isolated_incident_returns_typed_empty(self) -> None:
         from app.agent_tools import TOOL_EXECUTORS
         ctx = {"incidents": [
             _incident(1, 11, "École de Bonanjo", "Wouri",
                       "Eau jaune au robinet"),
         ]}
         res = TOOL_EXECUTORS["epidemic_alerts"]({}, ctx)
-        self.assertIn("error", res)
+        # Vide valide (AXE 7 / P1b) : pas d'erreur, carte typée vide.
+        self.assertNotIn("error", res)
+        self.assertEqual(res["clusters"], [])
+        self.assertIn("Aucun cluster", res["insight"])
         # Même signal, districts différents -> pas de cluster.
         ctx2 = {"incidents": [
             _incident(1, 11, "École de Bonanjo", "Wouri", "Eau jaune"),
             _incident(2, 21, "École de Mendong", "Mvila", "Eau jaune"),
         ]}
-        self.assertIn("error", TOOL_EXECUTORS["epidemic_alerts"]({}, ctx2))
+        res2 = TOOL_EXECUTORS["epidemic_alerts"]({}, ctx2)
+        self.assertNotIn("error", res2)
+        self.assertEqual(res2["clusters"], [])
+
+    def test_missing_pools_returns_error(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        run = TOOL_EXECUTORS["epidemic_alerts"]
+        res = run({}, {})
+        self.assertIn("error", res)
+        self.assertIn("donnée", res["error"].lower())
+
+    def test_dateless_signals_kept_prudent(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        first = _incident(1, 11, "École de Bonanjo", "Wouri",
+                          "Eau jaune et trouble au robinet")
+        second = _incident(2, 12, "École de Ngok", "Wouri",
+                           "Suspicion de contamination de l'eau")
+        del first["reported_at"]
+        del second["reported_at"]
+        res = TOOL_EXECUTORS["epidemic_alerts"](
+            {}, {"incidents": [first, second]})
+        self.assertNotIn("error", res)
+        self.assertEqual(len(res["clusters"]), 1)
+        self.assertEqual(res["clusters"][0]["school_count"], 2)
 
     def test_district_filter_and_days_window(self) -> None:
         from app.agent_tools import TOOL_EXECUTORS
@@ -64,13 +90,15 @@ class EpidemicAlertsExecuteTest(unittest.TestCase):
         ctx = _cluster_context()
         res = run({"district": "wouri"}, ctx)
         self.assertEqual(len(res["clusters"]), 1)
-        self.assertIn("error", run({"district": "Mvila"}, ctx))
+        mvil = run({"district": "Mvila"}, ctx)
+        self.assertNotIn("error", mvil)
+        self.assertEqual(mvil["clusters"], [])
         # Fenêtre : signaux vieux de 30 j exclus par défaut (7 j).
         old = {"incidents": [
             _incident(1, 11, "École A", "Wouri", "Eau jaune", days_ago=30),
             _incident(2, 12, "École B", "Wouri", "Eau trouble", days_ago=30),
         ]}
-        self.assertIn("error", run({}, old))
+        self.assertEqual(run({}, old)["clusters"], [])
         self.assertEqual(len(run({"days": 60}, old)["clusters"]), 1)
 
     def test_deterministic_offline(self) -> None:
@@ -124,6 +152,21 @@ class EpidemicAlertsCardTest(unittest.TestCase):
         cards = AgentLoop._build_cards(loop, [("epidemic_alerts", obs)])
         self.assertEqual(len(cards), 1)
         self.assertEqual(cards[0].type, "epidemic_alerts")
+
+    def test_typed_card_when_empty(self) -> None:
+        from app.agent_loop import AgentLoop
+        from app.agent_tools import TOOL_EXECUTORS
+        obs = TOOL_EXECUTORS["epidemic_alerts"](
+            {}, {"incidents": [
+                _incident(1, 11, "École de Bonanjo", "Wouri",
+                          "Eau jaune au robinet"),
+            ]})
+        self.assertNotIn("error", obs)
+        loop = AgentLoop.__new__(AgentLoop)
+        cards = AgentLoop._build_cards(loop, [("epidemic_alerts", obs)])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "epidemic_alerts")
+        self.assertEqual(cards[0].data["clusters"], [])
 
     def test_no_card_on_error(self) -> None:
         from app.agent_loop import AgentLoop

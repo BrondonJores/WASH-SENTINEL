@@ -98,6 +98,31 @@ def _district_matches(item_district: Any, wanted: str) -> bool:
     return wanted in low or low in wanted
 
 
+def _dedup_incidents(*pools: Any) -> list[dict[str, Any]]:
+    """Fusion dédupliquée (id exact, sinon école+date+titre). Ordre stable.
+
+    Miroir local de epidemic_alerts._dedup_incidents (dupliqué : les outils
+    ne s'importent pas entre eux, cf. tools/__init__.py).
+    """
+    seen: set[Any] = set()
+    merged: list[dict[str, Any]] = []
+    for pool in pools:
+        for incident in pool or []:
+            if not isinstance(incident, dict):
+                continue
+            if incident.get("id") is not None:
+                key = ("id", incident.get("id"))
+            else:
+                key = ("row", incident.get("school_id"),
+                       str(incident.get("reported_at")),
+                       str(incident.get("title") or incident.get("summary")))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(incident)
+    return merged
+
+
 def _is_no_water(incident: dict[str, Any]) -> bool:
     if str(incident.get("issue_type") or "").strip().lower() in _NO_WATER_ISSUES:
         return True
@@ -128,7 +153,9 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
         incidents = [i for i in (context.get("incidents", []) or [])
                      if isinstance(i, dict) and _district_matches(i.get("district"), district_low)]
-        if not incidents and not (context.get("incidents", None)):
+        if context.get("incidents") is None:
+            # Cas "unknown" : clé manquante -> erreur (guidance). Une liste
+            # présente mais vide est un vide valide -> carte typée vide.
             base: dict[str, Any] = {"alerts": [], "total": 0,
                                     "district": district or None, "days": days}
             base["error"] = "Aucune donnée d'incident disponible pour détecter des alertes."
@@ -142,7 +169,14 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             ref = incident.get("reference_code")
             title = str(incident.get("title") or incident.get("summary") or "Incident sans titre")
             affected = incident.get("affected_students")
-            if urgency == "critical" and age is not None and age > _STALE_DAYS:
+            if urgency == "critical" and (age is None or age > _STALE_DAYS):
+                # Sans date = conservé, prudent (même politique qu'epidemic_alerts).
+                if age is None:
+                    action = (f"Intervenir en priorité à {school} : incident critique "
+                              "sans date connue — vérifier l'ancienneté.")
+                else:
+                    action = (f"Intervenir en priorité à {school} : incident critique "
+                              f"ouvert depuis {age} jours.")
                 alerts.append({
                     "kind": "critical_stale",
                     "severity": "critical",
@@ -152,7 +186,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                     "urgency": urgency,
                     "age_days": age,
                     "affected_students": affected,
-                    "action": f"Intervenir en priorité à {school} : incident critique ouvert depuis {age} jours.",
+                    "action": action,
                 })
             elif _is_no_water(incident):
                 alerts.append({
@@ -168,35 +202,50 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 })
 
         sid_district = _school_districts(context)
+        # Les deux flux Laravel fusionnés (dédupliqués) : un pic se détecte
+        # quel que soit le flux peuplé. Les sans-date du district sont
+        # comptés à part (prudent, traçable dans le titre).
+        pool = _dedup_incidents(context.get("incidents"),
+                                context.get("recent_incidents"))
         recent_count = 0
-        for recent in context.get("recent_incidents", []) or []:
-            if not isinstance(recent, dict):
+        undated_count = 0
+        for recent in pool:
+            item_district = (recent.get("district")
+                             or sid_district.get(recent.get("school_id")))
+            if district_low and not _district_matches(item_district, district_low):
                 continue
             age = _age_days(recent.get("reported_at"), now)
-            if age is None or age >= days:
-                continue
-            if district_low and not _district_matches(sid_district.get(recent.get("school_id")), district_low):
-                continue
-            recent_count += 1
-        if recent_count >= _SPIKE_THRESHOLD:
+            if age is None:
+                undated_count += 1
+            elif age < days:
+                recent_count += 1
+        spike_total = recent_count + undated_count
+        if spike_total >= _SPIKE_THRESHOLD:
             scope = f" à {district}" if district else ""
+            undated_suffix = (f" (dont {undated_count} sans date)"
+                              if undated_count else "")
+            title = (f"Pic de {spike_total} incidents en {days} jours{scope}"
+                     f"{undated_suffix}")
             alerts.append({
                 "kind": "spike",
                 "severity": "high",
                 "school_name": None,
                 "reference_code": None,
-                "title": f"Pic de {recent_count} incidents en {days} jours{scope}",
+                "title": title,
                 "urgency": None,
                 "age_days": None,
                 "affected_students": None,
-                "action": f"Analyser la cause du pic ({recent_count} incidents en {days} jours{scope}) et planifier une tournée.",
+                "undated_count": undated_count,
+                "action": f"Analyser la cause du pic ({title}) et planifier une tournée.",
             })
 
         if not alerts:
+            # Vide valide -> carte typée vide (pas d'erreur) : l'état vide
+            # frontend devient atteignable (politique AXE 7 / P1b).
             scope = f" pour {district}" if district else ""
             return {"alerts": [], "total": 0, "district": district or None,
                     "days": days,
-                    "error": f"Aucune alerte actionnable{scope} sur la période."}
+                    "insight": f"Aucune alerte actionnable{scope} sur la période."}
 
         severity_rank = {"critical": 0, "high": 1}
         alerts.sort(key=lambda a: (severity_rank.get(str(a.get("severity")), 9),
@@ -220,12 +269,20 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_district_alerts_card(obs: dict[str, Any]) -> AgentCard | None:
-    alerts = obs.get("alerts") or []
-    if not alerts:
+    if not isinstance(obs, dict) or obs.get("error"):
+        return None
+    alerts = obs.get("alerts")
+    if not isinstance(alerts, list):
         return None
     total = obs.get("total") or len(alerts)
     district = obs.get("district")
     scope = f" — {district}" if district else ""
+    if not alerts:
+        return AgentCard(
+            type="district_alerts",
+            title=f"Aucune alerte actionnable{scope}",
+            data=obs,
+        )
     return AgentCard(
         type="district_alerts",
         title=f"{total} alerte(s) actionnable(s){scope}",

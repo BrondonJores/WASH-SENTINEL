@@ -179,6 +179,14 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         days = min(max(days, 1), 90)
         district_filter = _fold(args.get("district")).strip() or None
         district_label = str(args.get("district") or "").strip() or None
+        if (context.get("incidents") is None
+                and context.get("recent_incidents") is None):
+            # Cas "unknown" : clés manquantes -> erreur (guidance). Des listes
+            # présentes mais vides sont un vide valide -> carte typée vide.
+            return {"error": (
+                "Aucune donnée d'incident disponible pour détecter "
+                "un cluster sanitaire."
+            ), "days": days}
 
         schools_by_id: dict[Any, dict[str, Any]] = {}
         for school in context.get("schools", []) or []:
@@ -239,12 +247,21 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             })
 
         if not clusters:
+            # Vide valide -> carte typée vide (pas d'erreur) : l'état vide
+            # frontend devient atteignable (politique AXE 7 / P1b).
             scope = f" à {district_label}" if district_label else ""
-            return {"error": (
-                f"Aucun cluster sanitaire détecté{scope} sur les {days} "
-                f"derniers jours ({len(signals)} signal(aux) isolé(s), pas de "
-                "regroupement multi-écoles)."
-            ), "days": days, "signals_isolated": len(signals)}
+            return {
+                "insight": (
+                    f"Aucun cluster sanitaire détecté{scope} sur les {days} "
+                    f"derniers jours ({len(signals)} signal(aux) isolé(s), "
+                    "pas de regroupement multi-écoles)."
+                ),
+                "clusters": [],
+                "district": district_label,
+                "days": days,
+                "signals_count": len(signals),
+                "signals_isolated": len(signals),
+            }
 
         total_schools = sum(c["school_count"] for c in clusters)
         parts = [f"{c['district']} ({c['school_count']} écoles, "
@@ -265,9 +282,19 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_epidemic_alerts_card(obs: dict[str, Any]) -> AgentCard | None:
-    clusters = obs.get("clusters")
-    if not isinstance(clusters, list) or not clusters:
+    if not isinstance(obs, dict) or obs.get("error"):
         return None
+    clusters = obs.get("clusters")
+    if not isinstance(clusters, list):
+        return None
+    district = obs.get("district")
+    scope = f" — {district}" if district else ""
+    if not clusters:
+        return AgentCard(
+            type="epidemic_alerts",
+            title=f"Aucun foyer sanitaire détecté{scope}",
+            data=obs,
+        )
     schools = sum(len(c.get("schools", [])) for c in clusters
                   if isinstance(c, dict))
     return AgentCard(

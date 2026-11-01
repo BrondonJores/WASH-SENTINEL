@@ -40,6 +40,10 @@ TOOL_DEF = {
                 "type": "string",
                 "description": "Réponse de l'usager à l'étape en cours",
             },
+            "recherche": {
+                "type": "string",
+                "description": "Filtre de recherche pour l'étape 'ecole' quand le référentiel dépasse 6 écoles (sous-chaîne, insensible à la casse et aux accents)",
+            },
         },
     },
 }
@@ -147,6 +151,138 @@ def _step_payload(step: str, question: str, options: list[str],
     }
 
 
+# Libellés FR -> valeurs système (construits depuis les tuples : pas de dérive).
+_URGENCE_LEVELS = dict(zip(
+    (_norm(u) for u in URGENCES), ("low", "medium", "high", "critical")))
+_PROBLEME_CODES = dict(zip(
+    (_norm(p) for p in PROBLEMES),
+    ("leak", "blockage", "dry_well", "contamination", "total_breakdown", "other")))
+
+
+def _school_by_id(wanted: int, context: dict[str, Any]) -> dict[str, Any] | None:
+    schools = context.get("schools") if isinstance(context, dict) else None
+    if not isinstance(schools, list):
+        return None
+    for school in schools:
+        if isinstance(school, dict) and school.get("school_id") == wanted:
+            return school
+    return None
+
+
+def _school_id_by_name(name: str, context: dict[str, Any]) -> int | None:
+    schools = context.get("schools") if isinstance(context, dict) else None
+    if not isinstance(schools, list):
+        return None
+    for school in schools:
+        if not isinstance(school, dict):
+            continue
+        label = school.get("school_name") or school.get("name")
+        if label is not None and str(label) == name:
+            sid = school.get("school_id")
+            return sid if isinstance(sid, int) else None
+    return None
+
+
+def _validate_ecole(ecole_raw: Any, context: dict[str, Any],
+                    names: list[str]) -> tuple[str | None, int | None, bool]:
+    """Valide l'école côté serveur (id exact, puis flou, puis repli).
+
+    Retourne (nom résolu ou brut, school_id ou None, valide). Sans
+    référentiel (names vide), le nom saisi est accepté tel quel : la
+    saisie n'est jamais perdue.
+    """
+    text = str(ecole_raw or "").strip()
+    if not text:
+        return None, None, False
+    try:
+        wanted = int(text)
+    except (TypeError, ValueError):
+        wanted = None
+    if wanted is not None:
+        school = _school_by_id(wanted, context)
+        if school is not None:
+            label = str(school.get("school_name") or school.get("name") or wanted)
+            return label, wanted, True
+    found = _match_school(text, names)
+    if found is not None:
+        return found, _school_id_by_name(found, context), True
+    if not names:
+        return text, None, True  # pas de référentiel : accepter le nom saisi
+    return text, None, False
+
+
+def _finalize_recap(recap: dict[str, Any], context: dict[str, Any],
+                    names: list[str]) -> dict[str, Any]:
+    """Recalcule un récap validé (ne fait jamais confiance au client)."""
+    ecole, ecole_id, ecole_valide = _validate_ecole(
+        recap.get("ecole"), context, names)
+    probleme = recap.get("probleme")
+    urgence = recap.get("urgence")
+    enriched = dict(recap)
+    if ecole is not None:
+        enriched["ecole"] = ecole
+    enriched["ecole_id"] = ecole_id
+    enriched["ecole_valide"] = ecole_valide
+    enriched["probleme_code"] = (
+        _PROBLEME_CODES.get(_norm(probleme)) if probleme else None)
+    enriched["urgence_level"] = (
+        _URGENCE_LEVELS.get(_norm(urgence)) if urgence else None)
+    return enriched
+
+
+def _recap_ready(enriched: dict[str, Any]) -> bool:
+    return bool(enriched.get("ecole_valide")
+                and enriched.get("probleme_code")
+                and enriched.get("urgence_level"))
+
+
+def _recap_question(enriched: dict[str, Any]) -> str:
+    ecole = enriched.get("ecole") or "?"
+    probleme = enriched.get("probleme") or "?"
+    urgence = enriched.get("urgence") or "?"
+    return (f"Récapitulatif : {ecole} — {probleme} — urgence {urgence}. "
+            "Dites « confirmer » pour enregistrer, ou « recommencer ».")
+
+
+def _recap_confirmation(enriched: dict[str, Any], ready: bool) -> str:
+    if ready:
+        return ("Prêt pour enregistrement : dites « confirmer » et l'opérateur "
+                "utilisera prepare_report avec cette saisie.")
+    missing = []
+    if not enriched.get("ecole_valide"):
+        missing.append("école")
+    if not enriched.get("probleme_code"):
+        missing.append("problème")
+    if not enriched.get("urgence_level"):
+        missing.append("urgence")
+    return (f"Saisie incomplète ({', '.join(missing)}) : prepare_report "
+            "attendra une saisie complète confirmée.")
+
+
+def _ecole_listing(names: list[str], recherche: str) -> tuple[list[str], str]:
+    """Options (max 6) + question, avec recherche au-delà de 6 écoles."""
+    filt = _norm(recherche)
+    if len(names) > _MAX_ECOLE_OPTIONS and filt:
+        filtered = [n for n in names if filt in _norm(n)]
+    else:
+        filtered = names
+    options = filtered[:_MAX_ECOLE_OPTIONS]
+    if len(names) > _MAX_ECOLE_OPTIONS and not filt:
+        question = (f"{_ECole_Q} ({len(names)} écoles au total : "
+                    "tapez quelques lettres pour chercher.)")
+    elif len(names) > _MAX_ECOLE_OPTIONS:
+        needle = str(recherche or "").strip()
+        if not filtered:
+            question = (f"Aucune école trouvée pour « {needle} » "
+                        f"sur {len(names)}. Essayez une autre orthographe.")
+        else:
+            question = (f"« {needle} » : {len(filtered)} école(s) sur {len(names)}. "
+                        "Touchez le nom de l'école, ou affinez la recherche.")
+    else:
+        question = _ECole_Q
+    return options, question
+
+
 def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Machine à états fixe ecole -> probleme -> urgence -> recap."""
     try:
@@ -159,29 +295,55 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         names = _school_names(context)
 
         if etape == "recap":
-            return _step_payload(
+            enriched = _finalize_recap(recap, context, names)
+            if not enriched.get("ecole_valide"):
+                # École inconnue ou absente : retour à l'école au lieu
+                # d'un faux récapitulatif.
+                recherche = str(args.get("recherche") or "").strip()
+                options, ecole_q = _ecole_listing(names, recherche)
+                raw = recap.get("ecole")
+                question = (f"Je n'ai pas trouvé l'école « {raw} ». {ecole_q}"
+                            if raw else ecole_q)
+                payload = _step_payload(
+                    "ecole", question, options, enriched,
+                    "Récapitulatif rejeté : école inconnue, retour à la première question.",
+                )
+                payload["total_ecoles"] = len(names)
+                if recherche:
+                    payload["recherche"] = recherche
+                return payload
+            ready = _recap_ready(enriched)
+            payload = _step_payload(
                 "recap",
-                "Signalement prêt. Dites « confirmer » pour l'enregistrer, "
-                "ou « recommencer » pour tout reprendre.",
+                _recap_question(enriched),
                 [],
-                recap,
-                "Saisie terminée : récapitulatif affiché, en attente de confirmation.",
+                enriched,
+                "Saisie terminée : récapitulatif validé, en attente de confirmation.",
             )
+            payload["ready"] = ready
+            payload["confirmation"] = _recap_confirmation(enriched, ready)
+            return payload
 
         if etape == "ecole":
-            options = names[:_MAX_ECOLE_OPTIONS] if names else []
+            recherche = str(args.get("recherche") or "").strip()
+            options, ecole_q = _ecole_listing(names, recherche)
             if not reponse:
-                return _step_payload(
-                    "ecole", _ECole_Q, options, recap,
+                payload = _step_payload(
+                    "ecole", ecole_q, options, recap,
                     "Saisie assistée démarrée : je demande d'abord l'école concernée.",
                 )
+                payload["total_ecoles"] = len(names)
+                if recherche:
+                    payload["recherche"] = recherche
+                return payload
             # Id exact d'école ?
             try:
                 wanted = int(reponse)
                 for school in (context.get("schools") or []):
                     if isinstance(school, dict) and school.get("school_id") == wanted:
                         found = str(school.get("school_name") or school.get("name") or wanted)
-                        recap = {**recap, "ecole": found}
+                        recap = {**recap, "ecole": found, "ecole_id": wanted,
+                                 "ecole_valide": True}
                         return _step_payload(
                             "probleme", _PROBLEME_Q, list(PROBLEMES), recap,
                             f"École reconnue : {found}. Je demande maintenant le problème.",
@@ -192,13 +354,18 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             if found is None and not names and reponse:
                 found = reponse  # pas de référentiel : accepter le nom saisi
             if found is None:
-                return _step_payload(
+                payload = _step_payload(
                     "ecole",
-                    f"Je n'ai pas trouvé l'école « {reponse} ». {_ECole_Q}",
+                    f"Je n'ai pas trouvé l'école « {reponse} ». {ecole_q}",
                     options, recap,
                     "École non reconnue : je repose la question avec la liste des écoles.",
                 )
-            recap = {**recap, "ecole": found}
+                payload["total_ecoles"] = len(names)
+                if recherche:
+                    payload["recherche"] = recherche
+                return payload
+            recap = {**recap, "ecole": found, "ecole_valide": True,
+                     "ecole_id": _school_id_by_name(found, context)}
             return _step_payload(
                 "probleme", _PROBLEME_Q, list(PROBLEMES), recap,
                 f"École reconnue : {found}. Je demande maintenant le problème.",
@@ -239,23 +406,36 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                     "Urgence non reconnue : je repose la question avec les choix.",
                 )
             recap = {**recap, "urgence": urgence}
-            ecole = recap.get("ecole", "?")
-            probleme = recap.get("probleme", "?")
-            return _step_payload(
+            enriched = _finalize_recap(recap, context, names)
+            if not enriched.get("ecole_valide"):
+                # Saut direct à l'urgence sans école valide : retour à l'école.
+                options, ecole_q = _ecole_listing(names, "")
+                payload = _step_payload(
+                    "ecole", ecole_q, options, enriched,
+                    "École manquante : je repose la première question avant le récapitulatif.",
+                )
+                payload["total_ecoles"] = len(names)
+                return payload
+            ready = _recap_ready(enriched)
+            payload = _step_payload(
                 "recap",
-                f"Récapitulatif : {ecole} — {probleme} — urgence {urgence}. "
-                "Dites « confirmer » pour enregistrer, ou « recommencer ».",
+                _recap_question(enriched),
                 [],
-                recap,
-                "Saisie terminée : récapitulatif prêt, en attente de confirmation.",
+                enriched,
+                "Saisie terminée : récapitulatif validé, en attente de confirmation.",
             )
+            payload["ready"] = ready
+            payload["confirmation"] = _recap_confirmation(enriched, ready)
+            return payload
 
         # Étape inconnue : reprendre au début (défensif).
-        options = names[:_MAX_ECOLE_OPTIONS] if names else []
-        return _step_payload(
-            "ecole", _ECole_Q, options, {},
+        options, ecole_q = _ecole_listing(names, "")
+        payload = _step_payload(
+            "ecole", ecole_q, options, {},
             "Étape inconnue : je recommence la saisie à la première question.",
         )
+        payload["total_ecoles"] = len(names)
+        return payload
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
