@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { renderRichText } from '../lib/richtext';
 import type { ChatHistoryMessage, TerritoryPulse , AgentCard, VoiceLanguage } from '../lib/api';
@@ -17,6 +18,8 @@ import { VoicePreview } from '../components/VoicePreview';
 import type { DetailKind, DetailTarget } from '../components/DetailDrawer';
 import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
+import { SlowWaitActions, WaitingSteps } from '../components/StreamingStatus';
+import { UX_WAIT_TIMEOUT_MS } from '../lib/streaming';
 
 const CHUNK = 8;
 const TICK_MS = 18;
@@ -226,11 +229,17 @@ function CopyAnswer({ text }: { text: string }) {
 
 export default function ConsolePage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { activeChat, activeChatId, syncMessages, newChat, registerLoader } = useDialogues();
   const [messages, setMessages] = useState<Msg[]>(() => activeChat?.messages ?? []);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requestStart, setRequestStart] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [waitRounds, setWaitRounds] = useState(0);
+  const attemptRef = useRef(0);
+  const ctrlRef = useRef<AbortController | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [previewLang, setPreviewLang] = useState<string | null>(null);
   const [previewAudio, setPreviewAudio] = useState<string | null>(null);
@@ -301,6 +310,13 @@ export default function ConsolePage() {
 
   useEffect(() => {
     registerLoader((chat) => {
+      ctrlRef.current?.abort();
+      ctrlRef.current = null;
+      attemptRef.current += 1;
+      setBusy(false);
+      setRequestStart(null);
+      setElapsedMs(0);
+      setWaitRounds(0);
       setMessages(chat?.messages ?? []);
       setError(null);
       setStreamId(null);
@@ -342,41 +358,76 @@ export default function ConsolePage() {
     return () => window.clearTimeout(t);
   }, [streamId, visible, messages]);
 
+  useEffect(() => {
+    if (!busy || requestStart === null) return;
+    const t = window.setInterval(() => setElapsedMs(Date.now() - requestStart), 500);
+    return () => window.clearInterval(t);
+  }, [busy, requestStart]);
+
+  const showSlow =
+    busy && requestStart !== null && elapsedMs >= UX_WAIT_TIMEOUT_MS * (waitRounds + 1);
+
+  const runAttempt = useCallback(
+    async (
+      message: string,
+      prior: ChatHistoryMessage[],
+      assistantIdx: number,
+      attemptId: number,
+      ctrl: AbortController,
+    ) => {
+      try {
+        const res = await api.converse(message, prior, ctrl.signal);
+        if (attemptId !== attemptRef.current) return;
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: res.answer,
+            tools: res.tools_executed ?? [],
+            cards: res.cards ?? [],
+            model: res.model_used ?? '',
+            at: Date.now(),
+            follow_ups: res.follow_ups ?? [],
+          },
+        ]);
+        if (!calm && res.answer !== '') {
+          setVisible(0);
+          setStreamId(assistantIdx);
+        }
+      } catch (err) {
+        if (attemptId !== attemptRef.current) return;
+        if (ctrl.signal.aborted) return;
+        setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
+      } finally {
+        if (attemptId === attemptRef.current) {
+          setBusy(false);
+          setRequestStart(null);
+          ctrlRef.current = null;
+        }
+      }
+    },
+    [calm],
+  );
+
   const send = useCallback(async (raw: string) => {
     const message = raw.trim();
     if (message === '' || busy || streaming) return;
     setError(null);
     setBusy(true);
     setInput('');
+    setWaitRounds(0);
+    setRequestStart(Date.now());
+    setElapsedMs(0);
     const prior: ChatHistoryMessage[] = messages
       .slice(-19)
       .map((m) => ({ role: m.role, content: m.content }));
     const idx = messages.length + 1;
     setMessages((prev) => [...prev, { role: 'user', content: message, tools: [], cards: [], model: '', at: Date.now(), follow_ups: [] }]);
-    try {
-      const res = await api.converse(message, prior);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: res.answer,
-          tools: res.tools_executed ?? [],
-          cards: res.cards ?? [],
-          model: res.model_used ?? '',
-          at: Date.now(),
-          follow_ups: res.follow_ups ?? [],
-        },
-      ]);
-      if (!calm && res.answer !== '') {
-        setVisible(0);
-        setStreamId(idx);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, streaming, messages, calm]);
+    const ctrl = new AbortController();
+    ctrlRef.current = ctrl;
+    attemptRef.current += 1;
+    await runAttempt(message, prior, idx, attemptRef.current, ctrl);
+  }, [busy, streaming, messages, runAttempt]);
 
   const ask = useCallback(
     (q: string) => {
@@ -384,6 +435,42 @@ export default function ConsolePage() {
     },
     [send],
   );
+
+  /** Affiche toute la réponse d'un coup (clic pendant le typewriter). */
+  const completeStream = useCallback(() => {
+    setStreamId(null);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  }, []);
+
+  /** Timeout UX : on garde la demande en cours, on masque le panneau 90 s de plus. */
+  const keepWaiting = useCallback(() => {
+    setWaitRounds((r) => r + 1);
+  }, []);
+
+  /**
+   * Timeout UX : annule la tentative lente et relance la même question,
+   * sans ajouter de bulle ni toucher au texte saisi (bulle conservée).
+   */
+  const retrySlow = useCallback(() => {
+    if (!busy) return;
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+    if (lastUser.trim() === '') return;
+    ctrlRef.current?.abort();
+    const ctrl = new AbortController();
+    ctrlRef.current = ctrl;
+    attemptRef.current += 1;
+    const attemptId = attemptRef.current;
+    setError(null);
+    setWaitRounds(0);
+    setRequestStart(Date.now());
+    setElapsedMs(0);
+    const tail = messages[messages.length - 1];
+    const base = tail !== undefined && tail.role === 'user' ? messages.slice(0, -1) : messages;
+    const prior: ChatHistoryMessage[] = base
+      .slice(-19)
+      .map((m) => ({ role: m.role, content: m.content }));
+    void runAttempt(lastUser, prior, messages.length, attemptId, ctrl);
+  }, [busy, messages, runAttempt]);
 
   const clearPreview = useCallback(() => {
     setPreviewAudio((prev) => {
@@ -752,65 +839,75 @@ export default function ConsolePage() {
               <div key={i} className="msg-in flex gap-3">
                 <SentinelAvatar className="mt-1 h-7 w-7 shrink-0" />
                 <div className="min-w-0 flex-1 space-y-2">
-                  <div className="space-y-1.5 text-[15px] leading-7">
-                  {renderRichText(streamId === i ? m.content.slice(0, visible) : m.content)}
-                  {streamId === i && <span className="stream-caret" aria-hidden="true" />}
-                </div>
-                {streamId !== i && (
-                  <>
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-[11px] text-stone-400 dark:text-stone-500">
-                        {fmtTime(m.at)}
+                  <div
+                    className={`space-y-1.5 text-[15px] leading-7${streamId === i ? ' cursor-pointer' : ''}`}
+                    onClick={streamId === i ? completeStream : undefined}
+                    title={streamId === i ? 'Cliquer pour afficher toute la réponse' : undefined}
+                  >
+                    {renderRichText(streamId === i ? m.content.slice(0, visible) : m.content)}
+                    {streamId === i && <span className="stream-caret" aria-hidden="true" />}
+                  </div>
+                  {streamId === i && (
+                    <button
+                      type="button"
+                      onClick={completeStream}
+                      className="rounded-full border border-line bg-card px-3 py-1 text-[13px] font-medium text-ink-soft transition-[border-color,color] hover:border-accent hover:text-ink"
+                    >
+                      Afficher toute la réponse
+                    </button>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-[11px] text-stone-400 dark:text-stone-500">
+                      {fmtTime(m.at)}
+                    </span>
+                    <CopyAnswer text={m.content} />
+                    <VoicePlayer
+                      cacheKey={ttsCacheKey(m.content, { language: voiceLang })}
+                      onRequestAudio={() =>
+                        getSynthesizedUrl(m.content, { language: voiceLang }, () =>
+                          api.synthesizeVoice(m.content, { language: voiceLang }),
+                        )
+                      }
+                    />
+                  </div>
+                  {m.tools.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1 text-[12px] text-ink-faint">
+                        <Icon name="check" className="h-3.5 w-3.5 text-teal-600 dark:text-teal-300" />
+                        Vérifié :
                       </span>
-                      <CopyAnswer text={m.content} />
-                      <VoicePlayer
-                        cacheKey={ttsCacheKey(m.content, { language: voiceLang })}
-                        onRequestAudio={() =>
-                          getSynthesizedUrl(m.content, { language: voiceLang }, () =>
-                            api.synthesizeVoice(m.content, { language: voiceLang }),
-                          )
-                        }
-                      />
-                    </div>
-                    {m.tools.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-[12px] text-ink-faint">
-                          <Icon name="check" className="h-3.5 w-3.5 text-teal-600 dark:text-teal-300" />
-                          Vérifié :
+                      {m.tools.map((t, j) => (
+                        <span
+                          key={`${t}-${j}`}
+                          className="msg-in rounded-full bg-teal-700/10 px-2.5 py-0.5 text-[12px] font-medium text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
+                        >
+                          {prettyTool(t)}
                         </span>
-                        {m.tools.map((t, j) => (
-                          <span
-                            key={`${t}-${j}`}
-                            className="msg-in rounded-full bg-teal-700/10 px-2.5 py-0.5 text-[12px] font-medium text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
-                          >
-                            {prettyTool(t)}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <div className="cards-in">
-                      <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} onDetail={openDetail} />
+                      ))}
                     </div>
-                    <FollowUps items={m.follow_ups ?? []} onAsk={ask} />
-                  </>
-                )}
+                  )}
+                  <div className="cards-in">
+                    <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} onDetail={openDetail} />
+                  </div>
+                  {streamId !== i && <FollowUps items={m.follow_ups ?? []} onAsk={ask} />}
                 </div>
               </div>
             ),
           )}
           {busy && (
-            <div className="msg-in flex items-center gap-3">
-              <SentinelAvatar className="h-7 w-7 shrink-0 motion-safe:animate-pulse" />
-              <p className="text-sm text-ink-soft">{(() => {
-                const last = messages[messages.length - 1];
-                const n = last !== undefined && last.role === 'assistant' ? last.tools.length : 0;
-                return n > 0 ? `Sentinel consulte ${n} source${n > 1 ? 's' : ''}…` : 'Sentinel consulte les données';
-              })()}</p>
-              <span className="inline-flex items-center gap-1.5" aria-hidden="true">
-                <span className="think-dot" />
-                <span className="think-dot" />
-                <span className="think-dot" />
-              </span>
+            <div className="msg-in space-y-3">
+              <div className="flex items-start gap-3">
+                <SentinelAvatar className="h-7 w-7 shrink-0 motion-safe:animate-pulse" />
+                <WaitingSteps elapsedMs={elapsedMs} calm={calm} />
+              </div>
+              {showSlow && (
+                <SlowWaitActions
+                  elapsedSec={Math.max(90, Math.floor(elapsedMs / 1000))}
+                  onKeepWaiting={keepWaiting}
+                  onRetry={retrySlow}
+                  onSeeIncidents={() => navigate('/admin/incidents')}
+                />
+              )}
             </div>
           )}
           <div ref={bottomRef} />
