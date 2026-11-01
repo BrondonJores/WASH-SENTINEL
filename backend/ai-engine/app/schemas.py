@@ -6,6 +6,56 @@ from pydantic import BaseModel, Field
 from .thresholds import DUPLICATE_DECISION_THRESHOLD
 
 
+# --- LOT 2 : constantes de schémas centralisées (valeurs inchangées) ---
+
+#: Bornes des scores /100 (priorité recommandée, sévérité visuelle).
+SCORE_MIN = 0.0
+SCORE_MAX = 100.0
+
+#: RAG : nombre d'extraits remontés par défaut + bornes acceptées.
+RAG_K_DEFAULT = 3
+RAG_K_MIN = 1
+RAG_K_MAX = 10
+
+#: Année d'installation supposée quand l'historique est muet (copilote).
+DEFAULT_INSTALLATION_YEAR = 2021
+
+#: Coût d'un remplacement à neuf quand Laravel ne le fournit pas (FCFA/USD).
+DEFAULT_REPLACEMENT_COST = 1500000.0
+
+#: Défauts du profil d'équité territoriale (école "moyenne" supposée).
+DEFAULT_EQUITY_DISTANCE_KM = 10.0
+DEFAULT_EQUITY_DAYS_WITHOUT_WATER = 0
+DEFAULT_EQUITY_TOTAL_STUDENTS = 300
+DEFAULT_EQUITY_FEMALE_STUDENTS = 150
+DEFAULT_EQUITY_BROKEN_TOILETS = 0
+DEFAULT_EQUITY_MONTHS_SINCE_INTERVENTION = 6
+DEFAULT_EQUITY_URGENCY = "medium"
+DEFAULT_EQUITY_ISSUE_SUMMARY = ""
+
+#: Langue de travail par défaut (transcription, synthèse, tests STT).
+DEFAULT_LANGUAGE = "fr"
+
+#: Voix TTS FR par défaut (Mimic3 / MMS selon driver).
+DEFAULT_TTS_VOICE = "fr_FR-upmc-medium"
+
+#: Conteneur audio renvoyé par la synthèse vocale.
+DEFAULT_TTS_MIME_TYPE = "audio/wav"
+
+#: Provider LLM interrogé par défaut par l'outil de test provider.
+DEFAULT_LLM_PROVIDER = "ollama"
+
+#: Timeouts de l'outil de test (LLM texte vs STT audio, plus lent).
+DEFAULT_PROVIDER_TEST_TIMEOUT = 30.0
+DEFAULT_STT_TEST_TIMEOUT = 60.0
+
+#: Driver STT interrogé par défaut par l'outil de test STT.
+DEFAULT_STT_DRIVER = "whisper_cpp"
+
+#: Nom de fichier de l'échantillon audio de test STT.
+DEFAULT_STT_TEST_FILENAME = "test.wav"
+
+
 # ==========================================
 # 1. Extraction & Triage Textuel / Vocal
 # ==========================================
@@ -39,7 +89,7 @@ class ExtractedWashIncident(BaseModel):
     is_wash_related: bool | None = Field(None, description="None=non évalué, False=hors-sujet suspecté, True=WASH")
     health_hazard_risk: Literal["low", "medium", "high", "severe"] = Field(..., description="Risque sanitaire immédiat")
     short_summary: str = Field(..., description="Résumé concis et factuel en français (1 à 2 phrases max)")
-    recommended_priority_score: float = Field(..., ge=0.0, le=100.0, description="Score de priorité de 0 à 100")
+    recommended_priority_score: float = Field(..., ge=SCORE_MIN, le=SCORE_MAX, description="Score de priorité de 0 à 100")
 
 
 class WashExtractionResponse(BaseModel):
@@ -89,7 +139,7 @@ class ImageAnalysisResponse(BaseModel):
     is_wash_related: bool = Field(..., description="Indique si l'image représente bien une infrastructure sanitaire/hydraulique")
     infrastructure_detected: str = Field(..., description="Type d'élément identifié visuellement (ex: Pompe manuelle, Latrine VIP, Tuyau PVC)")
     visible_damage: str = Field(..., description="Description technique du dommage visible")
-    visual_severity_score: float = Field(..., ge=0.0, le=100.0, description="Score de sévérité basé sur l'état visuel (0-100)")
+    visual_severity_score: float = Field(..., ge=SCORE_MIN, le=SCORE_MAX, description="Score de sévérité basé sur l'état visuel (0-100)")
     health_hazard_detected: bool = Field(..., description="Présence d'eau stagnante, déversement fécal ou danger biologique visible")
     technician_notes: str = Field(..., description="Note d'orientation pour le réparateur")
     vision_unavailable: bool = Field(False, description="True si la vision a échoué : ne pas croire le score")
@@ -152,8 +202,8 @@ class SchoolMaintenanceHistory(BaseModel):
     school_name: str
     district: str
     equipment_type: str = "pompe_manuelle"
-    installation_year: int | None = 2021
-    estimated_replacement_cost: float = Field(1500000.0, description="Coût d'un remplacement à neuf (ex: en FCFA ou USD)")
+    installation_year: int | None = DEFAULT_INSTALLATION_YEAR
+    estimated_replacement_cost: float = Field(DEFAULT_REPLACEMENT_COST, description="Coût d'un remplacement à neuf (ex: en FCFA ou USD)")
     incident_count: int = Field(0, description="Nombre de pannes enregistrées")
     total_repair_cost: float = Field(0.0, description="Somme totale des factures de réparations passées")
     total_days_without_service: int = Field(0, description="Nombre cumulé de jours où l'école a été privée d'eau")
@@ -195,14 +245,14 @@ class SchoolEquityProfile(BaseModel):
     school_id: int
     school_name: str
     district: str
-    distance_from_center_km: float = Field(10.0, description="Distance en km depuis le centre technique communal")
-    days_without_water: int = Field(0, description="Nombre de jours consécutifs sans eau potable")
-    total_students: int = Field(300, description="Effectif total d'élèves")
-    female_students: int = Field(150, description="Nombre de jeunes filles scolarisées")
-    broken_toilets: int = Field(0, description="Nombre de latrines hors d'usage")
-    months_since_last_intervention: int = Field(6, description="Mois écoulés depuis la dernière aide publique")
-    urgency_level: Literal["low", "medium", "high", "critical"] = "medium"
-    issue_summary: str = Field("", description="Description succincte de la panne")
+    distance_from_center_km: float = Field(DEFAULT_EQUITY_DISTANCE_KM, description="Distance en km depuis le centre technique communal")
+    days_without_water: int = Field(DEFAULT_EQUITY_DAYS_WITHOUT_WATER, description="Nombre de jours consécutifs sans eau potable")
+    total_students: int = Field(DEFAULT_EQUITY_TOTAL_STUDENTS, description="Effectif total d'élèves")
+    female_students: int = Field(DEFAULT_EQUITY_FEMALE_STUDENTS, description="Nombre de jeunes filles scolarisées")
+    broken_toilets: int = Field(DEFAULT_EQUITY_BROKEN_TOILETS, description="Nombre de latrines hors d'usage")
+    months_since_last_intervention: int = Field(DEFAULT_EQUITY_MONTHS_SINCE_INTERVENTION, description="Mois écoulés depuis la dernière aide publique")
+    urgency_level: Literal["low", "medium", "high", "critical"] = DEFAULT_EQUITY_URGENCY
+    issue_summary: str = Field(DEFAULT_EQUITY_ISSUE_SUMMARY, description="Description succincte de la panne")
     lat: float | None = None
     lng: float | None = None
 
@@ -245,24 +295,24 @@ class FairnessDispatchRequest(BaseModel):
 
 class VoiceTranscriptionResponse(BaseModel):
     transcript: str
-    language: str = "fr"
-    language_effective: str = "fr"
+    language: str = DEFAULT_LANGUAGE
+    language_effective: str = DEFAULT_LANGUAGE
     driver: str | None = None
     duration_seconds: float | None = None
 
 
 class VoiceSynthesisRequest(BaseModel):
     text: str
-    voice: str = "fr_FR-upmc-medium"
-    language: str = "fr"
+    voice: str = DEFAULT_TTS_VOICE
+    language: str = DEFAULT_LANGUAGE
 
 
 class VoiceSynthesisResponse(BaseModel):
     audio_base64: str
-    mime_type: str = "audio/wav"
+    mime_type: str = DEFAULT_TTS_MIME_TYPE
     text: str
     driver: str | None = None
-    language_effective: str = "fr"
+    language_effective: str = DEFAULT_LANGUAGE
     fallback: bool = False
     notice: str | None = None
 
@@ -272,13 +322,13 @@ class VoiceSynthesisResponse(BaseModel):
 # ==========================================
 
 class ProviderTestRequest(BaseModel):
-    provider: str = Field("ollama", description="ollama ou openai_compatible")
+    provider: str = Field(DEFAULT_LLM_PROVIDER, description="ollama ou openai_compatible")
     base_url: str = Field(..., description="URL de base du provider")
     model: str = Field(..., description="Modèle texte à tester")
     vision_model: str | None = None
     embed_model: str | None = None
     api_key: str | None = None
-    timeout: float = 30.0
+    timeout: float = DEFAULT_PROVIDER_TEST_TIMEOUT
 
 
 class ProviderTestResponse(BaseModel):
@@ -295,15 +345,15 @@ class ProviderTestResponse(BaseModel):
 # ==========================================
 
 class SttTestRequest(BaseModel):
-    driver: str = Field("whisper_cpp", description="whisper_cpp, omnilingual_onnx ou cloud_whisper")
+    driver: str = Field(DEFAULT_STT_DRIVER, description="whisper_cpp, omnilingual_onnx ou cloud_whisper")
     base_url: str | None = None
     model: str | None = None
     tokens: str | None = None
     api_key: str | None = None
-    language: str = Field("fr", description="Code langue (fr, dua_Latn, ...)")
+    language: str = Field(DEFAULT_LANGUAGE, description="Code langue (fr, dua_Latn, ...)")
     audio_base64: str = Field(..., description="Échantillon audio encodé en base64")
-    filename: str = "test.wav"
-    timeout: float = 60.0
+    filename: str = DEFAULT_STT_TEST_FILENAME
+    timeout: float = DEFAULT_STT_TEST_TIMEOUT
 
 
 class SttTestResponse(BaseModel):
@@ -404,7 +454,7 @@ class AgentChatResponse(BaseModel):
 # ==========================================
 class RagAskRequest(BaseModel):
     question: str = Field(..., description="Question en langage naturel")
-    k: int = Field(3, ge=1, le=10, description="Nombre d'extraits à remonter")
+    k: int = Field(RAG_K_DEFAULT, ge=RAG_K_MIN, le=RAG_K_MAX, description="Nombre d'extraits à remonter")
 
 
 class RagAskResponse(BaseModel):

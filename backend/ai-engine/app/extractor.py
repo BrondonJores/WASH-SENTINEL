@@ -23,6 +23,54 @@ from .textnorm import contains_keyword, fold, negation_spans
 #: (sans few-shots par défaut, taille stable).
 WASH_SYSTEM_PROMPT = render_extractor_prompt()
 
+# --- LOT 2 : constantes d'extraction centralisées (valeurs historiques
+# inchangées — le scoring est ancré par les tests, ne pas réinventer) ---
+
+#: Pis-aller historique quand le LLM renvoie 0/None/manquant pour les
+#: élèves impactés. La nature "défaut" est déjà exposée via
+#: `students_unknown=True` + provenance 'default' + unknowns.
+DEFAULT_AFFECTED_STUDENTS = 50
+
+#: Plafond de normalisation de la population impactée : s_score =
+#: students / MAX_AFFECTED_STUDENTS * 100 (au-delà, le score sature).
+MAX_AFFECTED_STUDENTS = 1000
+
+#: Poids multicritères de `calculate_priority_score` (somme = 1.0).
+PRIORITY_WEIGHT_URGENCY = 0.35
+PRIORITY_WEIGHT_HAZARD = 0.35
+PRIORITY_WEIGHT_STUDENTS = 0.30
+
+#: Table urgence -> sous-score /100 (héritée, cf. app/thresholds.py).
+URGENCY_SCORES = {"low": 10.0, "medium": 45.0, "high": 75.0, "critical": 100.0}
+
+#: Table risque sanitaire -> sous-score /100 (héritée).
+HAZARD_SCORES = {"low": 10.0, "medium": 40.0, "high": 75.0, "severe": 100.0}
+
+#: Sous-score repli quand l'urgence LLM est hors-liste (= niveau medium).
+DEFAULT_URGENCY_SCORE = 45.0
+
+#: Sous-score repli quand le risque LLM est hors-liste (= niveau medium).
+DEFAULT_HAZARD_SCORE = 40.0
+
+#: Confiance de base quand tous les champs sont confirmés par le LLM.
+CONFIDENCE_BASE = 0.90
+
+#: Pénalités de confiance (soustraites une fois chacune, héritées).
+CONFIDENCE_PENALTY_INFRA = 0.15
+CONFIDENCE_PENALTY_ISSUE = 0.15
+CONFIDENCE_PENALTY_URGENCY = 0.10
+CONFIDENCE_PENALTY_STUDENTS = 0.10
+CONFIDENCE_PENALTY_UNVALIDATED = 0.05
+CONFIDENCE_PENALTY_BLANK_OFFTOPIC = 0.20
+
+#: Clamp de la confiance affichée (jamais 0 ni 1 : honnêteté affichée).
+CONFIDENCE_MIN = 0.05
+CONFIDENCE_MAX = 0.95
+
+#: Longueur max du résumé de repli (raw_text tronqué quand le LLM ne
+#: fournit pas short_summary).
+SUMMARY_FALLBACK_MAX_CHARS = 120
+
 
 class WashExtractor:
     def __init__(self, llm: BaseLLMProvider):
@@ -119,20 +167,20 @@ class WashExtractor:
         if unvalidated_hit:
             unknowns.append("local_language_unvalidated")
 
-        confidence = 0.90
+        confidence = CONFIDENCE_BASE
         if not infra_valid:
-            confidence -= 0.15
+            confidence -= CONFIDENCE_PENALTY_INFRA
         if not issue_valid:
-            confidence -= 0.15
+            confidence -= CONFIDENCE_PENALTY_ISSUE
         if urgency_defaulted:
-            confidence -= 0.10
+            confidence -= CONFIDENCE_PENALTY_URGENCY
         if students_defaulted:
-            confidence -= 0.10
+            confidence -= CONFIDENCE_PENALTY_STUDENTS
         if unvalidated_hit:
-            confidence -= 0.05
+            confidence -= CONFIDENCE_PENALTY_UNVALIDATED
         if blank or off_topic:
-            confidence -= 0.20
-        confidence = round(max(0.05, min(0.95, confidence)), 2)
+            confidence -= CONFIDENCE_PENALTY_BLANK_OFFTOPIC
+        confidence = round(max(CONFIDENCE_MIN, min(CONFIDENCE_MAX, confidence)), 2)
 
         if blank:
             next_action = (
@@ -187,7 +235,7 @@ class WashExtractor:
                 ["low", "medium", "high", "critical"],
                 "medium"
             ),
-            estimated_affected_students=int(raw_json.get("estimated_affected_students") or 50),
+            estimated_affected_students=int(raw_json.get("estimated_affected_students") or DEFAULT_AFFECTED_STUDENTS),
             students_unknown=students_defaulted,
             is_wash_related=None if blank else (False if off_topic else True),
             health_hazard_risk=self._normalize_choice(
@@ -195,7 +243,7 @@ class WashExtractor:
                 ["low", "medium", "high", "severe"],
                 "medium"
             ),
-            short_summary=raw_json.get("short_summary") or raw_text[:120],
+            short_summary=raw_json.get("short_summary") or raw_text[:SUMMARY_FALLBACK_MAX_CHARS],
             recommended_priority_score=priority_score,
         )
 
@@ -215,18 +263,22 @@ class WashExtractor:
         - Risque Sanitaire (Poids 35%)
         - Population scolaire impactée (Poids 30%)
         """
-        urgency_weights = {"low": 10.0, "medium": 45.0, "high": 75.0, "critical": 100.0}
-        hazard_weights = {"low": 10.0, "medium": 40.0, "high": 75.0, "severe": 100.0}
-
         urgency = str(data.get("urgency_level", "medium")).lower()
         hazard = str(data.get("health_hazard_risk", "medium")).lower()
-        students = min(int(data.get("estimated_affected_students") or 50), 1000)
+        students = min(
+            int(data.get("estimated_affected_students") or DEFAULT_AFFECTED_STUDENTS),
+            MAX_AFFECTED_STUDENTS,
+        )
 
-        u_score = urgency_weights.get(urgency, 45.0)
-        h_score = hazard_weights.get(hazard, 40.0)
-        s_score = (students / 1000.0) * 100.0
+        u_score = URGENCY_SCORES.get(urgency, DEFAULT_URGENCY_SCORE)
+        h_score = HAZARD_SCORES.get(hazard, DEFAULT_HAZARD_SCORE)
+        s_score = (students / MAX_AFFECTED_STUDENTS) * 100.0
 
-        score = (u_score * 0.35) + (h_score * 0.35) + (s_score * 0.30)
+        score = (
+            (u_score * PRIORITY_WEIGHT_URGENCY)
+            + (h_score * PRIORITY_WEIGHT_HAZARD)
+            + (s_score * PRIORITY_WEIGHT_STUDENTS)
+        )
         return round(score, 1)
 
     _INFRA_KEYWORDS = (

@@ -16,31 +16,43 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
+from .schemas import ExtractedWashIncident
 from .textnorm import fold
 
 #: Lexique WASH bbj->fr (toutes entrées UNVALIDATED par défaut).
 LEXICON_PATH = Path(__file__).resolve().parent / "data" / "bbj_wash_lexicon.json"
 
-#: Catégories extractor valides (schemas.ExtractedWashIncident, hors 'other'
-#: interdit par le prompt — le pont émet 'unknown' en cas de doute).
-VALID_INFRASTRUCTURES = frozenset({
-    "water_point", "toilets_latrines", "handwashing", "sewage_drainage",
-})
-VALID_ISSUES = frozenset({
-    "leak", "total_breakdown", "contamination", "blockage", "dry_well", "vandalism",
-})
-VALID_URGENCIES = frozenset({"low", "medium", "high", "critical"})
+
+def _literal_values(field_name: str, *, exclude_other: bool = True) -> frozenset[str]:
+    """Valeurs du Literal d'un champ de schemas.ExtractedWashIncident.
+
+    Source unique = les Literal de schemas.py (jamais recopiés ici).
+    'other' est exclu : interdit par le prompt, le pont émet 'unknown'
+    en cas de doute (cf. tests/test_lot2_consts.py pour la synchro).
+    """
+    values = set(get_args(ExtractedWashIncident.model_fields[field_name].annotation))
+    if exclude_other:
+        values.discard("other")
+    return frozenset(values)
+
+
+#: Catégories extractor valides, dérivées des Literal de schemas.py
+#: (ExtractedWashIncident, hors 'other').
+VALID_INFRASTRUCTURES = _literal_values("infrastructure_type")
+VALID_ISSUES = _literal_values("issue_type")
+VALID_URGENCIES = _literal_values("urgency_level")
 
 #: Libellés FR courts pour le pivot (affichage opérateur uniquement).
-_INFRA_LABELS = {
+#: Constantes de module LOT 2 — pas d'i18n complète (hors lot).
+INFRA_LABELS_FR = {
     "water_point": "point d'eau",
     "toilets_latrines": "toilettes/latrines",
     "handwashing": "lavage des mains",
     "sewage_drainage": "évacuation des eaux",
 }
-_ISSUE_LABELS = {
+ISSUE_LABELS_FR = {
     "leak": "fuite",
     "total_breakdown": "panne totale",
     "contamination": "contamination suspectée",
@@ -48,6 +60,10 @@ _ISSUE_LABELS = {
     "dry_well": "manque d'eau",
     "vandalism": "vandalisme/vol",
 }
+
+#: Alias historiques privés (mêmes objets, compatibilité).
+_INFRA_LABELS = INFRA_LABELS_FR
+_ISSUE_LABELS = ISSUE_LABELS_FR
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9 ]+")
 
