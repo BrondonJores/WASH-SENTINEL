@@ -342,10 +342,19 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   logout: () => req<{ message: string }>('/v1/auth/token', { method: 'DELETE' }),
-  converse: (message: string, history: ChatHistoryMessage[], signal?: AbortSignal) =>
+  converse: (
+    message: string,
+    history: ChatHistoryMessage[],
+    signal?: AbortSignal,
+    opts?: { guided?: boolean },
+  ) =>
     req<AgentChatResponse>('/v1/wash/agent/converse', {
       method: 'POST',
-      body: JSON.stringify({ message, history }),
+      body: JSON.stringify({
+        message,
+        history,
+        ...(opts?.guided === true ? { guided: true } : {}),
+      }),
       ...(signal !== undefined ? { signal } : {}),
     }),
   transcribeVoice: (blob: Blob, language?: string) => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../lib/api';
+import { ApiError, api } from '../lib/api';
 import type { AgentCard, ChatHistoryMessage, VoiceLanguage } from '../lib/api';
 import { getCachedTtsUrl, getSynthesizedUrl, ttsCacheKey } from '../lib/ttsCache';
 import { renderRichText } from '../lib/richtext';
@@ -17,8 +17,8 @@ import { Icon } from './icons';
  * Boucle : Parler → enregistre → transcribe → converse → réponse en cards ET
  * lue en TTS automatiquement (annulable : clic sur l'orbe ou Réécouter).
  * Répéter rejoue le dernier audio depuis le cache ttsCache (jamais de
- * re-synthèse). Oui/Non envoie « Oui »/« Non » comme message (prépare la
- * confirmation guidée backend). Aucun SSE : converse classique uniquement.
+ * re-synthèse). Oui/Non envoie « Oui »/« Non » comme message (dialogue
+ * guidé backend, guided:true toujours envoyé). Aucun SSE : converse classique uniquement.
  * ========================================================================== */
 
 /** Durée maximale d'une dictée avant arrêt automatique (2 minutes). */
@@ -26,6 +26,31 @@ const MAX_RECORD_MS = 120_000;
 
 /** Poids maximal d'une dictée acceptée (10 Mo, miroir de la validation Laravel). */
 const MAX_RECORD_BYTES = 10 * 1024 * 1024;
+
+/** Seuil de garde vocal : au-delà, la transcription est coupée proprement (limite backend 2000). */
+const MAX_VOICE_MESSAGE = 1800;
+
+/** Suffixe FR ajouté quand une longue dictée est coupée (une phrase simple, parcours analphabète). */
+const LONG_MESSAGE_SUFFIX = '…(message long, suite coupée : précisez en une phrase)';
+
+/** Longueur minimale gardée à la coupe (évite un résidu trop court). */
+const MIN_KEPT_MESSAGE = 400;
+
+/**
+ * Coupe une transcription trop longue à la dernière fin de phrase ≤ 1800
+ * caractères, puis ajoute le suffixe FR. Repli : dernière espace, puis coupe
+ * dure. Le résultat reste sous la limite backend : jamais de 422, jamais perdu.
+ */
+function truncateLongVoiceMessage(text: string): string {
+  if (text.length <= MAX_VOICE_MESSAGE) return text;
+  const head = text.slice(0, MAX_VOICE_MESSAGE);
+  let cut = -1;
+  for (const end of ['.', '!', '?', '…', '\n']) cut = Math.max(cut, head.lastIndexOf(end));
+  if (cut >= MIN_KEPT_MESSAGE) return `${head.slice(0, cut + 1).trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+  const space = head.lastIndexOf(' ');
+  if (space >= MIN_KEPT_MESSAGE) return `${head.slice(0, space).trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+  return `${head.trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+}
 
 /** Même clé que la console : le Mode Voix reprend la langue déjà choisie. */
 const VOICE_LANG_KEY = 'wash_voice_lang';
@@ -338,7 +363,8 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
       const ctrl = new AbortController();
       ctrlRef.current = ctrl;
       try {
-        const res = await api.converse(message, prior, ctrl.signal);
+        // Parcours analphabète : toujours guidé (slots école→problème→oui/non, opt-in backend).
+        const res = await api.converse(message, prior, ctrl.signal, { guided: true });
         if (!mountedRef.current || ctrl.signal.aborted) return;
         const text = res.answer ?? '';
         setHistory((prev) =>
@@ -353,7 +379,12 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
         if (text.trim() !== '') await speak(text);
       } catch (err) {
         if (ctrl.signal.aborted || !mountedRef.current) return;
-        setError(err instanceof Error ? err.message : 'Sentinel est injoignable. Touchez le micro pour réessayer.');
+        // Jamais de 422 silencieuse : le message FR du backend s'affiche tel quel.
+        if (err instanceof ApiError && err.status === 422) {
+          setError(err.message);
+        } else {
+          setError(err instanceof Error ? err.message : 'Sentinel est injoignable. Touchez le micro pour réessayer.');
+        }
       } finally {
         ctrlRef.current = null;
       }
@@ -364,7 +395,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
   /** Envoie un texte (transcription, Oui/Non, relance) dans la boucle mains-libres. */
   const ask = useCallback(
     async (raw: string) => {
-      const message = raw.trim();
+      const message = truncateLongVoiceMessage(raw.trim());
       if (message === '' || busy || recording) return;
       stopAudio();
       setNeedsTap(false);
@@ -415,11 +446,13 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
       try {
         const res = await api.transcribeVoice(blob, voiceLang);
         if (!mountedRef.current) return;
-        const text = res.transcript.trim();
-        if (text === '') {
+        const raw = res.transcript.trim();
+        if (raw === '') {
           setError('On n’a rien compris. Parlez plus près du micro, puis touchez Parler.');
           return;
         }
+        // Longue dictée : texte coupé proprement + suffixe FR, entendu affiché tronqué.
+        const text = truncateLongVoiceMessage(raw);
         setHeard(text);
         setBusyKind('answer');
         setRequestStart(Date.now());

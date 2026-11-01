@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../lib/api';
+import { ApiError, api } from '../lib/api';
 import { renderRichText } from '../lib/richtext';
 import type { ChatHistoryMessage, TerritoryPulse , AgentCard, VoiceLanguage } from '../lib/api';
 import { getSynthesizedUrl, ttsCacheKey } from '../lib/ttsCache';
@@ -74,6 +74,31 @@ function readVoiceLang(): VoiceLanguage {
     /* stockage indisponible : français par défaut */
   }
   return 'fr';
+}
+
+/** Seuil de garde vocal : au-delà, la transcription est coupée proprement (limite backend 2000). */
+const MAX_VOICE_MESSAGE = 1800;
+
+/** Suffixe FR ajouté quand une longue dictée est coupée (préciser en une phrase). */
+const LONG_MESSAGE_SUFFIX = '…(message long, suite coupée : précisez en une phrase)';
+
+/** Longueur minimale gardée à la coupe (évite un résidu trop court). */
+const MIN_KEPT_MESSAGE = 400;
+
+/**
+ * Coupe une transcription trop longue à la dernière fin de phrase ≤ 1800
+ * caractères, puis ajoute le suffixe FR. Repli : dernière espace, puis coupe
+ * dure. Le résultat reste sous la limite backend : jamais de 422, jamais perdu.
+ */
+function truncateLongVoiceMessage(text: string): string {
+  if (text.length <= MAX_VOICE_MESSAGE) return text;
+  const head = text.slice(0, MAX_VOICE_MESSAGE);
+  let cut = -1;
+  for (const end of ['.', '!', '?', '…', '\n']) cut = Math.max(cut, head.lastIndexOf(end));
+  if (cut >= MIN_KEPT_MESSAGE) return `${head.slice(0, cut + 1).trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+  const space = head.lastIndexOf(' ');
+  if (space >= MIN_KEPT_MESSAGE) return `${head.slice(0, space).trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+  return `${head.trimEnd()}${LONG_MESSAGE_SUFFIX}`;
 }
 
 function VoiceLangSelector({ value, onChange }: { value: VoiceLanguage; onChange: (v: VoiceLanguage) => void }) {
@@ -378,6 +403,7 @@ export default function ConsolePage() {
       ctrl: AbortController,
     ) => {
       try {
+        // Console texte : guided absent (parcours classique, inchangé).
         const res = await api.converse(message, prior, ctrl.signal);
         if (attemptId !== attemptRef.current) return;
         setMessages((prev) => [
@@ -399,7 +425,12 @@ export default function ConsolePage() {
       } catch (err) {
         if (attemptId !== attemptRef.current) return;
         if (ctrl.signal.aborted) return;
-        setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
+        // Jamais de 422 silencieuse : le message FR du backend s'affiche tel quel.
+        if (err instanceof ApiError && err.status === 422) {
+          setError(err.message);
+        } else {
+          setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
+        }
       } finally {
         if (attemptId === attemptRef.current) {
           setBusy(false);
@@ -487,7 +518,8 @@ export default function ConsolePage() {
     try {
       setError(null);
       const res = await api.transcribeVoice(blob, voiceLang);
-      if (res.transcript.trim() === '') {
+      const dictated = res.transcript.trim();
+      if (dictated === '') {
         setError('Transcription vide : aucun mot reconnu.');
         return;
       }
@@ -496,7 +528,8 @@ export default function ConsolePage() {
         return URL.createObjectURL(blob);
       });
       setPreviewLang(res.language_effective ?? res.language ?? voiceLang);
-      setPreview(res.transcript);
+      // Longue dictée : texte coupé proprement + suffixe FR, aperçu affiché tronqué.
+      setPreview(truncateLongVoiceMessage(dictated));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transcription impossible.');
     }
