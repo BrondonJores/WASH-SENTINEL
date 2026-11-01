@@ -170,6 +170,7 @@ class WashAgentController extends Controller
             'history.*.role' => ['required_with:history', 'in:user,assistant,tool'],
             'history.*.content' => ['required_with:history', 'string', 'max:2000'],
             'district' => ['nullable', 'string', 'max:128'],
+            'guided' => ['nullable', 'boolean'],
         ], [
             'message.required' => "Dites-moi en quelques mots ce dont vous avez besoin, par exemple « Signale une fuite au forage ».",
             'message.string' => 'Votre message doit être un texte simple.',
@@ -183,6 +184,7 @@ class WashAgentController extends Controller
             'history.*.content.max' => 'Un message d’historique dépasse 2000 caractères.',
             'district.string' => 'Le district doit être un texte.',
             'district.max' => 'Le nom du district est trop long (128 caractères maximum).',
+            'guided.boolean' => 'Le mode guidé doit être vrai ou faux.',
         ]);
 
         $user = $this->optionalUser($request);
@@ -230,14 +232,16 @@ class WashAgentController extends Controller
             'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
         ];
 
+        $guided = (bool) ($validated['guided'] ?? false);
+
         try {
-            return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context);
+            return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context, $guided);
         } catch (ConnectionException|GuzzleConnectException $e) {
             if ($this->isTimeoutFailure($e)) {
                 throw $e;
             }
             sleep(1);
-            return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context);
+            return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context, $guided);
         }
     }
 

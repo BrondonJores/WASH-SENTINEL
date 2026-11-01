@@ -70,4 +70,51 @@ class WashAgentLoopTest extends TestCase
         $this->postJson('/api/v1/wash/agent/converse', ['message' => ''])
             ->assertStatus(422);
     }
+
+    public function test_converse_forwards_guided_true_to_engine(): void
+    {
+        Http::fake([
+            '*/v1/agent/chat' => Http::response([
+                'answer' => 'Guidé activé.',
+                'tools_executed' => [],
+                'cards' => [],
+                'model_used' => 'test-llm',
+            ], 200),
+        ]);
+
+        $response = $this->postJson('/api/v1/wash/agent/converse', [
+            'message' => 'Signale une fuite',
+            'guided' => true,
+        ]);
+
+        $response->assertOk();
+
+        Http::assertSent(fn ($request) =>
+            str_ends_with($request->url(), '/v1/agent/chat')
+            && ($request->data()['guided'] ?? null) === true
+        );
+    }
+
+    public function test_converse_guided_absent_payload_unchanged(): void
+    {
+        Http::fake([
+            '*/v1/agent/chat' => Http::response([
+                'answer' => 'Réponse normale.',
+                'tools_executed' => [],
+                'cards' => [],
+                'model_used' => 'test-llm',
+            ], 200),
+        ]);
+
+        $response = $this->postJson('/api/v1/wash/agent/converse', [
+            'message' => 'Quelle est la situation ?',
+        ]);
+
+        $response->assertOk();
+
+        Http::assertSent(fn ($request) =>
+            str_ends_with($request->url(), '/v1/agent/chat')
+            && !array_key_exists('guided', $request->data())
+        );
+    }
 }

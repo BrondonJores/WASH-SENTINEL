@@ -47,7 +47,12 @@ from .schemas import (
     WashExtractionRequest,
     WashExtractionResponse,
 )
-from .voice_service import VoiceService
+from .voice_service import (
+    MAX_VOICE_AUDIO_BYTES,
+    VOICE_AUDIO_CHUNK_BYTES,
+    VoiceService,
+    voice_too_heavy_message,
+)
 
 app = FastAPI(
     title="WASH Sentinel AI Engine",
@@ -243,9 +248,23 @@ async def transcribe_audio(
     """Transcrit une note vocale via le provider STT actif (Whisper, Omnilingual ou cloud).
 
     Précédence de langue : requête explicite > profil (header X-STT-Language) > fr.
+    Plafond 12 Mo mesuré par chunks AVANT de tout charger (anti-DoS direct).
     """
     try:
-        audio_bytes = await audio.read()
+        size = 0
+        chunks: list[bytes] = []
+        while True:
+            chunk = await audio.read(VOICE_AUDIO_CHUNK_BYTES)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_VOICE_AUDIO_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=voice_too_heavy_message(size),
+                )
+            chunks.append(chunk)
+        audio_bytes = b"".join(chunks)
         stt_language = language or request.headers.get("x-stt-language") or "fr"
         return voice_service.transcribe(
             audio_bytes=audio_bytes,
@@ -253,6 +272,8 @@ async def transcribe_audio(
             language=stt_language,
             stt=stt_from_headers(request.headers),
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=500,

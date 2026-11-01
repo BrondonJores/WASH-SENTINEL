@@ -107,6 +107,21 @@ DEFAULT_TTS_VOICE = "fr_FR-upmc-medium"
 #: Longueur maximale synthétisée (miroir de la validation Laravel max:1000).
 MAX_TTS_CHARS = 1000
 
+#: Plafond anti-DoS des notes vocales (octets) : 12 Mo, durci au-delà du
+#: max Laravel web 10 Mo pour couvrir l'exposition directe du moteur.
+MAX_VOICE_AUDIO_BYTES = 12 * 1024 * 1024
+#: Taille des chunks de lecture transcribe : mesurer AVANT de tout charger.
+VOICE_AUDIO_CHUNK_BYTES = 1024 * 1024
+
+
+def voice_too_heavy_message(size_bytes: int) -> str:
+    """Message FR 413 quand la note vocale dépasse MAX_VOICE_AUDIO_BYTES."""
+    size_mb = size_bytes / (1024 * 1024)
+    return (
+        f"Note vocale trop lourde ({size_mb:.1f} Mo, max 12 Mo) : "
+        "dictez par phrases courtes, puis réessayez."
+    )
+
 #: Délai maximal d'une synthèse Piper (secondes).
 TTS_SYNTHESIS_TIMEOUT = 60.0
 
