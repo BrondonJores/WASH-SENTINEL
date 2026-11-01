@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import TREND_MONTHS
 
 TOOL_NAME = "observatoire"
 
@@ -48,7 +49,8 @@ INTENT_HINTS = frozenset({
 
 _CLOSED = frozenset({"resolved", "closed"})
 
-_TREND_MONTHS = 6
+#: Alias partagé (source unique : app.tool_consts).
+_TREND_MONTHS = TREND_MONTHS
 
 
 def _parse_dt(raw: Any) -> datetime | None:

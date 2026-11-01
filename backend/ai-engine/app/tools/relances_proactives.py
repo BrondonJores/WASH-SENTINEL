@@ -9,6 +9,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import (
+    ALERT_WINDOW_DAYS_DEFAULT,
+    ALERT_WINDOW_DAYS_MAX,
+    ALERT_WINDOW_DAYS_MIN,
+)
 
 TOOL_NAME = "relances_proactives"
 
@@ -34,7 +39,7 @@ TOOL_DEF = {
             "days": {
                 "type": "integer",
                 "description": "Seuil d'inactivite en jours (defaut : 7)",
-                "default": 7,
+                "default": ALERT_WINDOW_DAYS_DEFAULT,
             },
             "district": {
                 "type": "string",
@@ -65,12 +70,12 @@ INTENT_HINTS = frozenset({
 _CLOSED = ("resolved", "closed")
 
 
-def _parse_days(value: Any, default: int = 7) -> int:
+def _parse_days(value: Any, default: int = ALERT_WINDOW_DAYS_DEFAULT) -> int:
     try:
         days = int(value)
     except (TypeError, ValueError):
         return default
-    return min(max(days, 1), 90)
+    return min(max(days, ALERT_WINDOW_DAYS_MIN), ALERT_WINDOW_DAYS_MAX)
 
 
 def _parse_dt(raw: Any) -> datetime | None:
@@ -166,7 +171,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         context = context or {}
         district = str(args.get("district") or "").strip()
         district_low = district.lower()
-        days = _parse_days(args.get("days", 7))
+        days = _parse_days(args.get("days", ALERT_WINDOW_DAYS_DEFAULT))
         now = datetime.now(timezone.utc)
 
         if context.get("incidents", None) is None:

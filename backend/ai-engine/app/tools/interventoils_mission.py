@@ -10,6 +10,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import (
+    MISSION_WINDOW_DAYS_DEFAULT,
+    MISSION_WINDOW_DAYS_MAX,
+    MISSION_WINDOW_DAYS_MIN,
+)
 
 TOOL_NAME = "interventoils_mission"
 
@@ -41,7 +46,7 @@ TOOL_DEF = {
             "days": {
                 "type": "integer",
                 "description": "Fenêtre en jours glissants (défaut 30, 1 à 365)",
-                "default": 30,
+                "default": MISSION_WINDOW_DAYS_DEFAULT,
             },
         },
     },
@@ -164,10 +169,11 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         district = str(args.get("district") or "").strip()
         school = str(args.get("school") or "").strip()
         try:
-            days = int(args.get("days", 30) or 30)
+            days = int(args.get("days", MISSION_WINDOW_DAYS_DEFAULT)
+                       or MISSION_WINDOW_DAYS_DEFAULT)
         except (TypeError, ValueError):
-            days = 30
-        days = min(max(days, 1), 365)
+            days = MISSION_WINDOW_DAYS_DEFAULT
+        days = min(max(days, MISSION_WINDOW_DAYS_MIN), MISSION_WINDOW_DAYS_MAX)
 
         raw_logs = context.get("maintenance_logs", [])
         if raw_logs is None:

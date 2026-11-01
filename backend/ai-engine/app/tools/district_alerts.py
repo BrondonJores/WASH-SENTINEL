@@ -10,6 +10,12 @@ from typing import Any
 
 from ..schemas import AgentCard
 from ..textnorm import dedup_incidents, district_match, fold, parse_dt
+from ..tool_consts import (
+    ALERT_WINDOW_DAYS_DEFAULT,
+    ALERT_WINDOW_DAYS_MAX,
+    ALERT_WINDOW_DAYS_MIN,
+    STALE_AFTER_DAYS,
+)
 
 TOOL_NAME = "district_alerts"
 
@@ -38,7 +44,7 @@ TOOL_DEF = {
             "days": {
                 "type": "integer",
                 "description": "Fenêtre en jours pour les pics récents (défaut : 7)",
-                "default": 7,
+                "default": ALERT_WINDOW_DAYS_DEFAULT,
             },
         },
     },
@@ -58,16 +64,17 @@ _NO_WATER_ISSUES = frozenset({"dry_well", "total_breakdown"})
 
 _NO_WATER_KEYWORDS = ("sans eau", "à sec", "a sec", "plus d'eau", "pas d'eau")
 
-_STALE_DAYS = 7
+#: Alias partagé (source unique : app.tool_consts).
+_STALE_DAYS = STALE_AFTER_DAYS
 _SPIKE_THRESHOLD = 3
 
 
-def _parse_days(value: Any, default: int = 7) -> int:
+def _parse_days(value: Any, default: int = ALERT_WINDOW_DAYS_DEFAULT) -> int:
     try:
         days = int(value)
     except (TypeError, ValueError):
         return default
-    return min(max(days, 1), 90)
+    return min(max(days, ALERT_WINDOW_DAYS_MIN), ALERT_WINDOW_DAYS_MAX)
 
 
 def _age_days(reported_at: Any, now: datetime) -> int | None:
@@ -103,7 +110,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         args = args or {}
         context = context or {}
         district = str(args.get("district") or "").strip()
-        days = _parse_days(args.get("days", 7))
+        days = _parse_days(args.get("days", ALERT_WINDOW_DAYS_DEFAULT))
         now = datetime.now(timezone.utc)
 
         incidents = [i for i in (context.get("incidents", []) or [])

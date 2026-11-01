@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,6 +24,56 @@ from .textnorm import (
     parse_dt as _parse_dt,
     score_place,
 )
+from .tool_consts import INCIDENT_FUZZY_MIN_RATIO
+
+
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+#: Fenêtre du calendrier des pannes (jours ; hérité, cf. thresholds.py AXE 8).
+#: Override ENV : AGENT_TOOLS_HEATMAP_WINDOW_DAYS (défaut historique 90).
+HEATMAP_WINDOW_DAYS = _env_int("AGENT_TOOLS_HEATMAP_WINDOW_DAYS", 90)
+#: Noms d'écoles proposés en retry ("Écoles valides : ...").
+#: Override ENV : AGENT_TOOLS_SCHOOL_CHOICES_LIMIT (défaut historique 10).
+SCHOOL_CHOICES_LIMIT = _env_int("AGENT_TOOLS_SCHOOL_CHOICES_LIMIT", 10)
+#: Références d'incidents proposées en retry + cartes de choix cliquables.
+#: Override ENV : AGENT_TOOLS_INCIDENT_CHOICES_LIMIT (défaut historique 5).
+INCIDENT_CHOICES_LIMIT = _env_int("AGENT_TOOLS_INCIDENT_CHOICES_LIMIT", 5)
+#: Top écoles du comparatif budgétaire.
+#: Override ENV : AGENT_TOOLS_BUDGET_COMPARE_TOP (défaut historique 5).
+BUDGET_COMPARE_TOP = _env_int("AGENT_TOOLS_BUDGET_COMPARE_TOP", 5)
+#: Lignes per_school du payload repair_trends.
+#: Override ENV : AGENT_TOOLS_TRENDS_PER_SCHOOL_TOP (défaut historique 5).
+TRENDS_PER_SCHOOL_TOP = _env_int("AGENT_TOOLS_TRENDS_PER_SCHOOL_TOP", 5)
+#: Limite par défaut de list_maintenance_logs.
+#: Override ENV : AGENT_TOOLS_MAINTENANCE_LOGS_LIMIT (défaut historique 10).
+MAINTENANCE_LOGS_DEFAULT_LIMIT = _env_int("AGENT_TOOLS_MAINTENANCE_LOGS_LIMIT", 10)
+#: Bornes de clamp de cette limite.
+#: Overrides ENV : AGENT_TOOLS_MAINTENANCE_LOGS_MIN/MAX (défauts 1/50).
+MAINTENANCE_LOGS_LIMIT_MIN = _env_int("AGENT_TOOLS_MAINTENANCE_LOGS_MIN", 1)
+MAINTENANCE_LOGS_LIMIT_MAX = _env_int("AGENT_TOOLS_MAINTENANCE_LOGS_MAX", 50)
+#: Seuil de tendance des coûts (ratio mois courant vs moyenne passée).
+#: Override ENV : AGENT_TOOLS_TREND_RATIO_THRESHOLD (défaut historique 0.15).
+TREND_RATIO_THRESHOLD = _env_float("AGENT_TOOLS_TREND_RATIO_THRESHOLD", 0.15)
 
 
 def _open_incidents(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -65,7 +116,7 @@ def _resolve_school(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
     return scored[0][2]
 
 
-def _school_choices(context: dict[str, Any], limit: int = 10) -> str:
+def _school_choices(context: dict[str, Any], limit: int = SCHOOL_CHOICES_LIMIT) -> str:
     """Noms + ids valides, pour guider le retry du modèle en cas d'erreur."""
     choices = []
     for school in context.get("schools", [])[:limit]:
@@ -90,9 +141,6 @@ def _float_cost(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-
-
-HEATMAP_WINDOW_DAYS = 90
 
 
 def build_calendar_heatmap(pool: list[dict[str, Any]] | None,
@@ -182,7 +230,7 @@ WASH_BUDGET_CATEGORIES = ("water_point", "toilets_latrines", "handwashing", "sew
 
 
 def build_budget_compare(context: dict[str, Any], district: Any = None,
-                         top: int = 5) -> dict[str, Any]:
+                         top: int = BUDGET_COMPARE_TOP) -> dict[str, Any]:
     """Comparaison budgétaire : top écoles par cumul réparations + parts WASH.
 
     Cumuls = somme brute des cost_amount (XAF supposé) de maintenance_logs,
@@ -498,7 +546,7 @@ def _match_incidents(context: dict[str, Any], ref: Any) -> list[dict[str, Any]]:
     if not scored and len(hint) >= 4:
         for incident in incidents:
             title = str(incident.get("title", "")).lower()
-            if difflib.SequenceMatcher(None, hint, title).ratio() >= 0.6:
+            if difflib.SequenceMatcher(None, hint, title).ratio() >= INCIDENT_FUZZY_MIN_RATIO:
                 scored.append((1, incident))
     scored.sort(key=lambda s: -s[0])
     seen: set[Any] = set()
@@ -517,7 +565,7 @@ def _resolve_incident(context: dict[str, Any], ref: Any) -> dict[str, Any] | Non
     return matches[0] if len(matches) == 1 else None
 
 
-def _incident_choices(incidents: list[dict[str, Any]], limit: int = 5) -> str:
+def _incident_choices(incidents: list[dict[str, Any]], limit: int = INCIDENT_CHOICES_LIMIT) -> str:
     """Références + titres valides, pour faire choisir l'utilisateur en cas d'ambiguïté."""
     choices = []
     for incident in incidents[:limit]:
@@ -645,7 +693,7 @@ def tool_prepare_maintenance_log(args: dict[str, Any], context: dict[str, Any]) 
         pool = candidates if candidates else _open_incidents(context)
         obs["incident_choices"] = _incident_choices(pool)
         if len(candidates) > 1:
-            obs["candidates"] = [_candidate_card(c) for c in candidates[:5]]
+            obs["candidates"] = [_candidate_card(c) for c in candidates[:INCIDENT_CHOICES_LIMIT]]
     return obs
 
 
@@ -842,7 +890,8 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         trend = "stable" if costs[-1] <= 0 else "up"
     else:
         ratio = (costs[-1] - avg_previous) / avg_previous
-        trend = "up" if ratio > 0.15 else ("down" if ratio < -0.15 else "stable")
+        trend = "up" if ratio > TREND_RATIO_THRESHOLD else (
+            "down" if ratio < -TREND_RATIO_THRESHOLD else "stable")
     currency = next((str(l.get("currency") or "XAF") for l in logs if l.get("currency")), "XAF")
 
     if total_cost > 0 and costs:
@@ -899,7 +948,7 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         if row is not None:
             row["incidents"] += 1
             row["pannes"] += 1
-    per_school = sorted(per_rows.values(), key=lambda r: r["cost"], reverse=True)[:5]
+    per_school = sorted(per_rows.values(), key=lambda r: r["cost"], reverse=True)[:TRENDS_PER_SCHOOL_TOP]
     urgency_fr = {"critical": "critique", "high": "haute",
                   "medium": "moyenne", "low": "basse"}
     by_urgency = {"critique": 0, "haute": 0, "moyenne": 0, "basse": 0}
@@ -1024,10 +1073,11 @@ def tool_list_maintenance_logs(args: dict[str, Any], context: dict[str, Any]) ->
     matched = _school_hint_matches_known(hint, context)
     effective_hint = hint if matched else None
     try:
-        limit = int(args.get("limit", 10) or 10)
+        limit = int(args.get("limit", MAINTENANCE_LOGS_DEFAULT_LIMIT)
+                    or MAINTENANCE_LOGS_DEFAULT_LIMIT)
     except (TypeError, ValueError):
-        limit = 10
-    limit = min(max(limit, 1), 50)
+        limit = MAINTENANCE_LOGS_DEFAULT_LIMIT
+    limit = min(max(limit, MAINTENANCE_LOGS_LIMIT_MIN), MAINTENANCE_LOGS_LIMIT_MAX)
 
     filtered = [
         log for log in context.get("maintenance_logs", [])

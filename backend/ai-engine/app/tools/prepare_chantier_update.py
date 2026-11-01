@@ -10,6 +10,7 @@ import difflib
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import INCIDENT_FUZZY_MIN_RATIO
 
 TOOL_NAME = "prepare_chantier_update"
 
@@ -170,7 +171,7 @@ def _match_incidents(context: dict[str, Any], ref: Any) -> list[dict[str, Any]]:
             if not isinstance(incident, dict):
                 continue
             title = str(incident.get("title", "")).lower()
-            if difflib.SequenceMatcher(None, hint, title).ratio() >= 0.6:
+            if difflib.SequenceMatcher(None, hint, title).ratio() >= INCIDENT_FUZZY_MIN_RATIO:
                 scored.append((1, incident))
     scored.sort(key=lambda s: -s[0])
     seen: set[Any] = set()

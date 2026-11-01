@@ -20,6 +20,11 @@ from ..textnorm import (
     negation_spans,
     parse_dt,
 )
+from ..tool_consts import (
+    ALERT_WINDOW_DAYS_DEFAULT,
+    ALERT_WINDOW_DAYS_MAX,
+    ALERT_WINDOW_DAYS_MIN,
+)
 
 TOOL_NAME = "epidemic_alerts"
 
@@ -48,7 +53,7 @@ TOOL_DEF = {
             "days": {
                 "type": "integer",
                 "description": "Fenêtre en jours (défaut 7, 1 à 90)",
-                "default": 7,
+                "default": ALERT_WINDOW_DAYS_DEFAULT,
             },
         },
     },
@@ -170,10 +175,11 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         args = args if isinstance(args, dict) else {}
         context = context if isinstance(context, dict) else {}
         try:
-            days = int(args.get("days", 7) or 7)
+            days = int(args.get("days", ALERT_WINDOW_DAYS_DEFAULT)
+                       or ALERT_WINDOW_DAYS_DEFAULT)
         except (TypeError, ValueError):
-            days = 7
-        days = min(max(days, 1), 90)
+            days = ALERT_WINDOW_DAYS_DEFAULT
+        days = min(max(days, ALERT_WINDOW_DAYS_MIN), ALERT_WINDOW_DAYS_MAX)
         district_arg = args.get("district")
         district_label = str(district_arg or "").strip() or None
         if (context.get("incidents") is None

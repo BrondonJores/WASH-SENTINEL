@@ -21,7 +21,13 @@ FAMILY_PARAMETRE = "parametre_manquant"
 FAMILY_FILE = "file_inconnue"
 FAMILY_DEFAUT = "defaut"
 
+#: REPLI historique — noms de districts seedés en dur, utilisés UNIQUEMENT
+#: quand l'appelant ne fournit pas d'exemples via `district_examples`
+#: (agent_loop._build_cards les tire du contexte : source préférée).
 DISTRICT_EXAMPLES = "Mvila, Wouri, Yaoundé, Douala"
+
+#: Période proposée par l'action "Voir une période plus longue" (jours).
+GUIDANCE_PERIOD_DAYS = 90
 
 # Outils qui raisonnent par district : on enrichit la carte d'exemples.
 _DISTRICT_TOOLS = frozenset({
@@ -53,7 +59,7 @@ _ACTION_SCHOOLS = {"label": "Voir les écoles suivies",
 _ACTION_RECENT = {"label": "Voir les derniers faits",
                   "question": "Quels sont les derniers incidents signalés ?"}
 _ACTION_PERIOD = {"label": "Voir une période plus longue",
-                  "question": "Et sur les 90 derniers jours ?"}
+                  "question": f"Et sur les {GUIDANCE_PERIOD_DAYS} derniers jours ?"}
 
 # Un modele par famille : titre simple, explication courte, 2-3 causes,
 # au moins 2 actions {label, question}.
@@ -189,14 +195,16 @@ def _ensure_action(actions: list[dict[str, str]], action: dict[str, str],
 
 def _apply_tool_hints(tool_name: str, family: str, error_text: str,
                       title: str, explication: str,
-                      actions: list[dict[str, str]]
+                      actions: list[dict[str, str]],
+                      district_examples: str | None = None,
                       ) -> tuple[str, str, list[dict[str, str]]]:
     """Enrichit la carte selon l'outil appele (mapping par outil)."""
     err = _norm(error_text)
     if tool_name in _DISTRICT_TOOLS:
         # District inexistant : guider vers un nom valide.
         if family == FAMILY_LIEU or _has(err, "district"):
-            explication = (f"Vérifiez le nom : {DISTRICT_EXAMPLES}… "
+            examples = district_examples or DISTRICT_EXAMPLES
+            explication = (f"Vérifiez le nom : {examples}… "
                            + explication)
         _ensure_action(actions, _ACTION_DISTRICTS, first=True)
     if tool_name in _SCHOOL_TOOLS:
@@ -204,12 +212,15 @@ def _apply_tool_hints(tool_name: str, family: str, error_text: str,
     return title, explication, actions
 
 
-def build_guidance_card(tool_name: str, observation: dict) -> AgentCard | None:
+def build_guidance_card(tool_name: str, observation: dict,
+                        district_examples: str | None = None) -> AgentCard | None:
     """Construit une carte de guidage depuis une observation en erreur.
 
     Retourne None si l'observation ne contient pas d'erreur.
     Ne leve jamais : en cas de doute, retourne la carte generique-utile
     (jamais de vide).
+    `district_examples` : noms fournis par l'appelant (contexte reel) ;
+    à défaut, repli historique DISTRICT_EXAMPLES.
     """
     try:
         if not isinstance(observation, dict):
@@ -227,7 +238,8 @@ def build_guidance_card(tool_name: str, observation: dict) -> AgentCard | None:
         causes = [str(c) for c in template["causes"]]
         actions = [dict(a) for a in template["actions"]]
         title, explication, actions = _apply_tool_hints(
-            name, family, error_text, title, explication, actions)
+            name, family, error_text, title, explication, actions,
+            district_examples=district_examples)
         return AgentCard(
             type="guidance",
             title=title,

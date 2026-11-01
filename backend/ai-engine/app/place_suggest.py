@@ -16,6 +16,15 @@ from .textnorm import PLACE_CUTOFF, fold, known_places, score_place
 #: Alias historique : cutoff balayé 0.40-0.80 (voir test_place_threshold).
 SEUIL = PLACE_CUTOFF
 
+#: Suggestions renvoyées par défaut.
+SUGGEST_DEFAULT_LIMIT = 3
+#: Écoles cliquables proposées en échantillon.
+ECOLES_SAMPLE_SIZE = 3
+#: Mots conservés au maximum dans le fragment lieu.
+FRAGMENT_MAX_WORDS = 3
+#: Longueur minimale d'un token significatif (repli sans marqueur).
+FRAGMENT_MIN_TOKEN_LEN = 3
+
 # Marqueurs (repliés, sans accent) après lesquels se trouve le lieu probable.
 _MARKERS = frozenset({
     "a", "au", "aux",            # à / au / aux
@@ -83,14 +92,14 @@ def _extract_fragment(message: str) -> str:
             if n in _STOP:
                 break
             words.append(tok)
-            if len(words) >= 3:
+            if len(words) >= FRAGMENT_MAX_WORDS:
                 break
         if words:
             return " ".join(words)
         # Marqueur en fin de message (« de l'école de ») : pas de fragment.
         return ""
     for tok, n in zip(reversed(tokens), reversed(normed)):
-        if len(n) >= 3 and n not in _STOP and n not in _SKIP_AFTER:
+        if len(n) >= FRAGMENT_MIN_TOKEN_LEN and n not in _STOP and n not in _SKIP_AFTER:
             return tok
     return ""
 
@@ -104,7 +113,7 @@ def _question(kind: str, label: str) -> str:
     return f"Analyser l'école de {label}"
 
 
-def suggest_places(message: str, context: dict, limit: int = 3) -> dict[str, Any]:
+def suggest_places(message: str, context: dict, limit: int = SUGGEST_DEFAULT_LIMIT) -> dict[str, Any]:
     """Suggère des lieux connus proches du fragment cité (jamais un mur).
 
     Retourne {insight, fragment, suggestions[{label, kind, question}],
@@ -114,7 +123,7 @@ def suggest_places(message: str, context: dict, limit: int = 3) -> dict[str, Any
     context = context or {}
     schools, districts = _known_places(context)
     fragment = _extract_fragment(message)
-    ecoles_sample = schools[:3]
+    ecoles_sample = schools[:ECOLES_SAMPLE_SIZE]
     districts_sample = list(districts)
 
     if not schools and not districts:

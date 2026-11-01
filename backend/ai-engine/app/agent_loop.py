@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import unicodedata
@@ -11,7 +12,29 @@ from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ON
 from .guidance import build_guidance_card
 from .guided_voice import guided_turn, resolve_guided_lang
 from .place_suggest import suggest_places
-from .prompts import render_agent_prompt
+from .prompts import SMALL_MODEL_RE, render_agent_prompt
+
+
+def _env_float(name: str, default: float) -> float:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Override ENV typé ; défaut historique inchangé si absent/invalide."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 from .providers import BaseLLMProvider
 from .router import is_data_question
 from .router import route as router_route
@@ -21,24 +44,33 @@ from .schemas import AgentCard, AgentChatRequest, AgentChatResponse
 #: (mêmes règles comportementales, une phrase par règle).
 SYSTEM_PROMPT = render_agent_prompt()
 
-MAX_ITERATIONS = 5
+#: Garde-fou boucle agent (hérité, cf. app/thresholds.py inventaire AXE 8).
+#: Override ENV : AGENT_MAX_ITERATIONS (défaut historique 5).
+MAX_ITERATIONS = _env_int("AGENT_MAX_ITERATIONS", 5)
 # Budget wall-clock d'un run (surtout CPU local) : au-delà, on conclut
 # avec le résumé déterministe plutôt que de laisser l'UI pendre.
-RUN_BUDGET_S = 100.0
+# Override ENV : AGENT_RUN_BUDGET_S (défaut historique 100.0).
+RUN_BUDGET_S = _env_float("AGENT_RUN_BUDGET_S", 100.0)
 # Budget total d'appels LLM par run (boucle + recadrages force/absence) :
 # sans lui, le pire cas monte à 11 appels (5 + 2 + 2 + 2), rédhibitoire
 # sur CPU froid. Au-delà, résumé déterministe honnête (jamais d'invention).
-MAX_LLM_CALLS = 6
+# Override ENV : AGENT_MAX_LLM_CALLS (défaut historique 6).
+MAX_LLM_CALLS = _env_int("AGENT_MAX_LLM_CALLS", 6)
 # Payload scoping : l'historique et les observations sont bornés pour ne pas
 # noyer les petits modèles (chaque token ajouté ralentit chaque appel).
-HISTORY_TURNS = 6
-HISTORY_TURN_MAX_CHARS = 1200
-HISTORY_MAX_CHARS = 4000
-OBS_LIST_MAX_ITEMS = 12
-OBS_STR_MAX_CHARS = 2000
+#: Override ENV : AGENT_HISTORY_TURNS (défaut historique 6).
+HISTORY_TURNS = _env_int("AGENT_HISTORY_TURNS", 6)
+#: Override ENV : AGENT_HISTORY_TURN_MAX_CHARS (défaut historique 1200).
+HISTORY_TURN_MAX_CHARS = _env_int("AGENT_HISTORY_TURN_MAX_CHARS", 1200)
+#: Override ENV : AGENT_HISTORY_MAX_CHARS (défaut historique 4000).
+HISTORY_MAX_CHARS = _env_int("AGENT_HISTORY_MAX_CHARS", 4000)
+#: Override ENV : AGENT_OBS_LIST_MAX_ITEMS (défaut historique 12).
+OBS_LIST_MAX_ITEMS = _env_int("AGENT_OBS_LIST_MAX_ITEMS", 12)
+#: Override ENV : AGENT_OBS_STR_MAX_CHARS (défaut historique 2000).
+OBS_STR_MAX_CHARS = _env_int("AGENT_OBS_STR_MAX_CHARS", 2000)
 # Petits modèles locaux : descriptions d'outils compactées (le prompt
 # complet à 24 outils les noie et ralentit chaque appel).
-SMALL_MODEL_RE = re.compile(r"1b|2b|3b|mini", re.IGNORECASE)
+# SMALL_MODEL_RE : source unique prompts.py (importé plus haut, fini le duplicata).
 FOLLOWUP_RE = re.compile(
     r"(je parle d[e']|il s'agit d[e']|et (?:pour|à|au|en)|celui (?:de|du)|"
     r"dans (?:le |la |les )?|concernant|pour)\s+(.+)",
@@ -256,8 +288,9 @@ _FR_TOOL_WORDS_NORM = frozenset(
 )
 
 #: Preuve minimale : 2 mots-outils ou 4 tokens, sinon français par défaut.
-_LANG_MIN_HITS = 2
-_LANG_MIN_TOKENS = 4
+#: Overrides ENV : AGENT_LANG_MIN_HITS / AGENT_LANG_MIN_TOKENS.
+_LANG_MIN_HITS = _env_int("AGENT_LANG_MIN_HITS", 2)
+_LANG_MIN_TOKENS = _env_int("AGENT_LANG_MIN_TOKENS", 4)
 
 
 def detect_lang_details(message: str) -> dict[str, Any]:
@@ -695,7 +728,7 @@ class AgentLoop:
             else:
                 answer = self._fallback_answer(executed, context)
 
-        cards = self._build_cards(executed)
+        cards = self._build_cards(executed, context)
         if not cards:
             # Aucune carte (échec ou lieu inconnu) : suggestions cliquables.
             suggest = suggest_places(req.message, context)
@@ -880,11 +913,21 @@ class AgentLoop:
             "ou « Montrez la carte du territoire », et je m'en occupe avec plaisir."
         )
 
-    def _build_cards(self, executed: list[tuple[str, dict[str, Any]]]) -> list[AgentCard]:
+    def _build_cards(self, executed: list[tuple[str, dict[str, Any]]],
+                     context: dict[str, Any] | None = None) -> list[AgentCard]:
         cards: list[AgentCard] = []
+        district_examples: str | None = None
+        if context:
+            try:
+                districts = known_places(context)[1]
+            except (AttributeError, TypeError, ValueError):
+                districts = []
+            if districts:
+                district_examples = ", ".join(districts[:4])
         for name, observation in executed:
             if "error" in observation:
-                guide = build_guidance_card(name, observation)
+                guide = build_guidance_card(
+                    name, observation, district_examples=district_examples)
                 if guide is not None:
                     cards.append(guide)
                 continue

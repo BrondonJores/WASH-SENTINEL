@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import LOG_WINDOW_DAYS, STALE_AFTER_DAYS
 
 TOOL_NAME = "document_briefing"
 
@@ -75,8 +76,9 @@ FRENCH_MONTHS = ["", "janvier", "février", "mars", "avril", "mai", "juin",
 
 _VALID_FORMATS = ("briefing", "diaporama", "rapport")
 
-_STALE_DAYS = 7
-_LOG_WINDOW_DAYS = 30
+#: Alias partagés (source unique : app.tool_consts).
+_STALE_DAYS = STALE_AFTER_DAYS
+_LOG_WINDOW_DAYS = LOG_WINDOW_DAYS
 
 
 def _fold(text: Any) -> str:

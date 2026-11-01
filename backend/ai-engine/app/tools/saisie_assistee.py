@@ -11,6 +11,7 @@ import unicodedata
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import MAX_ECOLE_OPTIONS
 
 TOOL_NAME = "saisie_assistee"
 
@@ -81,7 +82,8 @@ _ECole_Q = "Dans quelle école y a-t-il un problème ? Touchez le nom de l'écol
 _PROBLEME_Q = "Quel est le problème ? Touchez une réponse."
 _URGENCE_Q = "C'est urgent comment ? Touchez une réponse."
 
-_MAX_ECOLE_OPTIONS = 6
+#: Alias partagé (source unique : app.tool_consts).
+_MAX_ECOLE_OPTIONS = MAX_ECOLE_OPTIONS
 
 
 def _strip_accents(value: str) -> str:
