@@ -136,8 +136,8 @@ class WashWhatsAppEnglishTest extends TestCase
         // Récap EN (squelette EN ; vocal : résumé = transcript, non traduit).
         $texts = $this->sentTexts();
         $this->assertCount(1, $texts);
-        $this->assertStringContainsString('Thanks! Case ' . $incident->reference_code . ' recorded', $texts[0]['message']);
-        $this->assertStringContainsString('Priority medium', $texts[0]['message']);
+        $this->assertStringContainsString('Thanks! Case *' . $incident->reference_code . '* recorded', $texts[0]['message']);
+        $this->assertStringContainsString('*Priority:* medium', $texts[0]['message']);
         $this->assertStringContainsString('our team is notified', $texts[0]['message']);
         $this->assertStringContainsString('the tap in block A is leaking', $texts[0]['message']);
 
@@ -183,8 +183,8 @@ class WashWhatsAppEnglishTest extends TestCase
 
         $texts = $this->sentTexts();
         $this->assertCount(1, $texts);
-        $this->assertStringContainsString('Thanks! Case ' . $incident->reference_code . ' recorded', $texts[0]['message']);
-        $this->assertStringContainsString('Priority medium', $texts[0]['message']);
+        $this->assertStringContainsString('Thanks! Case *' . $incident->reference_code . '* recorded', $texts[0]['message']);
+        $this->assertStringContainsString('*Priority:* medium', $texts[0]['message']);
         // Squelette EN, résumé extracteur FR conservé (non traduit).
         $this->assertStringContainsString('Fuite sur un robinet.', $texts[0]['message']);
     }
@@ -306,7 +306,7 @@ class WashWhatsAppEnglishTest extends TestCase
         $texts = $this->sentTexts();
         $this->assertCount(1, $texts);
         $this->assertStringContainsString('enregistré', $texts[0]['message']);
-        $this->assertStringContainsString('Priorité moyenne', $texts[0]['message']);
+        $this->assertStringContainsString('*Priorité :* moyenne', $texts[0]['message']);
 
         $interactive = $this->sentInteractive();
         $this->assertCount(1, $interactive);

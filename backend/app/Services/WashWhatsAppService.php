@@ -651,7 +651,6 @@ class WashWhatsAppService
             'summary' => $summary,
             'human' => $this->statusHuman($incident->status, $english),
             'since' => $since,
-            'next' => $this->statusNext($incident->status, $english),
         ]);
 
         return $card . $this->t('whatsapp.suivi.details', $english, [
@@ -660,6 +659,7 @@ class WashWhatsAppService
                 ? $this->englishDay($incident->created_at ?? now())
                 : $this->frenchDay($incident->created_at ?? now()),
             'urgency' => $this->urgencyLabel($incident->urgency, $english),
+            'next' => $this->statusNext($incident->status, $english),
         ]);
     }
 
@@ -1061,7 +1061,7 @@ class WashWhatsAppService
         do {
             $lines = [];
             foreach ($incidents as $num => $incident) {
-                $lines[] = ($num + 1) . ') ' . $incident->reference_code . ' — ' . Str::limit((string) ($incident->ai_summary ?: $incident->title), $summaryLen);
+                $lines[] = '*' . ($num + 1) . ') ' . $incident->reference_code . '* — ' . Str::limit((string) ($incident->ai_summary ?: $incident->title), $summaryLen);
             }
             $body = $head . "\n" . implode("\n", $lines);
             if (mb_strlen($body) <= self::MAX_REPLY_LENGTH || $summaryLen <= 12) {

@@ -182,8 +182,8 @@ class WashWhatsAppSuiviTest extends TestCase
         $this->assertStringContainsString('Fuite robinet bloc A', $reply);
         $this->assertStringContainsString('équipe en intervention', $reply);
         $this->assertStringContainsString('Prochaine étape', $reply);
-        $this->assertStringContainsString('École : École de Bonanjo', $reply);
-        $this->assertStringContainsString('Urgence : moyenne', $reply);
+        $this->assertStringContainsString('*École :* École de Bonanjo', $reply);
+        $this->assertStringContainsString('*Urgence :* moyenne', $reply);
         $this->assertStringContainsString('Signalé le', $reply);
         $this->assertLessThanOrEqual(397, mb_strlen($reply));
     }
@@ -236,8 +236,8 @@ class WashWhatsAppSuiviTest extends TestCase
         $reply = $this->lastText();
         $this->assertStringContainsString('WASH-2026-TEST01', $reply);
         $this->assertStringContainsString('technicien assigné', $reply);
-        $this->assertStringContainsString('Urgence : haute', $reply);
-        $this->assertStringContainsString('École : École de Bonanjo', $reply);
+        $this->assertStringContainsString('*Urgence :* haute', $reply);
+        $this->assertStringContainsString('*École :* École de Bonanjo', $reply);
         $this->assertStringContainsString('Signalé le', $reply);
         $this->assertStringContainsString('Fuite robinet bloc A', $reply);
         $this->assertLessThanOrEqual(397, mb_strlen($reply));
@@ -265,7 +265,7 @@ class WashWhatsAppSuiviTest extends TestCase
 
         $result = $this->send('je ne connais pas le numéro');
         $this->assertEquals('awaiting_school', $result['step'] ?? null);
-        $this->assertStringContainsString('De quelle école', $this->lastText());
+        $this->assertStringContainsString('De quelle *école*', $this->lastText());
 
         $result = $this->send("c'est l'école de Bonanjo");
         $this->assertEquals('awaiting_date', $result['step'] ?? null);
@@ -274,8 +274,8 @@ class WashWhatsAppSuiviTest extends TestCase
         $result = $this->send('hier');
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
         $proposal = $this->lastText();
-        $this->assertStringContainsString('1) WASH-2026-HIER02', $proposal);
-        $this->assertStringContainsString('2) WASH-2026-HIER01', $proposal);
+        $this->assertStringContainsString('*1) WASH-2026-HIER02', $proposal);
+        $this->assertStringContainsString('*2) WASH-2026-HIER01', $proposal);
         $this->assertStringContainsString('NUMÉRO', $proposal);
         $this->assertLessThanOrEqual(397, mb_strlen($proposal));
 
@@ -285,7 +285,7 @@ class WashWhatsAppSuiviTest extends TestCase
         $reply = $this->lastText();
         $this->assertStringContainsString('WASH-2026-HIER01', $reply);
         $this->assertStringContainsString('équipe en intervention', $reply);
-        $this->assertStringContainsString('École : École de Bonanjo', $reply);
+        $this->assertStringContainsString('*École :* École de Bonanjo', $reply);
         $this->assertLessThanOrEqual(397, mb_strlen($reply));
 
         $this->assertNotEquals($newer->id, $result['incident_id'] ?? null);
@@ -327,8 +327,8 @@ class WashWhatsAppSuiviTest extends TestCase
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
         $proposal = $this->lastText();
         $this->assertStringContainsString('Plusieurs dossiers correspondent', $proposal);
-        $this->assertStringContainsString('1) WASH-2026-TEST02', $proposal);
-        $this->assertStringContainsString('2) WASH-2026-TEST01', $proposal);
+        $this->assertStringContainsString('*1) WASH-2026-TEST02', $proposal);
+        $this->assertStringContainsString('*2) WASH-2026-TEST01', $proposal);
 
         $result = $this->send('1');
         $this->assertEquals($latest->id, $result['incident_id'] ?? null);
@@ -359,7 +359,7 @@ class WashWhatsAppSuiviTest extends TestCase
 
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
         $proposal = $this->lastText();
-        $this->assertStringContainsString('1) WASH-2026-TEST01', $proposal);
+        $this->assertStringContainsString('*1) WASH-2026-TEST01', $proposal);
         $this->assertStringContainsString('NUMÉRO', $proposal);
     }
 
@@ -371,7 +371,7 @@ class WashWhatsAppSuiviTest extends TestCase
         $this->send('suivre mon dossier');
         $result = $this->send('non');
         $this->assertEquals('awaiting_school', $result['step'] ?? null);
-        $this->assertStringContainsString('De quelle école', $this->lastText());
+        $this->assertStringContainsString('De quelle *école*', $this->lastText());
 
         $result = $this->send('École de Nullepart XYZ');
         $this->assertEquals('awaiting_school', $result['step'] ?? null);
@@ -415,7 +415,7 @@ class WashWhatsAppSuiviTest extends TestCase
         $result = $this->send('le 2');
 
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
-        $this->assertStringContainsString('1) WASH-2026-TEST01', $this->lastText());
+        $this->assertStringContainsString('*1) WASH-2026-TEST01', $this->lastText());
 
         // Même attente avec le jour seul (« 2 »).
         Cache::forget('wash.whatsapp.suivi.237600112233');
@@ -425,7 +425,7 @@ class WashWhatsAppSuiviTest extends TestCase
         $result = $this->send('2');
 
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
-        $this->assertStringContainsString('1) WASH-2026-TEST01', $this->lastText());
+        $this->assertStringContainsString('*1) WASH-2026-TEST01', $this->lastText());
     }
 
     public function test_date_format_numerique(): void
@@ -440,7 +440,7 @@ class WashWhatsAppSuiviTest extends TestCase
         $result = $this->send('02/11');
 
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
-        $this->assertStringContainsString('1) WASH-2026-TEST01', $this->lastText());
+        $this->assertStringContainsString('*1) WASH-2026-TEST01', $this->lastText());
     }
 
     public function test_date_mois_en_lettres(): void
@@ -455,7 +455,7 @@ class WashWhatsAppSuiviTest extends TestCase
         $result = $this->send('2 novembre');
 
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
-        $this->assertStringContainsString('1) WASH-2026-TEST01', $this->lastText());
+        $this->assertStringContainsString('*1) WASH-2026-TEST01', $this->lastText());
     }
 
     public function test_aucun_dossier_ce_jour_la_puis_autre_date(): void
@@ -477,7 +477,7 @@ class WashWhatsAppSuiviTest extends TestCase
 
         $result = $this->send("aujourd'hui");
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
-        $this->assertStringContainsString('1) WASH-2026-TEST01', $this->lastText());
+        $this->assertStringContainsString('*1) WASH-2026-TEST01', $this->lastText());
     }
 
     public function test_choix_invalide_repropose_liste(): void
@@ -502,8 +502,8 @@ class WashWhatsAppSuiviTest extends TestCase
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
         $reply = $this->lastText();
         $this->assertStringContainsString("Je n'ai pas compris", $reply);
-        $this->assertStringContainsString('1) WASH-2026-CHX02', $reply);
-        $this->assertStringContainsString('2) WASH-2026-CHX01', $reply);
+        $this->assertStringContainsString('*1) WASH-2026-CHX02', $reply);
+        $this->assertStringContainsString('*2) WASH-2026-CHX01', $reply);
 
         $result = $this->send('9');
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
@@ -561,7 +561,7 @@ class WashWhatsAppSuiviTest extends TestCase
 
         $result = $this->send("aujourd'hui");
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
-        $this->assertStringContainsString('1) WASH-2026-TEST01', $this->lastText());
+        $this->assertStringContainsString('*1) WASH-2026-TEST01', $this->lastText());
     }
 
     public function test_annuler_arrete_le_suivi(): void
@@ -635,7 +635,7 @@ class WashWhatsAppSuiviTest extends TestCase
         // Un autre numéro discute librement : pas d'état suivi pour lui.
         $this->send('Bonjour', '237600445566');
         $otherReply = $this->lastText();
-        $this->assertStringContainsString('Je suis Sentinel', $otherReply);
+        $this->assertStringContainsString('Je suis *Sentinel*', $otherReply);
         $this->assertStringNotContainsString('NUMÉRO', $otherReply);
 
         // Le premier numéro reprend son suivi où il l'avait laissé.
@@ -695,7 +695,7 @@ class WashWhatsAppSuiviTest extends TestCase
         $this->assertCount(1, $texts);
         $reply = $texts[0]['message'];
         $this->assertStringContainsString("Aucun signalement pour l'instant", $reply);
-        $this->assertStringContainsString('décrivez votre panne', $reply);
+        $this->assertStringContainsString('Décrivez votre panne', $reply);
     }
 
     public function test_suivi_english(): void
@@ -710,7 +710,7 @@ class WashWhatsAppSuiviTest extends TestCase
         $this->assertEquals('awaiting_id', $result['step'] ?? null);
         $reply = $this->lastText();
         $this->assertStringContainsString('WASH number', $reply);
-        $this->assertStringContainsString('reply NO', $reply);
+        $this->assertStringContainsString('reply *NO*', $reply);
         $this->assertStringNotContainsString($incident->reference_code, $reply);
 
         $result = $this->send('NO');
@@ -724,8 +724,8 @@ class WashWhatsAppSuiviTest extends TestCase
         $result = $this->send('yesterday');
         $this->assertEquals('awaiting_choice', $result['step'] ?? null);
         $proposal = $this->lastText();
-        $this->assertStringContainsString('I found 1 case(s)', $proposal);
-        $this->assertStringContainsString('1) WASH-2026-TEST01', $proposal);
+        $this->assertStringContainsString('I found *1* case(s)', $proposal);
+        $this->assertStringContainsString('*1) WASH-2026-TEST01', $proposal);
         $this->assertStringContainsString('NUMBER', $proposal);
 
         $result = $this->send('1');
@@ -734,8 +734,8 @@ class WashWhatsAppSuiviTest extends TestCase
         $this->assertStringContainsString($incident->reference_code, $reply);
         $this->assertStringContainsString('Status:', $reply);
         $this->assertStringContainsString('technician assigned', $reply);
-        $this->assertStringContainsString('School: École de Bonanjo', $reply);
-        $this->assertStringContainsString('Priority: medium', $reply);
+        $this->assertStringContainsString('School:* École de Bonanjo', $reply);
+        $this->assertStringContainsString('Priority:* medium', $reply);
         $this->assertStringContainsString('Next step:', $reply);
         $this->assertLessThanOrEqual(397, mb_strlen($reply));
 

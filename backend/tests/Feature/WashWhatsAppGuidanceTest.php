@@ -780,7 +780,7 @@ class WashWhatsAppGuidanceTest extends TestCase
         $this->assertNotContains('confirme-usager', $incident->fresh()->ai_tags ?? []);
         $texts = $this->sentTexts();
         $this->assertCount(1, $texts);
-        $this->assertStringContainsString('bien enregistré', $texts[0]['message']);
+        $this->assertStringContainsString('bien *enregistré*', $texts[0]['message']);
     }
 
     public function test_graph_send_failure_never_crashes_nor_duplicates(): void
