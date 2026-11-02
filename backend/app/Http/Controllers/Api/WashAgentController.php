@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\AiAnalysis;
+use App\Models\EquipmentCost;
 use App\Models\Incident;
 use App\Models\MaintenanceLog;
 use App\Models\School;
@@ -312,6 +313,7 @@ class WashAgentController extends Controller
             'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
             'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
             'teams' => $this->teamSnapshots($validated['district'] ?? null),
+            'equipment_costs' => $this->equipmentCostSnapshots(),
         ];
         // Map incident_id -> categorie pour les incidents liés aux journaux
         // (même résolus/clos ou hors fenêtre recent) : le moteur ventile
@@ -535,6 +537,21 @@ class WashAgentController extends Controller
                 'phone' => $t->phone,
                 'specialties' => $t->specialties ?? [],
                 'is_active' => (bool) $t->is_active,
+            ])->all();
+    }
+
+    protected function equipmentCostSnapshots(): array
+    {
+        return EquipmentCost::query()
+            ->orderBy('category')->orderBy('label')->get()
+            ->map(fn (EquipmentCost $c) => [
+                'equipment_key' => $c->equipment_key,
+                'label' => $c->label,
+                'category' => $c->category,
+                'min_xaf' => (int) $c->min_xaf,
+                'max_xaf' => (int) $c->max_xaf,
+                'source_name' => $c->source_name,
+                'source_url' => $c->source_url,
             ])->all();
     }
 

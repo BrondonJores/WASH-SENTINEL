@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\WashNotificationController;
 use App\Http\Controllers\Api\WashWhatsAppController;
 use App\Http\Controllers\Api\WashReportController;
 use App\Http\Controllers\Api\WashSchoolController;
+use App\Http\Controllers\Api\WashEquipmentCostController;
 use App\Http\Controllers\Api\WashTeamController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -27,6 +28,9 @@ Route::get('/user', function (Request $request) {
 Route::prefix('v1/wash')->group(function () {
     Route::get('/schools', [WashSchoolController::class, 'index']);
     Route::get('/schools/{school}', [WashSchoolController::class, 'show']);
+
+    Route::get('/equipment-costs', [WashEquipmentCostController::class, 'index']);
+    Route::get('/equipment-costs/{equipmentCost}', [WashEquipmentCostController::class, 'show']);
 
     Route::get('/reports', [WashReportController::class, 'index']);
     Route::post('/reports', [WashReportController::class, 'store'])->middleware('throttle:60,1');
@@ -58,6 +62,8 @@ Route::prefix('v1/wash')->group(function () {
         Route::get('/library', [WashConversationController::class, 'library']);
         Route::apiResource('/projects', WashProjectController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::apiResource('/teams', WashTeamController::class)->only(['index', 'store', 'show', 'update', 'destroy']);
+        Route::post('/equipment-costs', [WashEquipmentCostController::class, 'store'])->middleware('permission:manage schools');
+        Route::patch('/equipment-costs/{equipmentCost}', [WashEquipmentCostController::class, 'update'])->middleware('permission:manage schools');
         Route::post('/conversations', [WashConversationController::class, 'store']);
         Route::patch('/conversations/{conversation}', [WashConversationController::class, 'update']);
         Route::delete('/conversations/{conversation}', [WashConversationController::class, 'destroy']);
