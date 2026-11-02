@@ -1084,6 +1084,55 @@ function ConfirmationCard({ title, data }: { title: string; data: Record<string,
   );
 }
 
+function PhotoCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+  const unavailable = data.vision_unavailable === true;
+  const wash = data.is_wash_related === true;
+  const infra = fmtOpt(data.infrastructure_detected);
+  const score = typeof data.visual_severity_score === 'number' ? Math.round(data.visual_severity_score) : undefined;
+  const notes = typeof data.technician_notes === 'string' ? data.technician_notes : undefined;
+  const next = typeof data.next_action === 'string' ? data.next_action : undefined;
+  const badge = unavailable ? (
+    <Badge tone="neutral">Vision indisponible</Badge>
+  ) : wash ? (
+    <Badge tone="success">Infrastructure WASH</Badge>
+  ) : (
+    <Badge tone="warn">Hors sujet WASH</Badge>
+  );
+  return (
+    <CardShell
+      title={title}
+      meta="Photo"
+      actions={badge}
+      listenText={speak(
+        'Analyse de la photo.',
+        infra !== undefined ? `Élément : ${infra}.` : undefined,
+        score !== undefined && !unavailable ? `Sévérité visuelle : ${score} sur 100.` : undefined,
+        notes,
+      )}
+    >
+      {infra !== undefined && (
+        <p className="text-sm">
+          <span className="text-stone-500 dark:text-stone-400">Élément détecté : </span>
+          <span className="font-medium">{infra}</span>
+        </p>
+      )}
+      {score !== undefined && !unavailable && (
+        <p className="mt-2 text-sm">
+          <span className="text-stone-500 dark:text-stone-400">Sévérité visuelle : </span>
+          <span className="font-medium">{score}/100</span>
+        </p>
+      )}
+      {notes !== undefined && <p className="mt-2 text-sm leading-relaxed">{notes}</p>}
+      {next !== undefined && (
+        <p className="mt-2 text-sm">
+          <span className="text-stone-500 dark:text-stone-400">Prochaine étape : </span>
+          {next}
+        </p>
+      )}
+    </CardShell>
+  );
+}
+
 function ActionConfirmationCard({
   title,
   data,
@@ -2496,6 +2545,8 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <DistrictCard title={card.title} data={data} onAsk={onAsk} />;
     case 'trend_chart':
       return <TrendCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'photo_analysis':
+      return <PhotoCard title={card.title} data={data} />;
     case 'report_confirmation':
       return <ConfirmationCard title={card.title} data={data} />;
     case 'action_confirmation':

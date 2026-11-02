@@ -15,7 +15,7 @@ import unittest
 import httpx
 from pydantic import ValidationError
 
-from app.agent_loop import PHOTO_ANALYSIS_CARD_TYPE, AgentLoop
+from app.agent_loop import AgentLoop
 from app.schemas import (
     CHAT_IMAGE_MAX_BYTES,
     AgentChatRequest,
@@ -144,7 +144,7 @@ class PhotoCardAndSummaryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(res.cards), 1)
         card = res.cards[0]
         self.assertEqual(card.type, "photo_analysis")
-        self.assertEqual(card.type, PHOTO_ANALYSIS_CARD_TYPE)
+        self.assertEqual(card.type, "photo_analysis")
         for key in ("infrastructure_detected", "visible_damage",
                     "visual_severity_score", "health_hazard_detected",
                     "technician_notes", "vision_unavailable"):

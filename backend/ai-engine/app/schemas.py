@@ -451,6 +451,7 @@ CardType = Literal[
     "offline_queue",
     "copilot_answer",
     # Codés en dur dans agent_loop._build_cards.
+    "photo_analysis",
     "incident_timeline",
     "incident_picker",
     "briefing_deck",

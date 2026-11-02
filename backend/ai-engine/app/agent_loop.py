@@ -945,12 +945,6 @@ def maybe_force_map_card(
     return cards
 
 
-#: Type de la carte d'analyse photo (rendu AgentCards.tsx géré en parallèle
-#: côté frontend ; le backend émet ce type via une constante pour garder le
-#: contrat de parité vert tant que le case frontend n'existe pas — voir
-#: tests/test_card_contracts.py — puis repasser au littéral + CardType).
-PHOTO_ANALYSIS_CARD_TYPE = "photo_analysis"
-
 #: Marqueur d'injection du résumé photo dans le message user (le LLM
 #: commente l'analyse, il ne devine rien).
 PHOTO_CONTEXT_PREFIX = (
@@ -1356,7 +1350,7 @@ class AgentLoop:
             else:
                 title = f"Analyse photo — {obs.get('infrastructure_detected', '?')}"
             cards.append(AgentCard(
-                type=PHOTO_ANALYSIS_CARD_TYPE,
+                type="photo_analysis",
                 title=title,
                 data=obs,
             ))
