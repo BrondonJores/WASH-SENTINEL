@@ -81,6 +81,11 @@ AGENT_RULES: tuple[str, ...] = (
     "N'annonce ni ne décris jamais les cartes — ni 'voici la carte', ni 'carte "
     "interactive' — elles s'affichent seules sous ta réponse (EN: never "
     "announce or describe cards or maps — they render on their own).",
+    "Si l'utilisateur demande une seule école, ne parle que de cette école : "
+    "aucun nom, incident ou chiffre d'une autre école (EN: one school asked "
+    "= talk only about that school).",
+    "N'invente aucune comparaison entre écoles que l'utilisateur n'a pas "
+    "demandée explicitement (EN: never invent unrequested comparisons).",
 )
 
 AGENT_OUTPUT_CONTRACT = (

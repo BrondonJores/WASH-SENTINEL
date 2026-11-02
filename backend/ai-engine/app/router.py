@@ -379,3 +379,77 @@ def is_data_question(
     if result["intent"] in ("list", "create"):
         return True
     return result["data_score"] >= DATA_MIN_SCORE
+
+
+# ---------------------------------------------------------------------------
+# Discipline de périmètre : signaux d'élargissement explicites (pur, sans LLM).
+# Une question sur UNE école reste cantonnée à cette école, sauf demande
+# explicite d'élargissement (comparaison, district, territoire...).
+# Utilisé par agent_loop.detect_scope ; tables de routage ci-dessus intactes.
+# ---------------------------------------------------------------------------
+
+#: Mot « district » explicite (singulier/pluriel) -> périmètre district.
+SCOPE_DISTRICT_WORDS = frozenset({"district", "districts"})
+
+#: Territoire / carte explicite -> périmètre territoire.
+SCOPE_TERRITORY_WORDS = frozenset({
+    "territoire", "territoires", "territory", "territories",
+    "carte", "cartes", "map", "maps",
+})
+
+#: Comparaison explicite entre écoles.
+SCOPE_COMPARE_WORDS = frozenset({
+    "compare", "comparer", "comparez", "comparons", "comparaison",
+    "comparaisons", "comparison", "comparisons", "vs", "versus",
+})
+
+#: Formules « toutes/autres écoles » (normalisées, cf. tokenize) -> district.
+SCOPE_ALL_SCHOOLS_PHRASES = (
+    "toutes les ecoles",
+    "toutes ecoles",
+    "autres ecoles",
+    "other schools",
+    "all schools",
+    "every school",
+    "chaque ecole",
+    "each school",
+)
+
+#: « Autre école » au singulier : n'élargit que combiné à une comparaison
+#: (« compare X à une autre école »), jamais seul (suivi vague).
+SCOPE_OTHER_SCHOOL_PHRASES = (
+    "autre ecole",
+    "other school",
+    "another school",
+)
+
+
+def detect_scope_signals(message: str) -> dict[str, Any]:
+    """Signaux d'élargissement de périmètre dans le message (fonction pure).
+
+    Aucun seuil : présence d'un indice explicite = signal. Les raisons
+    (mots/formules déclencheurs) sont jointes pour les logs et les tests.
+    """
+    tokens = tokenize(message or "")
+    joined = _joined(tokens)
+    hits = set(tokens)
+    district_words = sorted(hits & SCOPE_DISTRICT_WORDS)
+    territory_words = sorted(hits & SCOPE_TERRITORY_WORDS)
+    compare_words = sorted(hits & SCOPE_COMPARE_WORDS)
+    all_hit = [p for p in SCOPE_ALL_SCHOOLS_PHRASES if f" {p} " in joined]
+    other_hit = [p for p in SCOPE_OTHER_SCHOOL_PHRASES if f" {p} " in joined]
+    reasons = (
+        [f"district:{w}" for w in district_words]
+        + [f"territory:{w}" for w in territory_words]
+        + [f"compare:{w}" for w in compare_words]
+        + [f"all:{p}" for p in all_hit]
+        + [f"other:{p}" for p in other_hit]
+    )
+    return {
+        "district": bool(district_words),
+        "territory": bool(territory_words),
+        "compare": bool(compare_words),
+        "all_schools": bool(all_hit),
+        "other_school": bool(other_hit),
+        "reasons": reasons,
+    }

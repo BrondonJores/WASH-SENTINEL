@@ -38,7 +38,7 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
 from .providers import BaseLLMProvider
-from .router import is_data_question
+from .router import detect_scope_signals, is_data_question
 from .router import route as router_route
 from .schemas import (
     CHAT_IMAGE_DEFAULT_MIME,
@@ -110,12 +110,22 @@ def route_intent(question: str) -> Literal["list", "create", "other"]:
     return router_route(question or "", PLUGIN_HINTS)["intent"]
 
 
-def tools_for_intent(intent: str) -> list[dict[str, Any]]:
-    """Jeu d'outils exposé : en consultation, les prepare_* (création) sont masqués."""
+def tools_for_intent(intent: str, scope: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Jeu d'outils exposé : en consultation, les prepare_* (création) sont masqués.
+
+    Périmètre école unique : les outils district/territoire/comparaison sont
+    aussi masqués (le garde-fou d'exécution _blocked_by_scope reste premier).
+    scope=None (ou périmètre large) = comportement historique.
+    """
     if intent == "list":
-        return [t for t in AGENT_TOOLS
-                if not t.get("function", {}).get("name", "").startswith("prepare_")]
-    return list(AGENT_TOOLS)
+        tools = [t for t in AGENT_TOOLS
+                 if not t.get("function", {}).get("name", "").startswith("prepare_")]
+    else:
+        tools = list(AGENT_TOOLS)
+    if _single_school_scope(scope) is not None:
+        tools = [t for t in tools
+                 if t.get("function", {}).get("name", "") not in DISTRICT_SCOPE_TOOLS]
+    return tools
 
 
 def compact_tools(tools: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
@@ -186,6 +196,294 @@ def followup_hint(message: str, context: dict[str, Any]) -> str:
     kind_fr = "le district" if place[0] == "district" else "l'école"
     return (f"\n(Précision de suivi : {kind_fr} {place[1]}. "
             "Reprends ma demande précédente pour ce lieu.)")
+
+
+# ---------------------------------------------------------------------------
+# Discipline de périmètre : une école demandée = UNIQUEMENT cette école.
+# Quand detect_scope() restreint à une seule école (sans demande explicite
+# d'élargissement), la boucle : n'exécute aucun outil district/territoire,
+# n'émet que les cartes de cette école, et purge les phrases citant une
+# autre école connue. Périmètre district/territoire ou comparaison explicite
+# (plusieurs écoles nommées) : comportement historique inchangé.
+# ---------------------------------------------------------------------------
+
+#: Mots génériques (normalisés, cf. _norm) qui ne désignent aucune école en
+#: particulier : exclus de la multi-détection (« l'école Ngok » = Ngok seule).
+_GENERIC_PLACE_TOKENS = frozenset({
+    "ecole", "ecoles", "lycee", "lycees", "college", "colleges",
+})
+
+#: Outils couvrant d'autres écoles (district/territoire/comparaison globale) :
+#: jamais exécutés en périmètre école unique (sauf élargissement explicite,
+#: qui a déjà élargi le périmètre via detect_scope).
+DISTRICT_SCOPE_TOOLS = frozenset({
+    "summarize_district",
+    "district_alerts",
+    "epidemic_alerts",
+    "territory_overview",
+    "observatoire",
+    "rank_schools_by_need",
+    "build_briefing",
+    "relances_proactives",
+    "document_briefing",
+    "compare_schools",
+})
+
+
+def _mask_word(text: str, word: str) -> str:
+    """Masque un mot (entier, insensible à la casse) par un espace."""
+    return re.sub(r"(?i)\b\w*" + re.escape(word) + r"\w*\b", " ", text)
+
+
+def mentioned_places(message: str, context: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    """(écoles, districts) connus cités dans le message (fonction pure).
+
+    Même moteur que resolve_place (répété avec masquage des lieux déjà
+    trouvés) : pas de second parseur, même source known_places. Les mots
+    génériques (« école », « lycée »...) sont masqués d'abord car ils ne
+    désignent aucune école. Ordre de première mention, sans doublon.
+    """
+    ctx = context or {}
+    schools, districts = known_places(ctx)
+    if not message or (not schools and not districts):
+        return [], []
+    work = "".join(
+        c for c in unicodedata.normalize("NFKD", message).encode("ascii", "ignore").decode())
+    for generic in _GENERIC_PLACE_TOKENS:
+        work = _mask_word(work, generic)
+    found_schools: list[str] = []
+    found_districts: list[str] = []
+    for _ in range(len(schools) + len(districts) + 2):
+        place = resolve_place(work, ctx)
+        if place is None:
+            break
+        kind, label = place
+        if kind == "school":
+            if label not in found_schools:
+                found_schools.append(label)
+            for token in _norm(label).split():
+                if len(token) >= 4 and token not in _GENERIC_PLACE_TOKENS:
+                    work = _mask_word(work, token)
+        else:
+            if label not in found_districts:
+                found_districts.append(label)
+            work = _mask_word(work, _norm(label))
+            for token in _norm(label).split():
+                if len(token) >= 4:
+                    work = _mask_word(work, token)
+    lowered = _norm(message)
+
+    def _first_pos(label: str) -> int:
+        positions = [lowered.find(token) for token in _norm(label).split()
+                     if len(token) >= 4 and token not in _GENERIC_PLACE_TOKENS]
+        positions = [p for p in positions if p >= 0]
+        full = lowered.find(_norm(label))
+        if full >= 0:
+            positions.append(full)
+        return min(positions) if positions else len(lowered)
+
+    found_schools.sort(key=_first_pos)
+    found_districts.sort(key=_first_pos)
+    return found_schools, found_districts
+
+
+def detect_scope(message: str, context: dict[str, Any] | None) -> dict[str, Any]:
+    """Périmètre déterministe de la question (fonction pure).
+
+    Retourne {"scope": "school"|"district"|"territory", "school": ?nom,
+    "schools": [...], "district": ?nom}. Lieux via mentioned_places
+    (moteur resolve_place/known_places) ; élargissement via les signaux
+    explicites du routeur (compare, district, territoire, toutes/autres
+    écoles). « Compare X et Y » / « X vs Y » = scope "school" multi-écoles
+    explicite (liste, pas district). Sans école ni signal : "district"
+    (défaut large, comportement historique).
+    """
+    ctx = context or {}
+    signals = detect_scope_signals(message or "")
+    schools, districts = mentioned_places(message or "", ctx)
+    result = {
+        "school": schools[0] if schools else None,
+        "schools": list(schools),
+        "district": districts[0] if districts else None,
+    }
+    if signals["territory"]:
+        return {"scope": "territory", **result}
+    if (signals["district"] or districts or signals["all_schools"]
+            or (signals["compare"] and signals["other_school"])):
+        return {"scope": "district", **result}
+    if not schools:
+        return {"scope": "district", **result}
+    return {"scope": "school", **result}
+
+
+def _single_school_scope(scope: dict[str, Any] | None) -> str | None:
+    """Nom de l'école si périmètre restreint à une seule école, sinon None.
+
+    Multi-écoles explicite (comparaison), district, territoire, défaut large
+    ou scope absent : None (comportement historique inchangé).
+    """
+    if not scope or scope.get("scope") != "school":
+        return None
+    schools = scope.get("schools") or []
+    if len(schools) == 1:
+        return schools[0]
+    if not schools and scope.get("school"):
+        return scope["school"]
+    return None
+
+
+def _school_arg_matches(target: Any, school: str) -> bool:
+    """L'argument/observation école désigne-t-il l'école du périmètre ?
+
+    Fragments acceptés (« Ngok » = « École Rurale de Ngok »), mots génériques
+    (« école ») ignorés dans la comparaison par tokens. Fonction pure.
+    """
+    if not isinstance(target, str) or not target.strip() or not school:
+        return False
+    want, have = _norm(target), _norm(school)
+    if not want:
+        return False
+    if want in have or have in want:
+        return True
+    want_tokens = {t for t in want.split()
+                   if len(t) >= 4 and t not in _GENERIC_PLACE_TOKENS}
+    have_tokens = {t for t in have.split()
+                   if len(t) >= 4 and t not in _GENERIC_PLACE_TOKENS}
+    return bool(want_tokens & have_tokens)
+
+
+def _obs_school_matches(entry: Any, school: str,
+                        others: tuple[str, ...] | list[str] = ()) -> bool:
+    """L'entrée d'observation concerne-t-elle l'école du périmètre ?
+
+    Sans attribution école : conservée — on ne supprime que ce qui est
+    prouvé hors périmètre (champ école d'une autre école, ou chaîne citant
+    une autre école connue via `others`). Fonction pure.
+    """
+    if isinstance(entry, str):
+        if not entry.strip() or _school_arg_matches(entry, school):
+            return True
+        return not any(_school_arg_matches(entry, other) for other in others)
+    if not isinstance(entry, dict):
+        return True
+    value = entry.get("school_name") or entry.get("nom")
+    if not value:
+        return True
+    return _school_arg_matches(value, school)
+
+
+def _blocked_by_scope(name: str, arguments: dict[str, Any] | None,
+                      scope: dict[str, Any] | None) -> str | None:
+    """Motif de blocage si l'appel sort du périmètre école unique, sinon None.
+
+    Bloque les outils district/territoire/comparaison, les appels globaux des
+    outils mixtes (repair_trends sans école ou avec district, journal sans
+    école) et les appels visant une autre école. Fonction pure.
+    """
+    school = _single_school_scope(scope)
+    if school is None:
+        return None
+    args = arguments or {}
+    if name in DISTRICT_SCOPE_TOOLS:
+        return (
+            f"Hors périmètre : la question porte uniquement sur {school} ; "
+            f"l'outil {name} couvre d'autres écoles (district, territoire ou "
+            f"comparaison). N'appelle que des outils pour {school}."
+        )
+    if name in ("analyze_school", "repair_trends"):
+        if args.get("district"):
+            return (
+                f"Hors périmètre : la question porte uniquement sur {school} ; "
+                "ne demande aucune agrégation district. "
+                f"Précise school={school}."
+            )
+        target = args.get("school")
+        if name == "repair_trends" and not target:
+            return (
+                f"Hors périmètre : la question porte uniquement sur {school} ; "
+                f"précise school={school} au lieu d'une synthèse globale."
+            )
+        if target and not _school_arg_matches(target, school):
+            return (
+                f"Hors périmètre : la question porte uniquement sur {school} "
+                f"({target} est une autre école). "
+                f"N'appelle que des outils pour {school}."
+            )
+    if name == "list_maintenance_logs" and not args.get("school"):
+        return (
+            f"Hors périmètre : la question porte uniquement sur {school} ; "
+            f"précise school={school} au lieu du journal global."
+        )
+    return None
+
+
+def _no_tool_nudge(scope: dict[str, Any] | None) -> str:
+    """Recadrage no-tool : outils école seule en périmètre restreint."""
+    school = _single_school_scope(scope)
+    if school is None:
+        return NO_TOOL_NUDGE
+    return (
+        "Tu as répondu à une question de données sans appeler d'outil : "
+        f"appelle maintenant l'outil adapté pour l'école {school} "
+        "(analyze_school, repair_trends, explain_incident, "
+        "list_maintenance_logs). N'écris aucun texte, appelle juste l'outil."
+    )
+
+
+def _absence_nudge(scope: dict[str, Any] | None) -> str:
+    """Recadrage absence : outils école seule en périmètre restreint."""
+    school = _single_school_scope(scope)
+    if school is None:
+        return ABSENCE_CORRECTION_NUDGE
+    return (
+        "Tu viens d'affirmer une absence (aucun/aucune/rien/zéro) sans avoir "
+        "observé un outil de lecture : appelle maintenant l'outil adapté "
+        f"pour l'école {school} (list_maintenance_logs, repair_trends, "
+        "explain_incident ou analyze_school) puis réponds à partir de "
+        "son observation. N'écris aucun texte, appelle juste l'outil."
+    )
+
+
+#: Séparateur de phrases (ponctuation forte + sauts de ligne).
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+|\n+")
+
+
+def strip_other_school_mentions(answer: str, scope: dict[str, Any] | None,
+                                context: dict[str, Any] | None = None) -> str:
+    """Supprime les phrases citant une AUTRE école connue (fonction pure).
+
+    Périmètre école unique uniquement : toute phrase mentionnant un nom (ou
+    mot distinctif) d'une autre école du contexte est supprimée ; les phrases
+    génériques (sans nom d'école) et celles de l'école demandée sont gardées.
+    Hors périmètre restreint ou sans autre école connue : inchangé.
+    """
+    school = _single_school_scope(scope)
+    if school is None or not answer or not answer.strip():
+        return answer
+    schools, _ = known_places(context or {})
+    own = _norm(school)
+    own_tokens = set(own.split())
+    markers: list[str] = []
+    for other in schools:
+        other_norm = _norm(other)
+        if not other_norm or other_norm == own:
+            continue
+        if len(other_norm) >= 4 and other_norm not in own and own not in other_norm:
+            markers.append(other_norm)
+        for token in other_norm.split():
+            if (len(token) >= 4 and token not in _GENERIC_PLACE_TOKENS
+                    and token not in own_tokens and token not in own):
+                markers.append(token)
+    if not markers:
+        return answer
+    kept: list[str] = []
+    for part in _SENTENCE_SPLIT_RE.split(answer):
+        if not part.strip():
+            continue
+        if any(marker in _norm(part) for marker in markers):
+            continue
+        kept.append(part.strip())
+    return " ".join(kept)
 
 
 # Garde-fou abstention : outils de lecture dont l'observation autorise un constat.
@@ -362,15 +660,34 @@ def _resolve_lang(req: AgentChatRequest) -> Literal["fr", "en"]:
     return _detect_lang(req.message)
 
 
-def _build_system_prompt(lang: str) -> str:
-    """Prompt système + langue de réponse explicite transmise au provider (en tête : primauté)."""
+def _build_system_prompt(lang: str, scope: dict[str, Any] | None = None) -> str:
+    """Prompt système + langue de réponse explicite transmise au provider (en tête : primauté).
+
+    Périmètre école unique : consigne de périmètre ajoutée (défense en
+    profondeur, les garde-fous déterministes restant premiers).
+    """
     head = "REPLY ONLY IN ENGLISH. Never use French." if lang == "en" else "Réponds en français."
     today = datetime.now(timezone.utc).date().isoformat()
-    return (
+    text = (
         f"{head}\n{SYSTEM_PROMPT}\nLangue de réponse : {lang}.\n"
         f"Aujourd'hui : {today} (date du jour — utilise-la pour 'aujourd'hui' ; "
         "'hier' = la veille, 'cette semaine' = les 7 derniers jours)."
     )
+    school = _single_school_scope(scope)
+    if school is not None:
+        if lang == "en":
+            text += (
+                f"\nScope lock: the user asked about school {school} ONLY — "
+                "talk only about this school, never mention another school, "
+                "and never invent an unrequested comparison."
+            )
+        else:
+            text += (
+                f"\nPérimètre imposé : l'utilisateur demande l'école {school} "
+                "UNIQUEMENT — ne parle que de cette école, ne cite aucune "
+                "autre école, et n'invente aucune comparaison non demandée."
+            )
+    return text
 
 
 def _fmt_int(value: Any) -> str:
@@ -623,10 +940,22 @@ URGENCY_CHIPS = ["Basse", "Moyenne", "Haute", "Critique"]
 
 
 def _follow_ups(message: str, executed: list[tuple[str, dict[str, Any]]],
-                context: dict[str, Any]) -> list[str]:
-    """Relances cliquables : démarrage, ou réponses rapides au premier slot manquant."""
+                context: dict[str, Any],
+                scope: dict[str, Any] | None = None) -> list[str]:
+    """Relances cliquables : démarrage, ou réponses rapides au premier slot manquant.
+
+    Périmètre école unique : relances cantonnées à cette école (ni district,
+    ni territoire, ni autres écoles). scope=None = comportement historique.
+    """
+    school = _single_school_scope(scope)
     if not executed:
-        return list(STARTER_CHIPS) if _STARTER_RE.search(message or "") else []
+        if not _STARTER_RE.search(message or ""):
+            return []
+        if school is not None:
+            return [f"Tendances de {school} ?",
+                    f"Faut-il réparer à {school} ?",
+                    f"Urgences à {school} ?"]
+        return list(STARTER_CHIPS)
     name, obs = executed[-1]
     if name not in ("prepare_report", "prepare_incident", "prepare_maintenance_log"):
         return []
@@ -639,6 +968,8 @@ def _follow_ups(message: str, executed: list[tuple[str, dict[str, Any]]],
     if first == "urgency":
         return list(URGENCY_CHIPS)
     if first == "school":
+        if school is not None:
+            return [school]
         names = [s.get("school_name") for s in context.get("schools", [])[:3]]
         return [n for n in names if n]
     return []
@@ -935,13 +1266,17 @@ def maybe_force_map_card(
     executed: list[tuple[str, dict[str, Any]]] | None,
     cards: list[AgentCard] | None,
     context: dict[str, Any] | None = None,
+    scope: dict[str, Any] | None = None,
 ) -> list[AgentCard]:
     """Force la carte si le texte l'annonce sans qu'elle soit construite.
 
     Seulement quand des écoles avec lat/lng existent (observations, puis
     contexte). N'ajoute jamais de doublon. Fonction pure (nouvelle liste).
+    Périmètre école unique : jamais de carte territoire imposée.
     """
     cards = list(cards or [])
+    if _single_school_scope(scope) is not None:
+        return cards
     if not announces_map(answer):
         return cards
     if any("map" in (card.type or "") for card in cards):
@@ -1039,9 +1374,10 @@ class AgentLoop:
         else:
             photo_mime = CHAT_IMAGE_DEFAULT_MIME
         lang = _resolve_lang(req)
+        scope_info = detect_scope(req.message, context)
         intent = route_intent(req.message)
-        active_tools = compact_tools(tools_for_intent(intent), self.llm.model)
-        messages: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(lang)}]
+        active_tools = compact_tools(tools_for_intent(intent, scope_info), self.llm.model)
+        messages: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(lang, scope_info)}]
         messages.extend(_scoped_history(req.history))
         user_content = req.message
         if req.history and intent == "other":
@@ -1081,6 +1417,11 @@ class AgentLoop:
                 name = call.get("name", "")
                 arguments = call.get("arguments", {}) or {}
                 key = (name, json.dumps(arguments, sort_keys=True, default=str))
+                blocked = _blocked_by_scope(name, arguments, scope_info)
+                if blocked is not None:
+                    seen.add(key)
+                    messages.append(self.llm.format_tool_result(name, {"note": blocked}, call.get("id")))
+                    continue
                 if key in seen:
                     messages.append(self.llm.format_tool_result(name, {"note": REPEAT_NUDGE}, call.get("id")))
                     continue
@@ -1094,23 +1435,25 @@ class AgentLoop:
                     break
                 nudged = True
         else:
-            answer = self._fallback_answer(executed, context, photo)
+            answer = self._fallback_answer(executed, context, photo, scope=scope_info)
 
         over_budget = time.monotonic() - started > RUN_BUDGET_S
         if (not executed and answer.strip()
                 and self._looks_like_data_question(req.message)
                 and not over_budget):
             answer = await self._force_tool_pass(
-                messages, context, executed, active_tools, budget, photo=photo)
+                messages, context, executed, active_tools, budget, photo=photo,
+                scope=scope_info)
 
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            answer = self._fallback_answer(executed, context, photo)
+            answer = self._fallback_answer(executed, context, photo, scope=scope_info)
 
         if answer.strip() and _claims_absence(answer) and not _has_read_tool(executed):
             if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
                     messages, context, executed, seen, active_tools, budget,
-                    photo=photo)
+                    nudge=_absence_nudge(scope_info), photo=photo,
+                    scope=scope_info)
             else:
                 answer = UNVERIFIED_HONEST_ANSWER
 
@@ -1119,17 +1462,22 @@ class AgentLoop:
             if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
                     messages, context, executed, seen, active_tools, budget,
-                    nudge=CONTRADICTION_CORRECTION_NUDGE, photo=photo)
+                    nudge=CONTRADICTION_CORRECTION_NUDGE, photo=photo,
+                    scope=scope_info)
             else:
-                answer = self._fallback_answer(executed, context, photo)
+                answer = self._fallback_answer(executed, context, photo, scope=scope_info)
 
         # Réparation déterministe AVANT envoi : puces vides remplies depuis
         # les observations, placeholders [...] supprimés (fonctions pures).
         answer = repair_final_answer(answer, executed)
-        cards = self._build_cards(executed, context, photo=photo)
+        # Discipline de périmètre : purge des phrases citant une autre école.
+        answer = strip_other_school_mentions(answer, scope_info, context)
+        if not answer.strip():
+            answer = self._fallback_answer(executed, context, photo, scope=scope_info)
+        cards = self._build_cards(executed, context, photo=photo, scope=scope_info)
         # Annonce-carte sans carte construite : force la carte si des écoles
         # avec lat/lng existent (petit LLM : CAS "voici la carte..." seul).
-        cards = maybe_force_map_card(answer, executed, cards, context)
+        cards = maybe_force_map_card(answer, executed, cards, context, scope=scope_info)
         if not cards:
             # Aucune carte (échec ou lieu inconnu) : suggestions cliquables.
             suggest = suggest_places(req.message, context)
@@ -1145,7 +1493,7 @@ class AgentLoop:
             tools_executed=[name for name, _ in executed],
             cards=cards,
             model_used=self.llm.model,
-            follow_ups=_follow_ups(req.message, executed, context),
+            follow_ups=_follow_ups(req.message, executed, context, scope_info),
         )
 
     def _execute_tool(self, name: str, arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -1197,37 +1545,43 @@ class AgentLoop:
         tools: list[dict[str, Any]] | None = None,
         budget: dict[str, int] | None = None,
         photo: ImageAnalysisResponse | None = None,
+        scope: dict[str, Any] | None = None,
     ) -> str:
         """Dernier recadrage : réponse directe à une question de données.
 
         On exige un appel d'outil immédiat. S'il obéit, on le laisse conclure
         sur les observations ; sinon, réponse honnête (jamais d'invention).
         Chaque appel LLM consomme le budget partagé (MAX_LLM_CALLS).
+        Périmètre école unique : recadrage et exécutions cantonnés à l'école.
         """
         tools = AGENT_TOOLS if tools is None else tools
         budget = {"llm_calls": 0} if budget is None else budget
         if budget["llm_calls"] >= MAX_LLM_CALLS:
-            return self._fallback_answer(executed, context, photo)
-        messages.append({"role": "user", "content": NO_TOOL_NUDGE})
+            return self._fallback_answer(executed, context, photo, scope=scope)
+        messages.append({"role": "user", "content": _no_tool_nudge(scope)})
         budget["llm_calls"] += 1
         retry = await self.llm.chat(messages, tools)
         messages.append(retry["raw"])
         for call in retry.get("tool_calls", []):
             name = call.get("name", "")
             arguments = call.get("arguments", {}) or {}
+            blocked = _blocked_by_scope(name, arguments, scope)
+            if blocked is not None:
+                messages.append(self.llm.format_tool_result(name, {"note": blocked}, call.get("id")))
+                continue
             observation = self._execute_tool(name, arguments, context)
             executed.append((name, observation))
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not executed:
-            return self._fallback_answer(executed, context, photo)
+            return self._fallback_answer(executed, context, photo, scope=scope)
         if budget["llm_calls"] >= MAX_LLM_CALLS:
-            return self._fallback_answer(executed, context, photo)
+            return self._fallback_answer(executed, context, photo, scope=scope)
         budget["llm_calls"] += 1
         final = await self.llm.chat(messages, tools)
         messages.append(final["raw"])
         answer = final.get("content", "")
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            return self._fallback_answer(executed, context, photo)
+            return self._fallback_answer(executed, context, photo, scope=scope)
         return answer
 
     async def _absence_correction_pass(
@@ -1240,6 +1594,7 @@ class AgentLoop:
         budget: dict[str, int] | None = None,
         nudge: str = ABSENCE_CORRECTION_NUDGE,
         photo: ImageAnalysisResponse | None = None,
+        scope: dict[str, Any] | None = None,
     ) -> str:
         """Recadrage anti-hallucination : absence affirmée sans lecture
         (ou contradiction référence + absence, via un nudge adapté).
@@ -1248,10 +1603,11 @@ class AgentLoop:
         outil de lecture puis on conclut ; si le modèle persiste sans observer,
         réponse honnête (jamais d'invention).
         Chaque appel LLM consomme le budget partagé (MAX_LLM_CALLS).
+        Périmètre école unique : exécutions cantonnées à l'école.
         """
         budget = {"llm_calls": 0} if budget is None else budget
         if budget["llm_calls"] >= MAX_LLM_CALLS:
-            return self._fallback_answer(executed, context, photo)
+            return self._fallback_answer(executed, context, photo, scope=scope)
         messages.append({"role": "user", "content": nudge})
         budget["llm_calls"] += 1
         retry = await self.llm.chat(messages, tools)
@@ -1260,6 +1616,12 @@ class AgentLoop:
             name = call.get("name", "")
             arguments = call.get("arguments", {}) or {}
             key = (name, json.dumps(arguments, sort_keys=True, default=str))
+            blocked = _blocked_by_scope(name, arguments, scope)
+            if blocked is not None:
+                seen.add(key)
+                messages.append(self.llm.format_tool_result(
+                    name, {"note": blocked}, call.get("id")))
+                continue
             if key in seen:
                 messages.append(self.llm.format_tool_result(
                     name, {"note": REPEAT_NUDGE}, call.get("id")))
@@ -1271,13 +1633,13 @@ class AgentLoop:
         if not _has_read_tool(executed):
             return UNVERIFIED_HONEST_ANSWER
         if budget["llm_calls"] >= MAX_LLM_CALLS:
-            return self._fallback_answer(executed, context, photo)
+            return self._fallback_answer(executed, context, photo, scope=scope)
         budget["llm_calls"] += 1
         final = await self.llm.chat(messages, tools)
         messages.append(final["raw"])
         answer = final.get("content", "")
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            return self._fallback_answer(executed, context, photo)
+            return self._fallback_answer(executed, context, photo, scope=scope)
         return answer
 
     def _is_bogus_refusal(self, answer: str, executed: list[tuple[str, dict[str, Any]]]) -> bool:
@@ -1296,6 +1658,7 @@ class AgentLoop:
         executed: list[tuple[str, dict[str, Any]]],
         context: dict[str, Any] | None = None,
         photo: ImageAnalysisResponse | None = None,
+        scope: dict[str, Any] | None = None,
     ) -> str:
         """Résumé humain déterministe quand le modèle ne conclut pas.
 
@@ -1303,16 +1666,28 @@ class AgentLoop:
         chiffrée qui pointe vers la carte (pas de jargon robotique).
         Sans observation d'outil mais avec photo : le résumé photo
         déterministe (le LLM commente, ne devine pas — y compris ici).
+        Périmètre école unique : relances cantonnées à cette école (ni
+        district, ni territoire) + purge des mentions d'autres écoles.
         """
+        school = _single_school_scope(scope)
         for name, observation in reversed(executed):
             if "error" in observation:
                 continue
             summarizer = FALLBACK_SUMMARIES.get(name)
             if summarizer:
                 try:
-                    return summarizer(observation)
+                    text = summarizer(observation)
                 except (TypeError, ValueError, KeyError, IndexError, AttributeError):
                     continue
+                return self._scoped_fallback_text(text, school, scope, context)
+            if school is not None:
+                return (
+                    f"Bonne nouvelle, j'ai trouvé vos données pour {school} : "
+                    "le détail est dans la carte juste en dessous. Pour aller "
+                    "plus loin, demandez par exemple : "
+                    f"« Tendances de {school} ? » ou "
+                    f"« Faut-il réparer à {school} ? »."
+                )
             return (
                 "Bonne nouvelle, j'ai trouvé vos données : le détail (chiffres "
                 "clés, écoles et incidents concernés) est dans la carte juste "
@@ -1323,9 +1698,17 @@ class AgentLoop:
                 "territoire »."
             )
         if photo is not None:
-            return (
+            text = (
                 f"{summarize_photo_analysis(photo)} "
                 "Le détail est dans la carte ci-dessous."
+            )
+            return self._scoped_fallback_text(text, school, scope, context)
+        if school is not None:
+            return (
+                f"Je n'ai pas pu récupérer de données pour {school}. "
+                "Précisez ce que vous voulez savoir — par exemple : "
+                f"« Tendances de {school} ? » ou "
+                f"« Faut-il réparer à {school} ? »."
             )
         districts = known_places(context or {})[1] if context else []
         if districts:
@@ -1346,10 +1729,43 @@ class AgentLoop:
             "ou « Montrez la carte du territoire », et je m'en occupe avec plaisir."
         )
 
+    @staticmethod
+    def _scoped_fallback_text(text: str, school: str | None,
+                              scope: dict[str, Any] | None,
+                              context: dict[str, Any] | None) -> str:
+        """Purge les mentions d'autres écoles, avec repli école honnête."""
+        if school is None:
+            return text
+        scrubbed = strip_other_school_mentions(text, scope, context)
+        if scrubbed.strip():
+            return scrubbed
+        return (
+            f"Je n'ai pas de détail supplémentaire pour {school}. "
+            f"Demandez par exemple : « Tendances de {school} ? » ou "
+            f"« Faut-il réparer à {school} ? »."
+        )
+
     def _build_cards(self, executed: list[tuple[str, dict[str, Any]]],
                      context: dict[str, Any] | None = None,
                      photo: ImageAnalysisResponse | dict[str, Any] | None = None,
+                     scope: dict[str, Any] | None = None,
                      ) -> list[AgentCard]:
+        """Cartes UI depuis les observations (périmètre école unique filtré).
+
+        En périmètre école unique : seules les cartes de cette école sont
+        émises (analyse, tendances, calendrier, détail/picker de SES incidents,
+        journal filtré, guidage cantonné) ; les cartes district/territoire/
+        comparaison globale sont supprimées. scope=None = historique.
+        """
+        school = _single_school_scope(scope)
+        other_schools: list[str] = []
+        if school is not None:
+            try:
+                known, _ = known_places(context or {})
+            except (AttributeError, TypeError, ValueError):
+                known = []
+            own = _norm(school)
+            other_schools = [s for s in known if _norm(s) != own]
         cards: list[AgentCard] = []
         if photo is not None:
             obs = photo.model_dump() if hasattr(photo, "model_dump") else dict(photo)
@@ -1373,11 +1789,16 @@ class AgentLoop:
         for name, observation in executed:
             if "error" in observation:
                 guide = build_guidance_card(
-                    name, observation, district_examples=district_examples)
+                    name, observation, district_examples=district_examples,
+                    scope_school=school)
                 if guide is not None:
                     cards.append(guide)
                 continue
+            if school is not None and name in DISTRICT_SCOPE_TOOLS:
+                continue
             if name == "analyze_school":
+                if school is not None and not _obs_school_matches(observation, school, other_schools):
+                    continue
                 cards.append(AgentCard(
                     type="school_analysis",
                     title=f"Analyse — {observation.get('school_name', '?')}",
@@ -1396,6 +1817,8 @@ class AgentLoop:
                     data=observation,
                 ))
             elif name == "explain_incident":
+                if school is not None and not _obs_school_matches(observation, school, other_schools):
+                    continue
                 cards.append(AgentCard(
                     type="incident_detail",
                     title=f"Incident {observation.get('reference_code') or observation.get('id', '?')}",
@@ -1412,10 +1835,16 @@ class AgentLoop:
                     ))
             elif name in ("prepare_report", "prepare_incident", "prepare_maintenance_log"):
                 if observation.get("candidates"):
+                    candidates = observation["candidates"]
+                    if school is not None:
+                        candidates = [c for c in candidates
+                                      if _obs_school_matches(c, school, other_schools)]
+                        if not candidates:
+                            continue
                     cards.append(AgentCard(
                         type="incident_picker",
                         title="Quel incident ?",
-                        data={"candidates": observation["candidates"],
+                        data={"candidates": candidates,
                               "hint": observation.get("hint_unmatched"),
                               "action": observation.get("action")},
                     ))
@@ -1445,6 +1874,8 @@ class AgentLoop:
                     data=observation,
                 ))
             elif name == "repair_trends":
+                if school is not None and not _obs_school_matches(observation, school, other_schools):
+                    continue
                 cards.append(AgentCard(
                     type="trend_chart",
                     title=f"Tendances — {observation.get('school_name', '?')} ({observation.get('months', 3)} mois)",
@@ -1456,17 +1887,30 @@ class AgentLoop:
                         title=f"Calendrier des pannes — {observation.get('school_name', '?')}",
                         data=observation["calendar_heatmap"],
                     ))
-                if observation.get("budget_compare"):
+                if observation.get("budget_compare") and school is None:
                     cards.append(AgentCard(
                         type="budget_compare",
                         title="Comparaison des budgets réparations",
                         data=observation["budget_compare"],
                     ))
             elif name == "list_maintenance_logs":
+                data = observation
+                if school is not None:
+                    items = [i for i in (observation.get("items") or [])
+                             if _obs_school_matches(i, school, other_schools)]
+                    removed = len(observation.get("items") or []) - len(items)
+                    if removed and not items:
+                        continue
+                    if removed:
+                        try:
+                            total = max(0, int(observation.get("total", len(items)) or 0) - removed)
+                        except (TypeError, ValueError):
+                            total = len(items)
+                        data = {**observation, "items": items, "total": total}
                 cards.append(AgentCard(
                     type="maintenance_logs",
                     title=f"Interventions journalisées — {observation.get('date', '?')}",
-                    data=observation,
+                    data=data,
                 ))
             elif name in PLUGIN_CARDS:
                 for builder in PLUGIN_CARDS[name].values():

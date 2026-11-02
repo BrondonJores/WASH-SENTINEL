@@ -212,8 +212,19 @@ def _apply_tool_hints(tool_name: str, family: str, error_text: str,
     return title, explication, actions
 
 
+def _school_scoped_actions(school: str) -> list[dict[str, str]]:
+    """Actions cliquables restreintes à UNE école (discipline de périmètre)."""
+    return [
+        {"label": f"Tendances de {school}",
+         "question": f"Tendances de {school} ?"},
+        {"label": f"Urgences à {school}",
+         "question": f"Y a-t-il des urgences à {school} ?"},
+    ]
+
+
 def build_guidance_card(tool_name: str, observation: dict,
-                        district_examples: str | None = None) -> AgentCard | None:
+                        district_examples: str | None = None,
+                        scope_school: str | None = None) -> AgentCard | None:
     """Construit une carte de guidage depuis une observation en erreur.
 
     Retourne None si l'observation ne contient pas d'erreur.
@@ -221,6 +232,8 @@ def build_guidance_card(tool_name: str, observation: dict,
     (jamais de vide).
     `district_examples` : noms fournis par l'appelant (contexte reel) ;
     à défaut, repli historique DISTRICT_EXAMPLES.
+    `scope_school` : périmètre école unique — les actions restent sur cette
+    école (ni districts, ni autres écoles) ; None = comportement historique.
     """
     try:
         if not isinstance(observation, dict):
@@ -237,9 +250,14 @@ def build_guidance_card(tool_name: str, observation: dict,
         explication = str(template["explication"])
         causes = [str(c) for c in template["causes"]]
         actions = [dict(a) for a in template["actions"]]
-        title, explication, actions = _apply_tool_hints(
-            name, family, error_text, title, explication, actions,
-            district_examples=district_examples)
+        if scope_school:
+            # Périmètre école : actions cantonnées à l'école, sans enrichissement
+            # district (ni exemples de districts, ni renvois larges).
+            actions = _school_scoped_actions(str(scope_school))
+        else:
+            title, explication, actions = _apply_tool_hints(
+                name, family, error_text, title, explication, actions,
+                district_examples=district_examples)
         return AgentCard(
             type="guidance",
             title=title,
