@@ -62,6 +62,9 @@ docker compose exec -T -u www-data laravel php artisan storage:link >/dev/null 2
 docker compose exec -T -u www-data laravel php artisan migrate --force
 docker compose exec -T -u www-data laravel php artisan db:seed --force
 
+say "Redémarrage du worker de file (queue:work garde l'ancien PHP en mémoire)"
+docker compose restart queue
+
 say "Attente d'Ollama"
 for _ in $(seq 1 60); do
   docker compose exec -T ollama ollama list >/dev/null 2>&1 && break

@@ -1509,6 +1509,13 @@ class WashWhatsAppService
             return $empty;
         }
         $detected = $result['language_detected'] ?? null;
+        // Observabilité : quel moteur STT a transcrit (utile au débogage :
+        // vérifier que le profil cloud actif est bien honoré).
+        Log::info('WhatsApp STT transcribed', [
+            'driver' => $result['driver'] ?? null,
+            'detected' => $detected,
+            'cloud_error' => $result['detection']['cloud_error'] ?? null,
+        ]);
 
         return [
             'transcript' => $transcript === '' ? null : $transcript,

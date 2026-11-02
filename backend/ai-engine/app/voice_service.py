@@ -442,11 +442,16 @@ class VoiceService:
         Profil cloud actif (Meta...) : honoré D'ABORD (l'admin l'a choisi
         pour sa qualité), avec repli locaux si le cloud échoue ou rend vide.
         """
+        cloud_error: str | None = None
         if isinstance(provider, CloudWhisperProvider):
             try:
                 cloud_res = provider.transcribe(audio_bytes, filename, language)
-            except Exception:
+            except Exception as exc:
                 cloud_res = None
+                # Erreur cloud exposée (tronquée, sans secret : jamais de
+                # header/clé dans les messages httpx) pour que l'admin VOIE
+                # pourquoi le repli local a pris le relais (clé absente...).
+                cloud_error = f"{type(exc).__name__}: {str(exc)[:150]}"
             cloud_text = ((cloud_res or {}).get("transcript") or "").strip()
             if cloud_text:
                 cloud_detected = (cloud_res or {}).get("detected_language") or language
@@ -458,6 +463,8 @@ class VoiceService:
                     {"mode": "cascade", "reason": "cloud-first",
                      "cloud_detected": cloud_detected},
                 )
+            if cloud_error is None:
+                cloud_error = "empty-transcript"
         whisper_res: dict[str, Any] | None = None
         local_res: dict[str, Any] | None = None
         whisper = _local_whisper_provider()
@@ -481,6 +488,8 @@ class VoiceService:
             "whisper_detected": (whisper_res or {}).get("detected_language"),
             "whisper_prob": (whisper_res or {}).get("detection_prob"),
         }
+        if cloud_error is not None:
+            detail["cloud_error"] = cloud_error
         if decision is not None:
             detail["reason"] = decision["reason"]
             return (decision["transcript"], decision["language_detected"],
@@ -493,7 +502,8 @@ class VoiceService:
         return ((result.get("transcript", "") or "").strip(), language,
                 provider.driver_name,
                 result.get("language_effective") or language,
-                {"mode": "fallback-direct"})
+                {"mode": "fallback-direct",
+                 **({"cloud_error": cloud_error} if cloud_error else {})})
 
     def _resolve_voice_model(self, voice: str, *, explicit: bool = False) -> str:
         """Voix demandée -> fichier .onnx du même dossier (nom strict, anti path-traversal).

@@ -173,6 +173,9 @@ class MetaWiringTest(unittest.TestCase):
             res = _transcribe(cloud, "dua_Latn")
         self.assertEqual(res.transcript, "transcript local")
         self.assertNotEqual(res.detection.get("reason"), "cloud-first")
+        # L'erreur cloud est exposée (tronquée) pour le débogage admin.
+        self.assertIn("RuntimeError", res.detection.get("cloud_error", ""))
+        self.assertIn("réseau coupé", res.detection.get("cloud_error", ""))
 
 
 if __name__ == "__main__":

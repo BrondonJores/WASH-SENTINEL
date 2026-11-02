@@ -10,6 +10,7 @@ use App\Services\WashWhatsAppService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Notification;
 use Tests\Support\FakeWhatsAppService;
 use Tests\TestCase;
@@ -219,6 +220,29 @@ class WashWhatsAppLangChoiceTest extends TestCase
         $this->assertSame('en', $this->rememberedLang());
         $texts = $this->sentTexts();
         $this->assertStringContainsString('Thanks! Case', $texts[0]['message']);
+    }
+
+    public function test_voice_transcription_logs_stt_driver(): void
+    {
+        Log::spy();
+        config(['filesystems.disks.public.root' => sys_get_temp_dir().'/wash-test-public']);
+        $this->seedContact();
+        Http::fake([
+            '*/v1/wash/triage' => $this->triageResponse(),
+            '*/v1/voice/transcribe' => Http::response([
+                'transcript' => 'fuite robinet',
+                'language_detected' => 'fr',
+                'driver' => 'meta_transcribe',
+                'detection' => ['mode' => 'direct'],
+            ], 200),
+            '*/v1/voice/synthesize' => $this->synthesizeResponse(),
+        ]);
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->audioPayload('wamid.LANGC70'))->assertOk();
+
+        Log::shouldHaveReceived('info')->with('WhatsApp STT transcribed', \Mockery::on(
+            fn ($ctx) => ($ctx['driver'] ?? null) === 'meta_transcribe'
+        ))->once();
     }
 
     public function test_voice_detected_bbj_keeps_default_flow(): void
