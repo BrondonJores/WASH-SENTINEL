@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -93,6 +94,23 @@ VISION_MODEL_ENV_VAR = "OLLAMA_VISION_MODEL"
 #: Grosses machines : OLLAMA_VISION_MODEL=llama3.2-vision:11b (défaut hist.).
 DEFAULT_VISION_MODEL = "moondream"
 
+#: Modèle de génération d'image par défaut (API Meta, présumé format OpenAI).
+#: Override ENV : OPENAI_IMAGE_MODEL (l'usager validera en live avec sa clé).
+DEFAULT_IMAGE_MODEL = "muse-image-1.0"
+#: Nom de la variable du modèle d'image.
+IMAGE_MODEL_ENV_VAR = "OPENAI_IMAGE_MODEL"
+#: Chemin relatif de génération d'images (POST {base}/images/generations).
+#: Override ENV : OPENAI_IMAGE_GENERATIONS_PATH (lu à chaque appel).
+IMAGE_GENERATIONS_PATH_DEFAULT = "images/generations"
+#: Nom de la variable du chemin de génération d'images.
+IMAGE_GENERATIONS_PATH_ENV_VAR = "OPENAI_IMAGE_GENERATIONS_PATH"
+#: Timeout de génération d'image (s) : les modèles diffusion sont lents.
+IMAGE_GENERATION_TIMEOUT_SECONDS = 120.0
+
+
+class NotSupportedError(RuntimeError):
+    """Capacité absente du provider (ex. génération d'image en local)."""
+
 
 class _OldEmbedApiError(Exception):
     """Signal interne : endpoint batch natif absent (404 = vieux serveur)."""
@@ -114,6 +132,18 @@ def _warmup_timeout_seconds() -> float:
         return float(os.getenv("LLM_WARMUP_TIMEOUT", str(WARMUP_TIMEOUT_SECONDS_DEFAULT)))
     except ValueError:
         return WARMUP_TIMEOUT_SECONDS_DEFAULT
+
+
+def _image_generations_path() -> str:
+    """Chemin images/generations : défaut OpenAI, configurable via ENV (lu à chaque appel)."""
+    raw = (os.getenv(IMAGE_GENERATIONS_PATH_ENV_VAR, IMAGE_GENERATIONS_PATH_DEFAULT) or "").strip().strip("/")
+    return raw or IMAGE_GENERATIONS_PATH_DEFAULT
+
+
+def _image_model() -> str:
+    """Modèle d'image : ENV dédiée, sinon défaut Meta (lu à chaque appel)."""
+    raw = (os.getenv(IMAGE_MODEL_ENV_VAR, "") or "").strip()
+    return raw or DEFAULT_IMAGE_MODEL
 
 
 def parse_json_response(raw: str) -> dict[str, Any]:
@@ -447,6 +477,13 @@ class BaseLLMProvider:
     async def generate_vision_json(self, prompt: str, image_base64: str, system: str = "") -> dict[str, Any]:
         raise NotImplementedError
 
+    async def generate_image(self, prompt: str, size: str = "1024x1024") -> bytes:
+        """Génère une image -> octets bruts. Défaut : non supporté (drivers cloud uniquement)."""
+        raise NotSupportedError(
+            f"{self.provider_name} ne génère pas d'images : génération d'image cloud uniquement "
+            "(profil 'openai_compatible' + clé API)."
+        )
+
     async def get_embedding(self, text: str) -> list[float]:
         raise NotImplementedError
 
@@ -645,6 +682,13 @@ class OllamaProvider(BaseLLMProvider):
                 f"Modèle vision '{self.vision_model}' : réponse non-JSON ({exc}). "
                 "Réessayez ou changez de modèle vision."
             ) from exc
+
+    async def generate_image(self, prompt: str, size: str = "1024x1024") -> bytes:
+        """Ollama ne génère pas d'images : refus propre, jamais de crash obscur."""
+        raise NotSupportedError(
+            "Ollama ne génère pas d'images : génération d'image cloud uniquement "
+            "(basculez sur un profil 'openai_compatible' avec clé API)."
+        )
 
     async def get_embedding(self, text: str) -> list[float]:
         """Embeddings Ollama : batch natif, sinon unitaires ; lève en FR sinon.
@@ -950,6 +994,97 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                 f"Modèle vision '{self.vision_model}' : réponse inattendue ({type(exc).__name__}). "
                 "Réessayez ou vérifiez le modèle vision."
             ) from exc
+
+    async def generate_image(self, prompt: str, size: str = "1024x1024") -> bytes:
+        """Génère une image (format OpenAI POST {base}/images/generations) -> octets bruts.
+
+        Payload {"model", "prompt", "size"} ; modèle via OPENAI_IMAGE_MODEL
+        (défaut muse-image-1.0), chemin via OPENAI_IMAGE_GENERATIONS_PATH.
+        Réponse b64_json décodée directement, réponse url téléchargée
+        (data-URL sans réseau, http(s) via GET). Timeout 120 s, erreurs FR.
+        """
+        if not (prompt or "").strip():
+            raise ValueError("generate_image : prompt vide, image impossible.")
+        model = _image_model()
+        url = f"{self.base_url}/{_image_generations_path()}"
+        response = await self._post_with_retry(
+            url,
+            {"model": model, "prompt": prompt.strip(),
+             "size": (size or "").strip() or "1024x1024"},
+            headers=self._headers(),
+            timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
+        )
+        if response.status_code in (401, 403):
+            raise RuntimeError(
+                f"Génération d'image refusée ({response.status_code}) : clé API "
+                "invalide ou sans droit image. Vérifiez la clé, puis réessayez."
+            )
+        if response.status_code == 404:
+            raise RuntimeError(
+                f"Génération d'image introuvable (404 sur {url}) : chemin ou "
+                f"modèle '{model}' inconnu. Vérifiez "
+                f"{IMAGE_GENERATIONS_PATH_ENV_VAR} et {IMAGE_MODEL_ENV_VAR}, "
+                "puis réessayez."
+            )
+        if response.is_error:
+            body = " ".join(response.text.split())[:300]
+            raise RuntimeError(
+                f"Génération d'image échouée (HTTP {response.status_code}) : "
+                f"{body or 'sans détail'}. Vérifiez le prompt, le modèle, "
+                "le quota, puis réessayez."
+            )
+        try:
+            items = response.json().get("data") or []
+            first = items[0] if items else {}
+        except (ValueError, AttributeError, IndexError, TypeError) as exc:
+            raise RuntimeError(
+                "Génération d'image : réponse inattendue (JSON sans 'data'). "
+                "Vérifiez le fournisseur, puis réessayez."
+            ) from exc
+        if not isinstance(first, dict):
+            raise RuntimeError(
+                "Génération d'image : réponse inattendue ('data[0]' illisible). "
+                "Vérifiez le fournisseur, puis réessayez."
+            )
+        if first.get("b64_json"):
+            try:
+                return base64.b64decode(first["b64_json"], validate=True)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Génération d'image : 'b64_json' illisible (base64 invalide). "
+                    "Réessayez."
+                ) from exc
+        remote = str(first.get("url") or "").strip()
+        if remote.startswith("data:") and ";base64," in remote:
+            try:
+                return base64.b64decode(remote.split(";base64,", 1)[1], validate=True)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Génération d'image : data-URL illisible (base64 invalide). "
+                    "Réessayez."
+                ) from exc
+        if remote.startswith(("http://", "https://")):
+            try:
+                async with self._async_client(
+                    timeout=IMAGE_GENERATION_TIMEOUT_SECONDS
+                ) as client:
+                    download = await client.get(remote)
+            except Exception as exc:  # noqa: BLE001 - traduite en FR explicite
+                raise RuntimeError(
+                    f"Téléchargement de l'image impossible "
+                    f"({remote[:80]}...) : {type(exc).__name__}. "
+                    "Vérifiez le réseau, puis réessayez."
+                ) from exc
+            if download.status_code != 200 or not download.content:
+                raise RuntimeError(
+                    f"Téléchargement de l'image échoué "
+                    f"(HTTP {download.status_code}). Réessayez."
+                )
+            return bytes(download.content)
+        raise RuntimeError(
+            "Génération d'image : réponse sans 'b64_json' ni 'url'. "
+            "Vérifiez le fournisseur, puis réessayez."
+        )
 
     async def get_embedding(self, text: str) -> list[float]:
         """Embeddings API externe : batch natif ; lève en FR explicite sinon."""

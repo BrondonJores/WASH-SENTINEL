@@ -463,13 +463,53 @@ CardType = Literal[
     # Divers.
     "guidance",
     "place_suggestions",
+    # Dossier décideur (contrat inter-agents : Laravel persiste le base64
+    # du poster et réécrit l'URL ; builds dans app/tools/dossier_decideur.py).
+    "poster",
+    "dossier_report",
     # Réservé frontend (accepté, jamais émis par le backend).
     "action_result",
 ]
 
 # Membres de CardType acceptés mais jamais émis par le backend
 # (rendus frontend existants, conservés pour compatibilité).
-FRONTEND_RESERVED = frozenset({"report_confirmation", "action_result"})
+# TRANSITOIRE : "poster" et "dossier_report" restent ici tant que les cases
+# frontend (AgentCards.tsx, autre agent) et le câblage loop (parent) ne sont
+# pas livrés ; les builders backend sont prêts (dossier_decideur.py).
+# Retirer ces deux membres d'ici dès qu'ils seront émis + rendus.
+FRONTEND_RESERVED = frozenset({
+    "report_confirmation", "action_result",
+    "poster", "dossier_report",
+})
+
+
+class PosterCardData(BaseModel):
+    """Contrat inter-agents carte `poster` : affiche générée du dossier.
+
+    Laravel persiste `image_base64` et réécrit l'URL ; un seul des deux
+    champs image est renseigné (jamais inventé : None si génération en échec).
+    """
+
+    image_base64: str | None = Field(None, description="Affiche encodée en base64 (persistée par Laravel)")
+    image_url: str | None = Field(None, description="URL réécrite par Laravel (None côté IA)")
+    prompt: str = Field(..., description="Prompt FR factuel ayant généré l'affiche")
+    caption: str = Field(..., description="Légende FR courte et factuelle")
+
+
+class DossierReportSection(BaseModel):
+    """Une section du rapport décideur : titre + corps markdown + chiffres."""
+
+    heading: str = Field(..., description="Titre de la section")
+    body_md: str = Field(..., description="Corps en markdown (chiffres vérifiés uniquement)")
+    figures: list[dict[str, str]] = Field(default_factory=list, description="Chiffres [{label, value}]")
+
+
+class DossierReportCardData(BaseModel):
+    """Contrat inter-agents carte `dossier_report` : rapport structuré."""
+
+    subject: str = Field(..., description="Sujet du dossier (périmètre)")
+    period: str = Field(..., description="Période couverte (ou 'non communiqué')")
+    sections: list[DossierReportSection] = Field(..., description="Sections décideur")
 
 
 class AgentCard(BaseModel):
