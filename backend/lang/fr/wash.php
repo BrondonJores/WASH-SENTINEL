@@ -12,9 +12,10 @@
  * aux littéraux d'origine. Clés 'whatsapp.*' lues avec locale forcée
  * ('fr' ou 'en' selon la langue détectée du message) ; clés
  * 'personality.*' et 'notifications.*' en 'fr' forcé par défaut.
- * Les messages FR-only (erreur technique, médias illisibles, hors-sujet,
- * école inconnue, surpoids, placeholder vocal) n'ont pas de variante EN :
- * comportement inchangé, locale 'fr' forcée.
+ * Blindage cas extrêmes : erreur technique, médias illisibles, hors-sujet,
+ * école inconnue, surpoids, type non supporté et numéro non validé ont une
+ * variante EN (miroir lang/en/wash.php), servie quand la conversation est
+ * en anglais. Seul 'voice_placeholder' reste FR-only (texte interne).
  */
 return [
 
@@ -114,6 +115,8 @@ return [
         'oversized_audio' => 'Note trop lourde, renvoie plus court : réenregistre ta note vocale au calme, près du micro — école + panne en une phrase (ex. robinet cassé au bloc A). Merci !',
         'oversized_photo' => 'Photo trop lourde, renvoie une photo plus légère avec une phrase : école + panne (ex. fuite au bloc A). Merci !',
         'voice_placeholder' => '[message vocal]',
+        'unsupported' => "Je ne peux pas lire ce genre de message (sticker, position, fichier...). Décris ta panne en une phrase ou envoie une note vocale : école + panne (ex. robinet cassé au bloc A). Merci !",
+        'unverified' => "Ton numéro est enregistré mais pas encore validé. Demande au directeur de valider ton numéro, puis réécris-nous. Merci !",
 
         // Priorités inline (minuscules, flux WhatsApp) — distinctes de
         // 'urgencies' (capitalisées, récapitulatifs agent LOT 6).

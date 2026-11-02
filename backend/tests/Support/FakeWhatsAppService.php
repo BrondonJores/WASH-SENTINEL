@@ -12,8 +12,18 @@ class FakeWhatsAppService extends MetaWhatsAppService
 
     public static array $uploads = [];
 
+    /** Panne injectée : levée par downloadMedia (ex. 404, timeout DNS). */
+    public static ?\Throwable $downloadError = null;
+
+    /** Panne injectée : sendText lève (Graph API down), rien n'est envoyé. */
+    public static bool $failSend = false;
+
     public function downloadMedia(string $mediaId): array
     {
+        if (self::$downloadError) {
+            throw self::$downloadError;
+        }
+
         return self::$media[$mediaId] ?? [
             'bytes' => 'fake-voice-note-bytes',
             'mime' => 'audio/ogg',
@@ -23,6 +33,9 @@ class FakeWhatsAppService extends MetaWhatsAppService
 
     public function sendText(string $to, string $message): array
     {
+        if (self::$failSend) {
+            throw new \RuntimeException('Graph API down (panne injectée).');
+        }
         self::$sent[] = ['type' => 'text', 'to' => $to, 'message' => $message];
 
         return ['messages' => [['id' => 'fake-' . count(self::$sent)]]];
@@ -64,5 +77,7 @@ class FakeWhatsAppService extends MetaWhatsAppService
         self::$sent = [];
         self::$media = [];
         self::$uploads = [];
+        self::$downloadError = null;
+        self::$failSend = false;
     }
 }

@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Contracts\WhatsAppClient;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -70,14 +72,30 @@ class MetaWhatsAppService implements WhatsAppClient
     }
 
     /**
-     * Client HTTP vers Graph API avec retries (le DNS Docker flanche par
-     * intermittence : cURL error 6, parfois plusieurs secondes). 5 tentatives,
-     * 1 s d'intervalle. Ne rejoue que les erreurs de connexion, jamais les
-     * rejets Meta (401/4xx partent en exception immédiate).
+     * Client HTTP vers Graph API avec retries honnêtes (le DNS Docker flanche
+     * par intermittence : cURL error 6, parfois plusieurs secondes).
+     * 5 tentatives, 1 s d'intervalle. Rejoués : erreurs de connexion + 429
+     * (rate limit Meta) + 5xx. Jamais rejoués : 401/403 (token expiré ou
+     * invalide), 400, 404 — les rejouer n'y changerait rien.
      */
     protected function http(): \Illuminate\Http\Client\PendingRequest
     {
-        return Http::withToken($this->token())->retry(self::RETRY_TIMES, self::RETRY_SLEEP_MS);
+        return Http::withToken($this->token())->retry(
+            self::RETRY_TIMES,
+            self::RETRY_SLEEP_MS,
+            function (\Throwable $e): bool {
+                if ($e instanceof ConnectionException) {
+                    return true;
+                }
+                if ($e instanceof RequestException && $e->response) {
+                    $status = $e->response->status();
+
+                    return $status === 429 || ($status >= 500 && $status < 600);
+                }
+
+                return false;
+            }
+        );
     }
 
     public function isSimulator(): bool
@@ -96,54 +114,122 @@ class MetaWhatsAppService implements WhatsAppClient
         return hash_equals('sha256=' . hash_hmac('sha256', $rawBody, $secret), (string) $signature);
     }
 
+    /**
+     * Normalise un payload webhook en liste de messages exploitables.
+     * Blindage cas extrêmes : niveaux malformés (non-tableaux, champs
+     * absents) ignorés sans lever ; types non supportés (sticker, réaction,
+     * localisation, contact, vidéo, document, sondage, ordre...) normalisés
+     * en 'unsupported' + 'unsupported_type' (jamais muets : le service répond
+     * un guidage). Les accusés de lecture/livraison (statuses, sans messages)
+     * restent ignorés : pas de message usager, pas de réponse.
+     */
     public function parseWebhook(array $payload): array
     {
         $messages = [];
-        foreach ($payload['entry'] ?? [] as $entry) {
-            foreach ($entry['changes'] ?? [] as $change) {
+        $entries = $payload['entry'] ?? [];
+        if (!is_array($entries)) {
+            return [];
+        }
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $changes = $entry['changes'] ?? [];
+            if (!is_array($changes)) {
+                continue;
+            }
+            foreach ($changes as $change) {
+                if (!is_array($change)) {
+                    continue;
+                }
                 $value = $change['value'] ?? [];
-                foreach ($value['messages'] ?? [] as $message) {
-                    $type = $message['type'] ?? '';
-                    $normalized = [
-                        'from' => $message['from'] ?? '',
-                        'message_id' => $message['id'] ?? '',
-                        // Id Meta (wamid) : clé d'idempotence des relivraisons.
-                        'wamid' => $message['id'] ?? '',
-                        'type' => $type,
-                        'text' => null,
-                        'media_id' => null,
-                        'button_id' => null,
-                    ];
-                    if ($type === 'text') {
-                        $normalized['text'] = $message['text']['body'] ?? null;
-                    } elseif ($type === 'audio' && isset($message['audio']['id'])) {
-                        $normalized['media_id'] = $message['audio']['id'];
-                    } elseif ($type === 'image' && isset($message['image']['id'])) {
-                        $normalized['media_id'] = $message['image']['id'];
-                        $normalized['text'] = $message['image']['caption'] ?? null;
-                    } elseif ($type === 'interactive') {
-                        // Format Cloud API actuel : button_reply ; ancien : button payload.
-                        $reply = $message['interactive']['button_reply'] ?? null;
-                        if (is_array($reply) && isset($reply['id'])) {
-                            $normalized['type'] = 'interactive';
-                            $normalized['button_id'] = $reply['id'];
-                            $normalized['text'] = $reply['title'] ?? null;
-                        } elseif (isset($message['interactive']['button']['payload'])) {
-                            $normalized['type'] = 'interactive';
-                            $normalized['button_id'] = $message['interactive']['button']['payload'];
-                            $normalized['text'] = $message['interactive']['button']['text'] ?? null;
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue;
+                if (!is_array($value)) {
+                    continue;
+                }
+                $rawMessages = $value['messages'] ?? [];
+                if (!is_array($rawMessages)) {
+                    continue;
+                }
+                foreach ($rawMessages as $message) {
+                    if (is_array($message)) {
+                        $messages[] = $this->normalizeMessage($message);
                     }
-                    $messages[] = $normalized;
                 }
             }
         }
 
         return $messages;
+    }
+
+    /** Normalise UN message brut Meta (champs contraints, type guidé). */
+    protected function normalizeMessage(array $message): array
+    {
+        $type = $message['type'] ?? '';
+        $normalized = [
+            'from' => $this->stringField($message, 'from'),
+            'message_id' => $this->stringField($message, 'id'),
+            // Id Meta (wamid) : clé d'idempotence des relivraisons.
+            'wamid' => $this->stringField($message, 'id'),
+            'type' => is_string($type) ? $type : '',
+            'text' => null,
+            'media_id' => null,
+            'button_id' => null,
+            'unsupported_type' => null,
+        ];
+        $type = $normalized['type'];
+        if ($type === 'text') {
+            $body = $message['text']['body'] ?? null;
+            $normalized['text'] = is_string($body) ? $body : null;
+        } elseif ($type === 'audio' && isset($message['audio']['id'])) {
+            $normalized['media_id'] = $this->stringField($message['audio'], 'id') ?: null;
+        } elseif ($type === 'image' && isset($message['image']['id'])) {
+            $normalized['media_id'] = $this->stringField($message['image'], 'id') ?: null;
+            $caption = $message['image']['caption'] ?? null;
+            $normalized['text'] = is_string($caption) ? $caption : null;
+        } elseif ($type === 'interactive') {
+            $this->normalizeInteractive($message, $normalized);
+        } else {
+            // Sticker, réaction, localisation, contact, vidéo, document,
+            // sondage, ordre, futurs types... : guidage, jamais muet.
+            $normalized['type'] = 'unsupported';
+            $normalized['unsupported_type'] = $type !== '' ? $type : 'unknown';
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Clic bouton : format Cloud API actuel (button_reply), listes
+     * (list_reply, même contrat id), ancien format (button payload).
+     * Réponse interactive inconnue : 'unsupported' (guidage, jamais muet).
+     */
+    protected function normalizeInteractive(array $message, array &$normalized): void
+    {
+        $interactive = $message['interactive'] ?? null;
+        $reply = is_array($interactive) ? ($interactive['button_reply'] ?? $interactive['list_reply'] ?? null) : null;
+        if (is_array($reply) && isset($reply['id'])) {
+            $normalized['type'] = 'interactive';
+            $normalized['button_id'] = $this->stringField($reply, 'id');
+            $normalized['text'] = $this->stringField($reply, 'title') ?: null;
+        } elseif (isset($message['interactive']['button']['payload'])) {
+            $normalized['type'] = 'interactive';
+            $normalized['button_id'] = $this->stringField($message['interactive']['button'], 'payload');
+            $normalized['text'] = $this->stringField($message['interactive']['button'], 'text') ?: null;
+        } else {
+            $normalized['type'] = 'unsupported';
+            $normalized['unsupported_type'] = 'interactive';
+        }
+    }
+
+    /** Champ texte contraint (payload malformé : '' au lieu de lever). */
+    protected function stringField(mixed $holder, string $key): string
+    {
+        if (!is_array($holder)) {
+            return '';
+        }
+        $value = $holder[$key] ?? '';
+
+        return is_string($value) || is_int($value) ? (string) $value : '';
     }
 
     public function downloadMedia(string $mediaId): array

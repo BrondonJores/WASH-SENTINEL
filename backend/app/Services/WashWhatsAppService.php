@@ -10,6 +10,7 @@ use App\Models\Report;
 use App\Models\School;
 use App\Models\SchoolContact;
 use Carbon\Carbon;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -43,6 +44,9 @@ class WashWhatsAppService
     /** Longueur max d'une réponse WhatsApp (ton SMS). */
     protected const MAX_REPLY_LENGTH = 397;
 
+    /** Longueur max d'un texte entrant traité (anti saturation triage/IA). */
+    protected const MAX_INCOMING_TEXT_LENGTH = 2000;
+
     /**
      * TTL (secondes) des marques WhatsApp : « message déjà vu » (idempotence
      * relivraisons) et horodatage du dernier message usager : 48h, soit le
@@ -70,6 +74,9 @@ class WashWhatsAppService
 
     /** Déclaration d'école par un numéro inconnu : « ECOLE Nom… » (une ligne). */
     protected const UNKNOWN_SCHOOL_ECOLE_PATTERN = '/^\s*ECOLE\s+(.+?)\s*$/iu';
+
+    /** Même déclaration en anglais : « SCHOOL Nom… » (une ligne). */
+    protected const UNKNOWN_SCHOOL_SCHOOL_PATTERN = '/^\s*SCHOOL\s+(.+?)\s*$/iu';
 
     /** Mots-clés d'intention suivi (FR + EN), testés AVANT le filtre hors-sujet. */
     protected const SUIVI_KEYWORDS = [
@@ -121,8 +128,28 @@ class WashWhatsAppService
     ];
 
     /**
+     * Marqueurs FR du flux signalement (veto EN) : marqueurs suivi +
+     * salutations + mots eau/hygiène FR courants. Un message mélangé FR/EN
+     * reste servi en français (langue par défaut). Appariés par frontières
+     * de mot (containsMarker) : 'bloc' ≠ 'block', 'casse' ≠ 'carcasse'.
+     */
+    protected const REPLY_FRENCH_MARKERS = [
+        'suivi', 'suivre', 'statut', 'où en est', 'ou en est',
+        'mon signalement', 'mes signalements', 'mon dossier',
+        'avancé', 'avance', 'réparé', 'reparé', 'répare', 'repare',
+        'bonjour', 'bonsoir', 'salut', 'merci',
+        'eau', 'robinet', 'fuite', 'fuites', 'fuit', 'pompe', 'forage',
+        'puits', 'toilette', 'toilettes', 'latrine', 'latrines', 'douche',
+        'savon', 'hygiène', 'hygiene', 'égout', 'egout',
+        'bouché', 'bouchée', 'bouchés', 'bouchées',
+        'cassé', 'cassée', 'cassés', 'casse', 'panne',
+        'réparation', 'reparation', 'bloc', 'coule', 'coulent',
+        'goutte', 'gouttes', 'marche',
+    ];
+
+    /**
      * Marqueurs EN génériques (signalement) : présents, SANS aucun marqueur FR
-     * (SUIVI_FRENCH_MARKERS réutilisée en veto) → TOUTE la réponse en anglais.
+     * (REPLY_FRENCH_MARKERS en veto) → TOUTE la réponse en anglais.
      * Même pattern que le suivi, généralisé au flux de création. 'fr' par défaut.
      * Appariés par frontières de mot (containsMarker) : 'toilet' ≠ 'toilettes'.
      */
@@ -182,7 +209,7 @@ class WashWhatsAppService
                 $results[] = $this->handleMessage($message);
             } catch (\Throwable $e) {
                 Log::warning('WhatsApp message failed: ' . $e->getMessage());
-                $this->safeReply($message['from'] ?? '', $this->fr('whatsapp.error_technical'));
+                $this->safeReply($message['from'] ?? '', $this->t('whatsapp.error_technical', $this->messageEnglish($message)));
                 $results[] = ['status' => 'error', 'from' => $message['from'] ?? null];
             }
         }
@@ -193,13 +220,35 @@ class WashWhatsAppService
     protected function handleMessage(array $message): array
     {
         $from = $message['from'] ?? '';
+        if (!is_string($from) || $from === '') {
+            // Message malformé sans expéditeur : rien à qui répondre, on ignore.
+            Log::info('WhatsApp message without sender ignored.');
+
+            return ['status' => 'ignored', 'from' => null];
+        }
         $text = $message['text'] ?? null;
+        $text = is_string($text) ? $text : null;
         $contact = SchoolContact::where('phone', SchoolContact::normalizePhone($from))->first();
 
         if (!$contact) {
             $this->reply($from, $this->unknownSchoolReply($text));
 
             return ['status' => 'unknown_contact', 'from' => $from];
+        }
+
+        // Double opt-in, 2e cran : numéro enregistré mais pas encore validé
+        // par le directeur → guidage, aucun incident créé.
+        if (!$contact->is_verified) {
+            $this->reply($from, $this->t('whatsapp.unverified', $this->messageEnglish($message)));
+
+            return ['status' => 'unverified_contact', 'from' => $from];
+        }
+
+        // Type non supporté (sticker, réaction, localisation...) : guidage.
+        if (($message['type'] ?? '') === 'unsupported') {
+            $this->reply($from, $this->t('whatsapp.unsupported', $this->conversationEnglish($from)));
+
+            return ['status' => 'unsupported', 'from' => $from];
         }
 
         // Clic sur un bouton interactif (Oui/Non) : pas de triage, juste la suite.
@@ -213,13 +262,13 @@ class WashWhatsAppService
         if (($message['type'] ?? '') === 'audio' && ($message['media_id'] ?? null)) {
             $download = $this->downloadMediaChecked($message['media_id']);
             if ($download['outcome'] === 'oversized') {
-                $this->reply($from, $this->oversizedAudioReply());
+                $this->reply($from, $this->oversizedAudioReply($this->conversationEnglish($from)));
 
                 return ['status' => 'oversized_media', 'from' => $from];
             }
             $media = $download['media'];
             if (!$media) {
-                $this->reply($from, $this->fr('whatsapp.unreadable_audio'));
+                $this->reply($from, $this->t('whatsapp.unreadable_audio', $this->conversationEnglish($from)));
 
                 return ['status' => 'unreadable_audio', 'from' => $from];
             }
@@ -234,13 +283,13 @@ class WashWhatsAppService
         } elseif (($message['type'] ?? '') === 'image' && ($message['media_id'] ?? null)) {
             $download = $this->downloadMediaChecked($message['media_id']);
             if ($download['outcome'] === 'oversized') {
-                $this->reply($from, $this->oversizedPhotoReply());
+                $this->reply($from, $this->oversizedPhotoReply($this->conversationEnglish($from)));
 
                 return ['status' => 'oversized_media', 'from' => $from];
             }
             $media = $download['media'];
             if (!$media) {
-                $this->reply($from, $this->fr('whatsapp.unreadable_photo'));
+                $this->reply($from, $this->t('whatsapp.unreadable_photo', $this->conversationEnglish($from)));
 
                 return ['status' => 'unreadable_photo', 'from' => $from];
             }
@@ -248,8 +297,14 @@ class WashWhatsAppService
             $channel = 'photo';
         }
 
+        // Texte démesuré (copié-collé, test) : plafonné avant triage/suivi.
+        $text = $this->capIncomingText($text);
+        if (is_string($text) && trim($text) !== '') {
+            $this->rememberLangFromText($from, $text);
+        }
+
         if (!$text && !$audio && !$photo) {
-            $this->reply($from, $this->offTopicReply());
+            $this->reply($from, $this->offTopicReply(null, $this->conversationEnglish($from)));
 
             return ['status' => 'unsupported', 'from' => $from];
         }
@@ -302,14 +357,17 @@ class WashWhatsAppService
         if ($channel === 'text' && !$this->looksLikeWashReport((string) $text)) {
             $this->forgetClarification($from);
             $this->forgetSuivi($from);
-            $this->reply($from, $this->offTopicReply((string) $text));
+            $this->reply($from, $this->offTopicReply((string) $text, $this->messageEnglish($message)));
 
             return ['status' => 'off_topic', 'from' => $from];
         }
 
         // Plus de clarification ni de suivi en attente à ce stade : message normal.
+        // Le pending Oui/Non est oublié aussi : un nouveau signalement interrompt
+        // la confirmation précédente (un vieux « Oui » ne doit plus confirmer).
         $this->forgetClarification($from);
         $this->forgetSuivi($from);
+        $this->forgetPending($from);
 
         $result = $this->triage->ingest($contact->school, $channel, $text, $audio, $photo, null, 'whatsapp');
         $incident = $result['incident'];
@@ -365,7 +423,7 @@ class WashWhatsAppService
             return $this->askClarification($from);
         }
 
-        $this->reply($from, $this->offTopicReply());
+        $this->reply($from, $this->offTopicReply(null, $this->conversationEnglish($from)));
 
         return ['status' => 'unsupported_button', 'from' => $from];
     }
@@ -482,13 +540,14 @@ class WashWhatsAppService
 
     /**
      * True si la réponse au signalement doit être en anglais : au moins un
-     * marqueur EN générique, et AUCUN marqueur FR (veto, const réutilisée).
+     * marqueur EN générique, et AUCUN marqueur FR (veto élargi : suivi +
+     * salutations + mots eau/hygiène, le mélange FR/EN reste en français).
      * 'fr' par défaut. Ne dépend jamais de language_effective STT.
      */
     protected function isEnglishReply(string $text): bool
     {
         $lower = mb_strtolower($text);
-        foreach (self::SUIVI_FRENCH_MARKERS as $marker) {
+        foreach (self::REPLY_FRENCH_MARKERS as $marker) {
             if ($this->containsMarker($lower, $marker)) {
                 return false;
             }
@@ -1509,6 +1568,82 @@ class WashWhatsAppService
     }
 
     // ------------------------------------------------------------------
+    // Langue de conversation mémorisée (repli des échecs sans texte).
+    // ------------------------------------------------------------------
+
+    protected function langKey(string $from): string
+    {
+        return 'wash.whatsapp.lang.' . SchoolContact::normalizePhone($from);
+    }
+
+    protected function rememberLang(string $from, bool $english): void
+    {
+        Cache::put($this->langKey($from), $english ? 'en' : 'fr', self::SEEN_TTL);
+    }
+
+    /**
+     * Mémorise la langue d'un texte usager : EN si marqueurs anglais, FR si
+     * marqueurs français, sinon on garde la langue mémorisée (un slot neutre
+     * — « 2 », « NON », nom d'école — n'écrase pas une conversation EN).
+     */
+    protected function rememberLangFromText(string $from, string $text): void
+    {
+        if ($this->isEnglishReply($text) || $this->isEnglishSuivi($text)) {
+            $this->rememberLang($from, true);
+
+            return;
+        }
+        $lower = mb_strtolower($text);
+        foreach (self::REPLY_FRENCH_MARKERS as $marker) {
+            if ($this->containsMarker($lower, $marker)) {
+                $this->rememberLang($from, false);
+
+                return;
+            }
+        }
+    }
+
+    /** True si la conversation mémorisée est en anglais ('fr' par défaut). */
+    protected function conversationEnglish(string $from): bool
+    {
+        return $from !== '' && Cache::get($this->langKey($from)) === 'en';
+    }
+
+    /**
+     * Langue d'un message brut : marqueurs EN du texte courant → EN ;
+     * marqueur FR explicite → FR (le message courant gagne sur le mémorisé) ;
+     * sinon langue de la conversation mémorisée ('fr' par défaut).
+     */
+    protected function messageEnglish(array $message): bool
+    {
+        $text = $message['text'] ?? null;
+        if (is_string($text) && trim($text) !== '') {
+            if ($this->isEnglishReply($text) || $this->isEnglishSuivi($text)) {
+                return true;
+            }
+            $lower = mb_strtolower($text);
+            foreach (self::REPLY_FRENCH_MARKERS as $marker) {
+                if ($this->containsMarker($lower, $marker)) {
+                    return false;
+                }
+            }
+        }
+        $from = $message['from'] ?? '';
+
+        return $this->conversationEnglish(is_string($from) ? $from : '');
+    }
+
+    /** Tronque un texte entrant démesuré (notes copiées-collées, tests). */
+    protected function capIncomingText(?string $text): ?string
+    {
+        if ($text === null || mb_strlen($text) <= self::MAX_INCOMING_TEXT_LENGTH) {
+            return $text;
+        }
+
+        return mb_substr($text, 0, self::MAX_INCOMING_TEXT_LENGTH);
+    }
+
+    // ------------------------------------------------------------------
     // LOT 7 — textes lang/{fr,en}/wash.php (extraction pure, locale forcée,
     // textes octet-identiques aux littéraux d'origine).
     // ------------------------------------------------------------------
@@ -1585,16 +1720,29 @@ class WashWhatsAppService
 
             return $this->fr('whatsapp.unknown_school_ecole', ['school' => $school]);
         }
+        if ($text && preg_match(self::UNKNOWN_SCHOOL_SCHOOL_PATTERN, $text, $m)) {
+            $school = Str::limit(trim($m[1]), 60);
 
-        return $this->fr('whatsapp.unknown_school');
+            return $this->t('whatsapp.unknown_school_ecole', true, ['school' => $school]);
+        }
+        $english = is_string($text) && ($this->isEnglishReply($text) || $this->isEnglishSuivi($text));
+
+        return $this->t('whatsapp.unknown_school', $english);
     }
 
-    protected function offTopicReply(?string $text = null): string
+    protected function offTopicReply(?string $text = null, ?bool $english = null): string
     {
         // Intention conversationnelle (bonjour, qui es-tu, aide...) : réponse
-        // chaleureuse de Sentinel ; sinon guidage signalement générique.
-        return (new WashWhatsAppPersonality)->replyFor($text)
-            ?? $this->fr('whatsapp.off_topic');
+        // chaleureuse de Sentinel ; sinon guidage signalement générique,
+        // dans la langue du texte (ou de la conversation si imposée).
+        $personality = (new WashWhatsAppPersonality)->replyFor($text);
+        if ($personality !== null) {
+            return $personality;
+        }
+        $english ??= is_string($text) && trim($text) !== ''
+            && ($this->isEnglishReply($text) || $this->isEnglishSuivi($text));
+
+        return $this->t('whatsapp.off_topic', $english);
     }
 
     protected function createdReply(Incident $incident, bool $english = false): string
@@ -1643,7 +1791,13 @@ class WashWhatsAppService
         try {
             $media = $this->client->downloadMedia($mediaId);
         } catch (\Throwable $e) {
-            Log::warning('WhatsApp media download failed: ' . $e->getMessage());
+            // 401/403 = token expiré ou invalide : erreur exploitable côté ops,
+            // même guidage usager (le texte d'envoi peut encore passer en file).
+            if ($e instanceof RequestException && $e->response && in_array($e->response->status(), [401, 403], true)) {
+                Log::error('WhatsApp media download refused (token expiré ou invalide ?) : ' . $e->getMessage());
+            } else {
+                Log::warning('WhatsApp media download failed: ' . $e->getMessage());
+            }
 
             return ['outcome' => 'unreadable', 'media' => null];
         }
@@ -1678,14 +1832,14 @@ class WashWhatsAppService
         return $this->downloadMediaChecked($mediaId)['media'];
     }
 
-    protected function oversizedAudioReply(): string
+    protected function oversizedAudioReply(bool $english = false): string
     {
-        return $this->fr('whatsapp.oversized_audio');
+        return $this->t('whatsapp.oversized_audio', $english);
     }
 
-    protected function oversizedPhotoReply(): string
+    protected function oversizedPhotoReply(bool $english = false): string
     {
-        return $this->fr('whatsapp.oversized_photo');
+        return $this->t('whatsapp.oversized_photo', $english);
     }
 
     /** Envoie une réponse (tronquée au format SMS), via simulateur ou live selon le client. */
@@ -1709,8 +1863,8 @@ class WashWhatsAppService
     protected function toUploadedFile(array $media): UploadedFile
     {
         $path = tempnam(sys_get_temp_dir(), 'wash-wa-');
-        file_put_contents($path, $media['bytes']);
+        file_put_contents($path, $media['bytes'] ?? '');
 
-        return new UploadedFile($path, $media['filename'], $media['mime'], null, true);
+        return new UploadedFile($path, $media['filename'] ?? 'whatsapp-media', $media['mime'] ?? 'application/octet-stream', null, true);
     }
 }

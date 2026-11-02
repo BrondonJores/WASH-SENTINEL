@@ -93,6 +93,25 @@ class WashWhatsAppGuidanceTest extends TestCase
         return $payload;
     }
 
+    /** Payload avec des messages bruts arbitraires (cas extrêmes). */
+    protected function rawPayload(array $messages): array
+    {
+        $payload = $this->fixture('text');
+        $payload['entry'][0]['changes'][0]['value']['messages'] = $messages;
+
+        return $payload;
+    }
+
+    protected function rawMessage(string $type, array $extra = [], string $from = '237600112233', string $id = 'wamid.HARD001'): array
+    {
+        return array_merge([
+            'from' => $from,
+            'id' => $id,
+            'timestamp' => '1760000000',
+            'type' => $type,
+        ], $extra);
+    }
+
     /**
      * Enchaîne vocal initial + clic Non, retourne l'incident pending.
      * Les stubs URL Http::fake() s'accumulent (le 1er gagne) : la transcription
@@ -517,5 +536,390 @@ class WashWhatsAppGuidanceTest extends TestCase
         $this->assertStringContainsString('pas retrouvé votre signalement', $reply);
         $this->assertStringContainsString('enregistré', $reply);
         $this->assertStringContainsString($fresh->reference_code, $reply);
+    }
+
+    // --------------------------------------------------------------
+    // Blindage cas extrêmes : types non supportés, webhooks malformés,
+    // textes limites, langue, double opt-in, interruptions, pannes.
+    // --------------------------------------------------------------
+
+    public function test_unsupported_types_get_guided_reply_never_silent(): void
+    {
+        $this->seedContact();
+        $types = ['sticker', 'reaction', 'location', 'contacts', 'video', 'document', 'poll', 'order'];
+        $messages = [];
+        foreach ($types as $i => $type) {
+            $messages[] = $this->rawMessage($type, [], '237600112233', "wamid.HARD.UNSUP{$i}");
+        }
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->rawPayload($messages));
+
+        $this->assertCount(8, $results);
+        foreach ($results as $result) {
+            $this->assertEquals('unsupported', $result['status'] ?? null);
+        }
+        $this->assertEquals(0, Incident::count());
+        $this->assertEquals(0, Report::count());
+        $texts = $this->sentTexts();
+        $this->assertCount(8, $texts);
+        foreach ($texts as $sent) {
+            $this->assertStringContainsString('note vocale', $sent['message']);
+            $this->assertStringContainsString('école + panne', $sent['message']);
+            $this->assertLessThan(400, mb_strlen($sent['message']));
+        }
+    }
+
+    public function test_empty_and_status_only_payloads_are_acked_silently(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $this->postJson('/api/v1/whatsapp/webhook', [])->assertOk()->assertJson(['received' => true]);
+        $this->postJson('/api/v1/whatsapp/webhook', ['object' => 'whatsapp_business_account', 'entry' => []])->assertOk();
+
+        // Accusé Meta (statuts de livraison) : pas de message usager, pas de réponse.
+        $statuses = $this->fixture('text');
+        unset($statuses['entry'][0]['changes'][0]['value']['messages']);
+        $statuses['entry'][0]['changes'][0]['value']['statuses'] = [
+            ['id' => 'wamid.STATUS001', 'status' => 'delivered'],
+        ];
+        $this->postJson('/api/v1/whatsapp/webhook', $statuses)->assertOk();
+
+        $this->assertEquals(0, Incident::count());
+        $this->assertCount(0, FakeWhatsAppService::$sent);
+    }
+
+    public function test_malformed_payload_levels_are_ignored_without_crash(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+
+        // Niveaux malformés : ignorés, zéro résultat, zéro envoi, zéro crash.
+        $this->assertSame([], $service->handlePayload(['entry' => 'nope']));
+        $this->assertSame([], $service->handlePayload(['entry' => [['changes' => 'nope']]]));
+        $this->assertSame([], $service->handlePayload(['entry' => [['changes' => [['value' => ['messages' => 'nope']]]]]]));
+        $this->assertSame([], $service->handlePayload(['entry' => [['changes' => [['value' => ['messages' => ['oops', 42]]]]]]]));
+
+        // Message sans expéditeur : ignoré (rien à qui répondre), pas d'envoi.
+        $results = $service->handlePayload($this->rawPayload([
+            ['id' => 'wamid.HARD.NOFROM', 'timestamp' => '1760000000', 'type' => 'text', 'text' => ['body' => 'robinet cassé']],
+        ]));
+        $this->assertEquals('ignored', $results[0]['status'] ?? null);
+
+        // Corps non-texte (tableau) : guidage, pas de crash.
+        $results = $service->handlePayload($this->rawPayload([
+            $this->rawMessage('text', ['text' => ['body' => ['weird' => 'array']]], '237600112233', 'wamid.HARD.BADBODY'),
+        ]));
+        $this->assertEquals('unsupported', $results[0]['status'] ?? null);
+
+        $this->assertEquals(0, Incident::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+    }
+
+    public function test_empty_text_gets_guided_reply_without_incident(): void
+    {
+        $this->seedContact();
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->rawPayload([
+            $this->rawMessage('text', ['text' => ['body' => '']], '237600112233', 'wamid.HARD.EMPTY001'),
+            $this->rawMessage('text', ['text' => ['body' => '   ']], '237600112233', 'wamid.HARD.EMPTY002'),
+        ]));
+
+        $this->assertCount(2, $results);
+        $this->assertEquals(0, Incident::count());
+        $texts = $this->sentTexts();
+        $this->assertCount(2, $texts);
+        foreach ($texts as $sent) {
+            $this->assertStringContainsString('une phrase', $sent['message']);
+            $this->assertLessThan(400, mb_strlen($sent['message']));
+        }
+    }
+
+    public function test_ultra_long_report_is_capped_and_still_triaged(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $body = 'Le robinet du bloc A fuit beaucoup. ' . str_repeat("Encore de l'eau partout au bloc A. ", 200);
+        $this->assertGreaterThan(2000, mb_strlen($body));
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->textPayload($body, '237600112233', 'wamid.HARD.LONG001'));
+
+        $this->assertEquals('triaged', $results[0]['status'] ?? null);
+        $this->assertEquals(1, Incident::count());
+        // Le triage reçoit le texte plafonné, jamais les 6000+ caractères.
+        Http::assertSent(function ($request) {
+            return str_contains($request->url(), '/v1/wash/triage')
+                && mb_strlen((string) ($request['text'] ?? '')) <= 2000;
+        });
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $this->assertLessThan(400, mb_strlen($texts[0]['message']));
+    }
+
+    public function test_unverified_contact_gets_validation_reply_without_incident(): void
+    {
+        $school = $this->seedContact();
+        SchoolContact::where('school_id', $school->id)->update(['is_verified' => false]);
+        $this->fakeTriage();
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->textPayload(
+            'Le robinet du bloc A fuit beaucoup.',
+            '237600112233',
+            'wamid.HARD.UNVERIFIED001'
+        ));
+
+        $this->assertEquals('unverified_contact', $results[0]['status'] ?? null);
+        $this->assertEquals(0, Incident::count());
+        $this->assertEquals(0, Report::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $reply = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString('pas encore validé', $reply);
+        $this->assertStringContainsString('directeur', $reply);
+        $this->assertLessThan(400, mb_strlen($reply));
+    }
+
+    public function test_unknown_school_with_school_format_is_acknowledged_in_english(): void
+    {
+        $this->postJson(
+            '/api/v1/whatsapp/webhook',
+            $this->textPayload('SCHOOL Saint-Michel College', '237699999999', 'wamid.HARD.SCHOOL001')
+        )->assertOk();
+
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $reply = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString('Saint-Michel College', $reply);
+        $this->assertStringContainsString('not linked', $reply);
+        $this->assertLessThan(400, mb_strlen($reply));
+    }
+
+    public function test_unknown_english_number_gets_english_registration_reply(): void
+    {
+        $this->postJson(
+            '/api/v1/whatsapp/webhook',
+            $this->textPayload('Hello, there is no water at our school, please help.', '237699999999', 'wamid.HARD.UNKNOWNEN001')
+        )->assertOk();
+
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $reply = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString('SCHOOL', $reply);
+        $this->assertStringContainsString('not linked', $reply);
+        $this->assertLessThan(400, mb_strlen($reply));
+    }
+
+    public function test_mixed_french_english_report_stays_french(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->textPayload(
+            'Hello, sorry : le robinet du bloc A fuit beaucoup, please help !',
+            '237600112233',
+            'wamid.HARD.MIX001'
+        ))->assertOk();
+
+        $this->assertEquals(1, Incident::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $reply = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString('enregistré', $reply);
+        $this->assertStringNotContainsString('Priority', $reply);
+        $this->assertLessThan(400, mb_strlen($reply));
+    }
+
+    public function test_new_report_interrupts_stale_pending_yes_goes_stale(): void
+    {
+        config(['filesystems.disks.public.root' => sys_get_temp_dir() . '/wash-test-public']);
+        $this->seedContact();
+        Http::fake([
+            '*/v1/wash/triage' => $this->triageResponse(),
+            '*/v1/voice/transcribe' => Http::response(['transcript' => 'Le robinet du bloc A fuit beaucoup.'], 200),
+        ]);
+
+        // Vocal → incident A + pending Oui/Non.
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('audio'))->assertOk();
+        $incidentA = Incident::first();
+        $this->assertNotNull($incidentA);
+
+        // Nouveau signalement texte → incident B, pending A oublié.
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->textPayload(
+            'Les toilettes du bloc B sont bouchées, ça déborde.',
+            '237600112233',
+            'wamid.HARD.INTERRUPT001'
+        ));
+        $this->assertEquals('triaged', $results[0]['status'] ?? null);
+        $this->assertEquals(2, Incident::count());
+
+        // Le vieux « Oui » ne confirme plus : réponse guidée périmée.
+        $yes = $this->fixture('interactive_yes');
+        $yes['entry'][0]['changes'][0]['value']['messages'][0]['id'] = 'wamid.HARD.INTERRUPT_YES';
+        $results = $service->handlePayload($yes);
+        $this->assertEquals('confirmed_stale', $results[0]['status'] ?? null);
+        $this->assertNotContains('confirme-usager', $incidentA->fresh()->ai_tags ?? []);
+    }
+
+    public function test_expired_pending_yes_gets_guided_stale_reply(): void
+    {
+        $incident = $this->seedPendingClarification();
+        // Expiration 24h simulée : clés parties → Oui périmé, pas de confirm.
+        Cache::forget('wash.whatsapp.pending.237600112233');
+        Cache::forget('wash.whatsapp.clarify.237600112233');
+
+        $yes = $this->fixture('interactive_yes');
+        $yes['entry'][0]['changes'][0]['value']['messages'][0]['id'] = 'wamid.HARD.EXPIRED_YES';
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($yes);
+
+        $this->assertEquals('confirmed_stale', $results[0]['status'] ?? null);
+        $this->assertNotContains('confirme-usager', $incident->fresh()->ai_tags ?? []);
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $this->assertStringContainsString('bien enregistré', $texts[0]['message']);
+    }
+
+    public function test_graph_send_failure_never_crashes_nor_duplicates(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+        FakeWhatsAppService::$failSend = true;
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $payload = $this->textPayload(
+            'Le robinet du bloc A fuit beaucoup.',
+            '237600112233',
+            'wamid.HARD.SENDFAIL001'
+        );
+        $results = $service->handlePayload($payload);
+
+        // Incident créé, statut erreur honnête, pas de crash.
+        $this->assertEquals('error', $results[0]['status'] ?? null);
+        $this->assertEquals(1, Incident::count());
+        $this->assertCount(0, FakeWhatsAppService::$sent);
+
+        // Rejeu (retry file) : idempotence wamid, aucun doublon.
+        FakeWhatsAppService::$failSend = false;
+        $results = $service->handlePayload($payload);
+        $this->assertEquals('duplicate_delivery', $results[0]['status'] ?? null);
+        $this->assertEquals(1, Incident::count());
+        $this->assertEquals(1, Report::count());
+        $this->assertCount(0, FakeWhatsAppService::$sent);
+    }
+
+    public function test_media_download_failure_gets_guided_unreadable_reply(): void
+    {
+        $this->seedContact();
+        FakeWhatsAppService::$downloadError = new \RuntimeException('404 Not Found (média expiré).');
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->audioPayload('wamid.HARD.DL404_001'));
+
+        $this->assertEquals('unreadable_audio', $results[0]['status'] ?? null);
+        $this->assertEquals(0, Incident::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $reply = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString('pas compris', $reply);
+        $this->assertStringContainsString('Réenregistrez', $reply);
+    }
+
+    public function test_empty_voice_transcript_still_triages_without_crash(): void
+    {
+        config(['filesystems.disks.public.root' => sys_get_temp_dir() . '/wash-test-public']);
+        $this->seedContact();
+        Http::fake([
+            '*/v1/wash/triage' => $this->triageResponse(),
+            '*/v1/voice/transcribe' => Http::response(['transcript' => ''], 200),
+        ]);
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($this->audioPayload('wamid.HARD.SILENCE001'));
+
+        // Transcription vide (silence) : le triage prend le relais, guidage texte.
+        $this->assertEquals('triaged_pending_confirmation', $results[0]['status'] ?? null);
+        $this->assertEquals(1, Incident::count());
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $this->assertStringContainsString('enregistré', $texts[0]['message']);
+        $this->assertCount(1, $this->sentInteractive());
+    }
+
+    public function test_expired_suivi_state_restarts_fresh_without_crash(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $service->handlePayload($this->textPayload('Le robinet du bloc A fuit.', '237600112233', 'wamid.HARD.SUIVI_EXP0'));
+
+        // « suivi » → demande d'ID (état mémorisé).
+        $results = $service->handlePayload($this->textPayload('suivi', '237600112233', 'wamid.HARD.SUIVI_EXP1'));
+        $this->assertEquals('suivi', $results[0]['status'] ?? null);
+
+        // Expiration 24h simulée : le slot orphelin redevient un message normal.
+        Cache::forget('wash.whatsapp.suivi.237600112233');
+        FakeWhatsAppService::$sent = [];
+        $results = $service->handlePayload($this->textPayload('NON', '237600112233', 'wamid.HARD.SUIVI_EXP2'));
+        $this->assertEquals('off_topic', $results[0]['status'] ?? null);
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+
+        // Et le suivi redémarre proprement.
+        $results = $service->handlePayload($this->textPayload('suivre mon dossier', '237600112233', 'wamid.HARD.SUIVI_EXP3'));
+        $this->assertEquals('suivi', $results[0]['status'] ?? null);
+        $last = end(FakeWhatsAppService::$sent);
+        $this->assertStringContainsString('WASH-2026', $last['message']);
+        $this->assertEquals(1, Incident::count());
+    }
+
+    public function test_english_conversation_keeps_english_on_voice_failure(): void
+    {
+        $this->seedContact();
+        Http::fake(['*/v1/wash/triage' => $this->triageResponse()]);
+
+        // Signalement EN : mémorise la conversation en anglais.
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $service->handlePayload($this->textPayload(
+            'Hello, the tap in block A is leaking, please send help.',
+            '237600112233',
+            'wamid.HARD.ENLANG001'
+        ));
+        $this->assertEquals(1, Incident::count());
+
+        // Échec vocal ensuite : guidage EN, pas FR.
+        FakeWhatsAppService::$media['MEDIA_AUDIO_1'] = [
+            'bytes' => '', 'mime' => 'audio/ogg', 'filename' => 'wa-empty.ogg',
+        ];
+        FakeWhatsAppService::$sent = [];
+        $results = $service->handlePayload($this->audioPayload('wamid.HARD.ENLANG002'));
+
+        $this->assertEquals('unreadable_audio', $results[0]['status'] ?? null);
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $reply = FakeWhatsAppService::$sent[0]['message'];
+        $this->assertStringContainsString("couldn't understand", $reply);
+    }
+
+    public function test_unsupported_type_in_english_conversation_replies_english(): void
+    {
+        $this->seedContact();
+        Http::fake(['*/v1/wash/triage' => $this->triageResponse()]);
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $service->handlePayload($this->textPayload(
+            'Hello, the tap in block A is leaking, please send help.',
+            '237600112233',
+            'wamid.HARD.ENUNSUP001'
+        ));
+
+        FakeWhatsAppService::$sent = [];
+        $results = $service->handlePayload($this->rawPayload([
+            $this->rawMessage('sticker', ['sticker' => ['id' => 'STICKER1']], '237600112233', 'wamid.HARD.ENUNSUP002'),
+        ]));
+
+        $this->assertEquals('unsupported', $results[0]['status'] ?? null);
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+        $this->assertStringContainsString("can't read", FakeWhatsAppService::$sent[0]['message']);
     }
 }

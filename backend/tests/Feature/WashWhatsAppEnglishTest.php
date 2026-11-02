@@ -319,4 +319,57 @@ class WashWhatsAppEnglishTest extends TestCase
         $this->assertSame('fr', $tts[0][0]->data()['language']);
         $this->assertSame('fr_FR-upmc-medium', $tts[0][0]->data()['voice']);
     }
+
+    // --------------------------------------------------------------
+    // Blindage cas extrêmes : mélange FR/EN, guidage conservé.
+    // --------------------------------------------------------------
+
+    public function test_mixed_suivi_with_french_markers_stays_french(): void
+    {
+        $this->seedContact();
+        Http::fake(['*/v1/wash/triage' => $this->triageResponse()]);
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->textPayload(
+            'Le robinet du bloc A fuit beaucoup.',
+            '237600112233',
+            'wamid.EN_MIXSUIVI_0'
+        ))->assertOk();
+        $this->assertEquals(1, Incident::count());
+
+        // Mélange EN + marqueurs FR : le veto FR gagne, suivi en français.
+        FakeWhatsAppService::$sent = [];
+        $this->postJson('/api/v1/whatsapp/webhook', $this->textPayload(
+            'Hello, où en est mon dossier ?',
+            '237600112233',
+            'wamid.EN_MIXSUIVI_1'
+        ))->assertOk();
+
+        $this->assertEquals(1, Incident::count());
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $this->assertStringContainsString('Pour suivre votre dossier', $texts[0]['message']);
+        $this->assertLessThan(400, mb_strlen($texts[0]['message']));
+    }
+
+    public function test_mixed_report_without_french_markers_gets_guided_reply(): void
+    {
+        $this->seedContact();
+        Http::fake(['*/v1/wash/triage' => $this->triageResponse()]);
+
+        // Marqueurs EN seuls (« tap », « please ») : réponse EN guidée,
+        // jamais d'erreur générique ni de silence.
+        $this->postJson('/api/v1/whatsapp/webhook', $this->textPayload(
+            'Please, the tap in block A is leaking badly, thank you.',
+            '237600112233',
+            'wamid.EN_MIXGUIDE_1'
+        ))->assertOk();
+
+        $incident = Incident::first();
+        $this->assertNotNull($incident);
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $this->assertStringContainsString($incident->reference_code, $texts[0]['message']);
+        $this->assertStringContainsString('Next:', $texts[0]['message']);
+        $this->assertLessThan(400, mb_strlen($texts[0]['message']));
+    }
 }

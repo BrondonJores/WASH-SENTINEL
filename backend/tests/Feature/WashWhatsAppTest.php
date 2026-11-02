@@ -337,4 +337,138 @@ class WashWhatsAppTest extends TestCase
         $this->assertEquals(1, Incident::count());
         $this->assertCount(1, FakeWhatsAppService::$sent);
     }
+
+    // --------------------------------------------------------------
+    // Blindage cas extrêmes : retries Graph API honnêtes, list_reply,
+    // idempotence intra-payload.
+    // --------------------------------------------------------------
+
+    protected function liveGraphConfig(): void
+    {
+        config([
+            'whatsapp.simulator' => false,
+            'whatsapp.token' => 'test-token',
+            'whatsapp.phone_number_id' => '999',
+            'whatsapp.base_url' => 'https://graph.facebook.com/v21.0',
+        ]);
+    }
+
+    public function test_rate_limit_429_is_retried_then_succeeds(): void
+    {
+        $this->liveGraphConfig();
+        $attempts = 0;
+        Http::fake(function () use (&$attempts) {
+            $attempts++;
+
+            return $attempts < 3
+                ? Http::response(['error' => 'rate limited'], 429)
+                : Http::response(['messages' => [['id' => 'wamid.LIVE429']]], 200);
+        });
+
+        $response = (new MetaWhatsAppService())->sendText('237600112233', 'Merci !');
+
+        $this->assertEquals('wamid.LIVE429', $response['messages'][0]['id']);
+        $this->assertEquals(3, $attempts);
+    }
+
+    public function test_server_500_is_retried_then_succeeds(): void
+    {
+        $this->liveGraphConfig();
+        $attempts = 0;
+        Http::fake(function () use (&$attempts) {
+            $attempts++;
+
+            return $attempts < 2
+                ? Http::response('Meta incident', 500)
+                : Http::response(['messages' => [['id' => 'wamid.LIVE500']]], 200);
+        });
+
+        $response = (new MetaWhatsAppService())->sendText('237600112233', 'Merci !');
+
+        $this->assertEquals('wamid.LIVE500', $response['messages'][0]['id']);
+        $this->assertEquals(2, $attempts);
+    }
+
+    public function test_token_expiry_401_is_not_retried(): void
+    {
+        $this->liveGraphConfig();
+        $attempts = 0;
+        Http::fake(function () use (&$attempts) {
+            $attempts++;
+
+            return Http::response(['error' => ['message' => 'expired token', 'code' => 190]], 401);
+        });
+
+        try {
+            (new MetaWhatsAppService())->sendText('237600112233', 'Merci !');
+            $this->fail('401 attendu.');
+        } catch (\Illuminate\Http\Client\RequestException $e) {
+            $this->assertEquals(401, $e->response->status());
+        }
+        $this->assertEquals(1, $attempts);
+    }
+
+    public function test_media_404_is_not_retried(): void
+    {
+        $this->liveGraphConfig();
+        $attempts = 0;
+        Http::fake(function () use (&$attempts) {
+            $attempts++;
+
+            return Http::response(['error' => 'not found'], 404);
+        });
+
+        try {
+            (new MetaWhatsAppService())->downloadMedia('MEDIA_DEAD');
+            $this->fail('404 attendu.');
+        } catch (\Illuminate\Http\Client\RequestException $e) {
+            $this->assertEquals(404, $e->response->status());
+        }
+        $this->assertEquals(1, $attempts);
+    }
+
+    public function test_list_reply_yes_confirms_pending_incident(): void
+    {
+        config(['filesystems.disks.public.root' => sys_get_temp_dir() . '/wash-test-public']);
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->fixture('audio'))->assertOk();
+        $incident = Incident::first();
+        $this->assertNotNull($incident);
+
+        // Même contrat id via list_reply (listes Meta) que button_reply.
+        $list = $this->fixture('interactive_yes');
+        $list['entry'][0]['changes'][0]['value']['messages'][0]['id'] = 'wamid.LIST_YES_001';
+        $list['entry'][0]['changes'][0]['value']['messages'][0]['interactive'] = [
+            'type' => 'list_reply',
+            'list_reply' => ['id' => 'wash_oui', 'title' => 'Oui'],
+        ];
+        FakeWhatsAppService::$sent = [];
+        $this->postJson('/api/v1/whatsapp/webhook', $list)->assertOk();
+
+        $this->assertContains('confirme-usager', $incident->fresh()->ai_tags ?? []);
+        $last = end(FakeWhatsAppService::$sent);
+        $this->assertStringContainsString('confirmé', $last['message']);
+    }
+
+    public function test_same_wamid_twice_in_one_payload_is_processed_once(): void
+    {
+        $this->seedContact();
+        $this->fakeTriage();
+
+        $payload = $this->fixture('text');
+        $message = $payload['entry'][0]['changes'][0]['value']['messages'][0];
+        $payload['entry'][0]['changes'][0]['value']['messages'] = [$message, $message];
+
+        $service = app(\App\Services\WashWhatsAppService::class);
+        $results = $service->handlePayload($payload);
+
+        $this->assertCount(2, $results);
+        $this->assertEquals('triaged', $results[0]['status'] ?? null);
+        $this->assertEquals('duplicate_delivery', $results[1]['status'] ?? null);
+        $this->assertEquals(1, Incident::count());
+        $this->assertEquals(1, Report::count());
+        $this->assertCount(1, FakeWhatsAppService::$sent);
+    }
 }

@@ -5,10 +5,12 @@
  * future locale-aware replies; current replies force locale 'fr' (unchanged).
  *
  * LOT 7 — English mirror of the WhatsApp/mesh/notification keys
- * (WashWhatsAppService, WashWhatsAppPersonality, notifications). FR-only
- * messages (technical error, unreadable media, off-topic, unknown school,
- * oversized, voice placeholder) have no EN variant: unchanged behaviour,
- * forced 'fr' locale. Notification EN texts are new translations, reference
+ * (WashWhatsAppService, WashWhatsAppPersonality, notifications).
+ * Extreme-case hardening adds EN variants for the guided messages
+ * (technical error, unreadable media, off-topic, unknown school,
+ * oversized, unsupported type, unverified number), served when the
+ * conversation is in English. Only 'voice_placeholder' stays FR-only
+ * (internal text). Notification EN texts are new translations, reference
  * for future locale-aware mails (current mails force 'fr').
  */
 return [
@@ -86,8 +88,19 @@ return [
     ],
 
     // LOT 7 — WhatsApp replies (WashWhatsAppService). Identical to the
-    // original literals; FR-only messages have no EN variant (see header).
+    // original literals; extreme-case hardening adds EN variants for the
+    // former FR-only guided messages (see header).
     'whatsapp' => [
+        'error_technical' => 'Sorry, a technical problem stopped us from handling your message. Please try again in a few minutes. Thank you!',
+        'unreadable_audio' => "We couldn't understand your voice note. Please record again in a quiet place, close to the phone: say your school + the problem (e.g. broken tap in block A). Thank you!",
+        'unreadable_photo' => "Your photo didn't reach us. Please resend it with one sentence: school + problem (e.g. leak in block A). Thank you!",
+        'oversized_audio' => 'Voice note too heavy, please send a shorter one: record again in a quiet place, close to the phone — school + problem in one sentence (e.g. broken tap in block A). Thank you!',
+        'oversized_photo' => 'Photo too heavy, please send a lighter photo with one sentence: school + problem (e.g. leak in block A). Thank you!',
+        'unsupported' => "I can't read that kind of message (sticker, location, file...). Please describe your problem in one sentence or send a voice note: school + problem (e.g. broken tap in block A). Thank you!",
+        'unverified' => 'Your number is registered but not yet validated. Please ask the head teacher to validate your number, then write to us again. Thank you!',
+        'unknown_school' => 'Hello! This number is not linked to any WASH Sentinel school. Which school are you talking about? Send: SCHOOL Name of your school. We will help you register it.',
+        'unknown_school_ecole' => 'Thanks! We noted ":school". But this number is not linked to any school yet: ask the head teacher to register it, then write to us again.',
+        'off_topic' => 'Thanks for your message! Here we collect school water and hygiene reports: e.g. leaking tap, blocked toilets, no soap. Describe your problem in one sentence.',
         'confirmed_stale' => 'Thanks! Your report is recorded. For another issue, send a voice note or describe it in one sentence.',
         'confirmed' => "Perfect, confirmed! Case :ref is being followed by our teams. We'll write here as soon as it moves.",
         'clarify_ask' => 'Sorry! What should I fix? Reply in one sentence: what + where.',
