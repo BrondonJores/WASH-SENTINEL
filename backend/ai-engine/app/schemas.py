@@ -306,6 +306,8 @@ class VoiceTranscriptionResponse(BaseModel):
     transcript: str
     language: str = DEFAULT_LANGUAGE
     language_effective: str = DEFAULT_LANGUAGE
+    language_detected: str | None = None
+    detection: dict[str, Any] = Field(default_factory=dict)
     driver: str | None = None
     duration_seconds: float | None = None
 

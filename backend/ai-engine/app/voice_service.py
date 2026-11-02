@@ -10,14 +10,20 @@ import struct
 import subprocess
 import tempfile
 import wave
+from typing import Any
 from .schemas import VoiceSynthesisResponse, VoiceTranscriptionResponse
 from .stt_providers import (
+    LANGUAGE_AUTO_EFFECTIVE,
     MAX_STT_INPUT_BYTES,
     STT_SAMPLE_RATE_HZ,
     SUPPORTED_VOICE_LANGUAGES,
+    WHISPER_LANG_MAP,
     BaseSTTProvider,
+    OmnilingualOnnxProvider,
+    WhisperCppProvider,
     default_stt,
 )
+from .voice_detect import arbitrate
 from .tts_providers import (
     MMS_LANGUAGE_MAP,
     MMS_MISSING_PRETRAINED,
@@ -98,6 +104,9 @@ SILENCE_RMS_THRESHOLD = 0.02
 #: Énergie RMS normalisée au-delà de laquelle un son incompris est
 #: probablement masqué par du bruit (il y a du son, mais rien d'intelligible).
 NOISE_RMS_THRESHOLD = 0.15
+#: Proba minimale d'auto-détection Whisper pour voler la vedette au moteur
+#: local quand une langue locale est demandée (mélange FR/EN au micro).
+STT_DETECT_MIN_PROB = 0.60
 
 #: Alias courants vers les codes canoniques (console, profils admin, saisies libres).
 VOICE_LANGUAGE_ALIASES: dict[str, str] = {
@@ -161,6 +170,22 @@ BUILTIN_VOICE_REGISTRY: dict[str, list[str]] = {
     "bassa": ["bassa-medium"],
     "ewondo": ["ewondo-medium"],
 }
+
+
+def _local_whisper_provider() -> WhisperCppProvider | None:
+    """Whisper local dispo (binaire + modèle présents) ou None (patchable tests)."""
+    probe = WhisperCppProvider()
+    if os.path.isfile(probe.binary) and os.path.isfile(probe.model):
+        return probe
+    return None
+
+
+def _local_omni_provider() -> OmnilingualOnnxProvider | None:
+    """Omnilingual local dispo (modèle + tokens présents) ou None (patchable tests)."""
+    probe = OmnilingualOnnxProvider()
+    if os.path.isfile(probe.model) and os.path.isfile(probe.tokens):
+        return probe
+    return None
 
 
 def guided_error(code: str) -> RuntimeError:
@@ -329,13 +354,26 @@ class VoiceService:
                     raise guided_error(STT_TOO_LONG)
 
         provider = stt or self._default_stt or default_stt()
-        try:
-            result = provider.transcribe(audio_bytes, filename, language)
-        except Exception:
-            # Panne moteur (modèle/binaire absent, FFmpeg, réseau cloud...) :
-            # message guidé, sans détail technique.
-            raise guided_error(STT_UNAVAILABLE) from None
-        transcript = (result.get("transcript", "") or "").strip()
+        if WHISPER_LANG_MAP.get(language) != LANGUAGE_AUTO_EFFECTIVE:
+            # Voie directe (comportement historique, coût unique) : la langue
+            # demandée est native Whisper.
+            try:
+                result = provider.transcribe(audio_bytes, filename, language)
+            except Exception:
+                # Panne moteur (modèle/binaire absent, FFmpeg, réseau
+                # cloud...) : message guidé, sans détail technique.
+                raise guided_error(STT_UNAVAILABLE) from None
+            transcript = (result.get("transcript", "") or "").strip()
+            detected: str | None = language
+            driver = provider.driver_name
+            effective = result.get("language_effective") or language
+            detail: dict[str, Any] = {"mode": "direct"}
+        else:
+            # Langue locale demandée : cascade auto-détection (Whisper-auto
+            # + moteur local, arbitrage pur). Le mélange FR/EN au micro est
+            # détecté au lieu d'être transcrit en charabia.
+            transcript, detected, driver, effective, detail = self._transcribe_local(
+                audio_bytes, filename, language, provider)
         if not transcript:
             # Rien d'intelligible : le niveau sonore dit pourquoi.
             if rms >= 0 and rms < SILENCE_RMS_THRESHOLD:
@@ -345,11 +383,63 @@ class VoiceService:
             raise guided_error(STT_INAUDIBLE)
         return VoiceTranscriptionResponse(
             transcript=transcript,
-            language=result.get("language", language),
-            language_effective=result.get("language_effective") or language,
-            driver=provider.driver_name,
+            language=language,
+            language_effective=effective,
+            language_detected=detected,
+            detection=detail,
+            driver=driver,
             duration_seconds=duration,
         )
+
+    def _transcribe_local(
+        self,
+        audio_bytes: bytes,
+        filename: str,
+        language: str,
+        provider: BaseSTTProvider,
+    ) -> tuple[str, str | None, str, str, dict[str, Any]]:
+        """Cascade langue locale : Whisper-auto + moteur local, arbitrage.
+
+        Retourne (transcript, detected, driver, effective, detail). Moteurs
+        indisponibles ignorés silencieusement ; si rien ne répond, repli sur
+        le provider actif (comportement historique), sinon STT_UNAVAILABLE.
+        """
+        whisper_res: dict[str, Any] | None = None
+        local_res: dict[str, Any] | None = None
+        whisper = _local_whisper_provider()
+        omni = (provider if provider.driver_name == "omnilingual_onnx"
+                else _local_omni_provider())
+        if whisper is not None:
+            try:
+                whisper_res = whisper.transcribe_auto(audio_bytes, filename)
+            except Exception:
+                whisper_res = None
+        if omni is not None:
+            try:
+                local_res = omni.transcribe(audio_bytes, filename, language)
+                local_res = {**local_res, "driver": omni.driver_name}
+            except Exception:
+                local_res = None
+        decision = arbitrate(
+            language, whisper_res, local_res, min_prob=STT_DETECT_MIN_PROB)
+        detail = {
+            "mode": "cascade",
+            "whisper_detected": (whisper_res or {}).get("detected_language"),
+            "whisper_prob": (whisper_res or {}).get("detection_prob"),
+        }
+        if decision is not None:
+            detail["reason"] = decision["reason"]
+            return (decision["transcript"], decision["language_detected"],
+                    decision["driver"], decision["language_detected"], detail)
+        # Repli historique : le seul provider actif (ex. cloud), puis panne.
+        try:
+            result = provider.transcribe(audio_bytes, filename, language)
+        except Exception:
+            raise guided_error(STT_UNAVAILABLE) from None
+        return ((result.get("transcript", "") or "").strip(), language,
+                provider.driver_name,
+                result.get("language_effective") or language,
+                {"mode": "fallback-direct"})
 
     def _resolve_voice_model(self, voice: str, *, explicit: bool = False) -> str:
         """Voix demandée -> fichier .onnx du même dossier (nom strict, anti path-traversal).

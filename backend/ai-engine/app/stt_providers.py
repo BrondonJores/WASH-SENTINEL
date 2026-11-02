@@ -61,6 +61,27 @@ def wash_whisper_prompt(language: str) -> str:
 #: Valeur renvoyée quand un driver ne peut pas honorer la langue demandée.
 LANGUAGE_AUTO_EFFECTIVE = "auto"
 
+#: Log whisper.cpp exploité pour l'auto-détection (best-effort) :
+#: "whisper_full: auto-detected language: fr (p = 0.97)". Absent des vieux
+#: binaires -> détection None (jamais d'exception, jamais inventé).
+_WHISPER_DETECTED_RE = re.compile(
+    r"auto[-\s]?detected language:\s*([A-Za-z_]+)"
+    r"(?:\s*\(p\s*=\s*([\d.]+))?")
+
+
+def parse_whisper_detection(stdout: str, stderr: str) -> tuple[str | None, float | None]:
+    """Langue + proba auto-détectées depuis les logs whisper.cpp (pur)."""
+    match = _WHISPER_DETECTED_RE.search(f"{stdout or ''}\n{stderr or ''}")
+    if match is None:
+        return None, None
+    prob: float | None = None
+    if match.group(2):
+        try:
+            prob = float(match.group(2))
+        except ValueError:
+            prob = None
+    return match.group(1).strip().lower(), prob
+
 #: Plafond anti-DoS des notes vocales, en Mo.
 #: LA RÉFÉRENCE documentée (LOT 5) : voice_service.MAX_VOICE_AUDIO_BYTES en
 #: dérive, et les lots Laravel suivants s'aligneront sur ces 12 Mo.
@@ -199,6 +220,36 @@ class WhisperCppProvider(BaseSTTProvider):
                 "transcript": transcript or res.stdout.strip(),
                 "language": language,
                 "language_effective": effective,
+            }
+
+    def transcribe_auto(self, audio_bytes: bytes, filename: str) -> dict[str, Any]:
+        """Passe de détection : langue auto native (-l omis), SANS prompt.
+
+        Sans prompt métier pour rester neutre (un prompt FR biaiserait la
+        détection vers le français). Retourne transcript + detected_language
+        + detection_prob (None si le binaire ne les expose pas).
+        """
+        if not os.path.isfile(self.binary) or not os.path.isfile(self.model):
+            raise RuntimeError(f"Whisper indisponible (binaire ou modèle introuvable : {self.model}).")
+        with tempfile.TemporaryDirectory(prefix="wash-stt-detect-") as tmpdir:
+            wav_file = normalize_to_wav(audio_bytes, filename, tmpdir)
+            out_base = os.path.join(tmpdir, "output")
+            res = subprocess.run(
+                [self.binary, "-m", self.model, "-f", wav_file,
+                 "-otxt", "-of", out_base],
+                capture_output=True, text=True, check=False, timeout=self.timeout,
+            )
+            transcript = ""
+            txt_file = out_base + ".txt"
+            if os.path.isfile(txt_file):
+                with open(txt_file, encoding="utf-8") as tf:
+                    transcript = tf.read().strip()
+            detected, prob = parse_whisper_detection(res.stdout, res.stderr)
+            return {
+                "transcript": transcript or res.stdout.strip(),
+                "detected_language": detected,
+                "detection_prob": prob,
+                "language_effective": LANGUAGE_AUTO_EFFECTIVE,
             }
 
 
