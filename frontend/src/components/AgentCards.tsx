@@ -36,6 +36,21 @@ const fmtText = (v: unknown): string => (typeof v === 'string' && v !== '' ? v :
 
 const fmtOpt = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
 
+// Effectifs unifiés backend : MAX par école (plus de double-compte),
+// repli legacy pour les réponses en cache d'avant la bascule.
+const affMax = (r: Record<string, unknown>): number | null =>
+  typeof r.affected_students_max === 'number'
+    ? r.affected_students_max
+    : typeof r.affected_students === 'number'
+      ? r.affected_students
+      : null;
+const totalAffMax = (d: Record<string, unknown>): number | null =>
+  typeof d.total_affected_students_max === 'number'
+    ? d.total_affected_students_max
+    : typeof d.total_affected_students === 'number'
+      ? d.total_affected_students
+      : null;
+
 const fmtDate = (v: unknown): string => {
   if (typeof v !== 'string' || v === '') return '—';
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
@@ -507,7 +522,7 @@ function RankingCard({
             const urg = typeof r.top_urgency === 'string' ? r.top_urgency : 'low';
             const score = typeof r.need_score === 'number' ? r.need_score : 0;
             const n = typeof r.open_incidents === 'number' ? r.open_incidents : 0;
-            const pupils = typeof r.affected_students === 'number' ? r.affected_students : 0;
+            const pupils = affMax(r) ?? 0;
             const oldest = typeof r.oldest_days === 'number' ? r.oldest_days : 0;
             const incidentsLabel = n === 0 ? 'Aucun incident' : `${fmtInt(n)} incident${n > 1 ? 's' : ''}`;
             const pupilsLabel =
@@ -676,7 +691,7 @@ function DistrictCard({
   const byCategory = asRecord(data.by_category);
   const schools = asArray<string>(data.schools_involved);
   const total = typeof data.open_incidents === 'number' ? data.open_incidents : 0;
-  const totalPupils = typeof data.total_affected_students === 'number' ? data.total_affected_students : 0;
+  const totalPupils = totalAffMax(data) ?? 0;
   const districtInsight = fmtOpt(data.insight);
   const urgEntries = Object.entries(byUrgency).filter(([, v]) => typeof v === 'number') as [string, number][];
   return (
@@ -695,7 +710,7 @@ function DistrictCard({
     >
       <div className="grid grid-cols-2 gap-3">
         <HeroStat label="Incidents ouverts" value={fmtInt(data.open_incidents)} />
-        <HeroStat label="Élèves affectés" value={fmtInt(data.total_affected_students)} />
+        <HeroStat label="Élèves affectés" value={fmtInt(totalAffMax(data))} />
       </div>
       <div className="mt-3">
         <InsightLine text={districtInsight ?? ''} />
@@ -1362,7 +1377,7 @@ function TerritoryMapCard({
       lat,
       lng,
       openIncidents: typeof rec.open_incidents === 'number' ? rec.open_incidents : 0,
-      affectedStudents: typeof rec.affected_students === 'number' ? rec.affected_students : 0,
+      affectedStudents: affMax(rec) ?? 0,
       topUrgency: typeof rec.top_urgency === 'string' ? rec.top_urgency : null,
     });
   });
@@ -1912,9 +1927,10 @@ function EpidemicAlertsCard({ title, data, onAsk }: { title: string; data: Recor
 }
 
 function tourFallback(t: Record<string, unknown>): string {
+  const aff = affMax(t);
   const parts = [
     typeof t.open_incidents === 'number' ? `${t.open_incidents} incident${t.open_incidents > 1 ? 's' : ''}` : undefined,
-    typeof t.affected_students === 'number' ? `${fmtInt(t.affected_students)} élèves` : undefined,
+    aff !== null ? `${fmtInt(aff)} élèves` : undefined,
     fmtOpt(t.max_urgency) !== undefined ? `urgence ${fmtOpt(t.max_urgency)}` : undefined,
   ].filter((s): s is string => s !== undefined);
   if (parts.length > 0) return parts.join(' · ');
@@ -1999,7 +2015,7 @@ function CompareSchoolsCard({ title, data, onAsk }: { title: string; data: Recor
               <tr key={i} className="border-b border-stone-100 last:border-0 dark:border-white/[0.05]">
                 <td className="py-1.5 pr-2 font-semibold leading-snug">{fmtOpt(c.school_name) ?? fmtOpt(c.school) ?? fmtOpt(c.name) ?? `École ${i + 1}`}</td>
                 <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['open', 'incidents', 'open_incidents'])}</td>
-                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['affected', 'students', 'affected_students'])}</td>
+                <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['affected_students_max', 'affected', 'students', 'affected_students'])}</td>
                 <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['logs', 'interventions', 'logs_count'])}</td>
                 <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['total_cost_XAF', 'cost', 'cost_amount', 'total_cost'])}</td>
               </tr>
