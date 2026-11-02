@@ -13,6 +13,7 @@ import { BudgetCompare, CalendarHeatmap, IncidentTimeline } from './VizExtra';
 import type { BudgetCategory, BudgetSchool, HeatmapDay, TimelineStep } from './VizExtra';
 import { TerritoryLegend, TerritoryMap } from './TerritoryMap';
 import { SlideDeck } from './SlideDeck';
+import { DossierView, PosterCard } from './DossierView';
 import type { DeckSlide } from './SlideDeck';
 import type { TerritoryPoint } from './TerritoryMap';
 import type { DetailKind } from './DetailDrawer';
@@ -2674,6 +2675,10 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <GuidanceCard title={card.title} data={data} onAsk={onAsk} />;
     case 'place_suggestions':
       return <PlaceSuggestionsCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'poster':
+      return <PosterCard title={card.title} data={data} onAsk={onAsk} />;
+    case 'dossier_report':
+      return <DossierView title={card.title} data={data} onAsk={onAsk} />;
     default:
       return <GenericCard card={card} />;
   }

@@ -12,6 +12,7 @@ use App\Exceptions\ProposalGuidanceException;
 use App\Models\AgentProposal;
 use App\Models\User;
 use App\Services\AgentProposalService;
+use App\Services\DossierPosterService;
 use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\RateLimiter;
@@ -276,6 +277,11 @@ class WashAgentController extends Controller
         // Laravel réinjecte ici les miniatures faisant foi (URLs absolues
         // vérifiées sur disque), pour que le chat les affiche sans attendre.
         $response = $this->enrichIncidentCardPhotos($response);
+
+        // Dossier décideur : le base64 des cartes `poster` est persisté sur
+        // disque et remplacé par une URL absolue ; `dossier_report` passe tel
+        // quel. Affiche absente ou corrompue => carte + note guidée, 200.
+        $response = $this->rewritePosterCards($response);
 
         $response = $this->persistProposals($user, $response, $proposals);
 
@@ -594,6 +600,61 @@ class WashAgentController extends Controller
         }
 
         return $photos;
+    }
+
+    /**
+     * Réécrit les cartes `poster` : image_base64 persistée sur disque puis
+     * remplacée par image_url absolue (DossierPosterService). Jamais de 500 :
+     * affiche absente, corrompue ou non récupérée => le base64 est retiré et
+     * une note guidée FR est ajoutée à la carte, en réponse 200.
+     */
+    protected function rewritePosterCards(array $response): array
+    {
+        if (empty($response['cards']) || !is_array($response['cards'])) {
+            return $response;
+        }
+        $service = app(DossierPosterService::class);
+        foreach ($response['cards'] as $i => $card) {
+            if (!is_array($card) || ($card['type'] ?? '') !== 'poster') {
+                continue;
+            }
+            $data = $card['data'] ?? null;
+            if (!is_array($data)) {
+                $response['cards'][$i]['data'] = ['note' => DossierPosterService::MESSAGE_MISSING];
+                continue;
+            }
+            $slug = 'affiche';
+            foreach (['caption', 'prompt'] as $key) {
+                if (isset($data[$key]) && is_string($data[$key]) && trim($data[$key]) !== '') {
+                    $slug = $data[$key];
+                    break;
+                }
+            }
+            if (isset($card['title']) && is_string($card['title']) && $slug === 'affiche' && trim($card['title']) !== '') {
+                $slug = $card['title'];
+            }
+            try {
+                $url = $service->persistPoster(
+                    isset($data['image_base64']) && is_string($data['image_base64']) ? $data['image_base64'] : null,
+                    isset($data['image_url']) && is_string($data['image_url']) ? $data['image_url'] : null,
+                    $slug,
+                );
+                unset($response['cards'][$i]['data']['image_base64']);
+                $response['cards'][$i]['data']['image_url'] = $url;
+            } catch (ValidationException $e) {
+                $note = collect($e->errors())->flatten()->first();
+                unset($response['cards'][$i]['data']['image_base64']);
+                $response['cards'][$i]['data']['note'] = is_string($note) && $note !== ''
+                    ? $note
+                    : DossierPosterService::MESSAGE_DOWNLOAD_FAILED;
+            } catch (\Throwable $e) {
+                report($e);
+                unset($response['cards'][$i]['data']['image_base64']);
+                $response['cards'][$i]['data']['note'] = "L'affiche n'a pas pu être préparée : demandez une nouvelle affiche.";
+            }
+        }
+
+        return $response;
     }
 
     /**
