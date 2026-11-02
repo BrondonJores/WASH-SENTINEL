@@ -1,8 +1,11 @@
 """Tests du pont déterministe bbj->fr (AUCUN appel LLM).
 
-Le lexique réel est entièrement UNVALIDATED : les tests de matching
-utilisent un lexique de fixture SYNTHÉTIQUE (variantes « zz_* »,
-évidemment fausses) pour ne jamais figer du faux ghomala'.
+Le lexique réel est entièrement UNVALIDATED (verified=false partout) :
+les tests de mécanique utilisent un lexique de fixture SYNTHÉTIQUE
+(variantes « zz_* », évidemment fausses). Les formes ghomala' RÉELLES
+testées ici sont toutes sourcées (candidats web cités du lexique) —
+jamais inventées — et servent à verrouiller le matching, la couverture
+et le repli "incertain".
 """
 from __future__ import annotations
 
@@ -170,6 +173,194 @@ class ExtractorCompatibilityTest(unittest.TestCase):
         self.assertEqual(out["infrastructure_guess"], "unknown")
         self.assertEqual(out["issue_guess"], "unknown")
         self.assertTrue(out["needs_human_check"])
+
+
+class CandidatesPolicyTest(unittest.TestCase):
+    def test_lexicon_has_sixty_plus_entries(self) -> None:
+        self.assertGreaterEqual(len(load_lexicon()), 60)
+
+    def test_candidates_require_source(self) -> None:
+        """Candidats web non vides -> source citée obligatoire."""
+        for entry in load_lexicon():
+            cands = entry.get("candidates") or []
+            self.assertIsInstance(cands, list, entry.get("id"))
+            if cands:
+                self.assertTrue(entry.get("source"), entry.get("id"))
+
+    def test_every_candidate_matches_its_own_entry(self) -> None:
+        """Non-régression : chaque candidat sourcé est matchable tel quel.
+
+        Verrouille la règle de longueur minimale et le repli bbj : si un
+        candidat cesse de matcher (seuil durci, régression du fold...),
+        c'est ici que ça casse — pas en production silencieuse.
+        """
+        entries = load_lexicon()
+        checked = 0
+        for entry in entries:
+            for cand in entry.get("candidates") or []:
+                out = bridge_bbj_to_french(cand, entries)
+                ids = [m["id"] for m in out["matched_slots"]]
+                self.assertIn(entry["id"], ids, cand)
+                checked += 1
+        self.assertGreater(checked, 100)
+
+
+class WebTierMatchingTest(unittest.TestCase):
+    """Matching des formes sourcées (lexique réel, niveau `web`)."""
+
+    def test_water_and_variants(self) -> None:
+        for form in ("shya", "shyə", "SHYƏ", "Shyă"):
+            out = bridge_bbj_to_french(form)
+            ids = [m["id"] for m in out["matched_slots"]]
+            self.assertIn("water", ids, form)
+            self.assertEqual(out["infrastructure_guess"], "water_point", form)
+
+    def test_bbj_fold_maps_special_letters(self) -> None:
+        # ʉ->u, ŋ->n, ɔ->o, ə->e : la forme ASCII (transcription ASR
+        # probable) matche les formes canoniques du lexique.
+        out = bridge_bbj_to_french("ghum shye")
+        self.assertIn("well", [m["id"] for m in out["matched_slots"]])
+        out = bridge_bbj_to_french("sok lunga")
+        ids = [m["id"] for m in out["matched_slots"]]
+        self.assertIn("soap", ids)
+        self.assertIn("bucket", ids)
+
+    def test_well_locution(self) -> None:
+        out = bridge_bbj_to_french("ghʉm shyə")
+        self.assertIn("well", [m["id"] for m in out["matched_slots"]])
+        self.assertEqual(out["infrastructure_guess"], "water_point")
+
+    def test_school_variants(self) -> None:
+        for form in ("dyôtâ", "sàkú", "sakú", "SAKÚ"):
+            out = bridge_bbj_to_french(form)
+            self.assertIn("school", [m["id"] for m in out["matched_slots"]], form)
+
+    def test_thirst_locution_maps_to_dry_well(self) -> None:
+        out = bridge_bbj_to_french("ji shya")
+        self.assertIn("thirst", [m["id"] for m in out["matched_slots"]])
+        self.assertEqual(out["issue_guess"], "dry_well")
+
+    def test_sick_locution_but_never_bare_gho(self) -> None:
+        out = bridge_bbj_to_french("wə go")
+        self.assertIn("sick", [m["id"] for m in out["matched_slots"]])
+        self.assertEqual(out["issue_guess"], "contamination")
+        # "gho sakú" = aller à l'école : school OUI, sick NON (homophone).
+        out = bridge_bbj_to_french("gho sakú")
+        ids = [m["id"] for m in out["matched_slots"]]
+        self.assertIn("school", ids)
+        self.assertNotIn("sick", ids)
+
+    def test_short_homophones_never_match(self) -> None:
+        # mu (un/quelqu'un), pu (on), ca (ça), la (article FR) : exclus.
+        for form, forbidden in (("mu", "children"), ("pu", "hand"),
+                                ("ca", "broken"), ("la", "village")):
+            out = bridge_bbj_to_french(form)
+            self.assertNotIn(forbidden,
+                             [m["id"] for m in out["matched_slots"]], form)
+
+    def test_no_substring_match(self) -> None:
+        # "sok" (savon) ne matche PAS dans "sokoto" (mot-entier strict).
+        out = bridge_bbj_to_french("sokoto")
+        ids = [m["id"] for m in out["matched_slots"]]
+        self.assertNotIn("soap", ids)
+        self.assertNotIn("handwash", ids)
+
+    def test_web_tier_is_labeled(self) -> None:
+        out = bridge_bbj_to_french("shya sakú")
+        self.assertTrue(out["matched_slots"])
+        for match in out["matched_slots"]:
+            self.assertEqual(match["tier"], "web")
+        self.assertIn("source web", out["french_pivot"])
+
+    def test_validated_tier_is_labeled(self) -> None:
+        out = bridge_bbj_to_french("report zz_wata problem", FIXTURE_LEXICON)
+        self.assertEqual(out["matched_slots"][0]["tier"], "validated")
+
+    def test_web_matches_cap_confidence_at_low(self) -> None:
+        # 2 indices web (jamais validés) restent "low" : medium exige 2+
+        # indices TOUS validés (cf. test_multiple_slots_and_medium_confidence).
+        out = bridge_bbj_to_french("shya sakú")
+        self.assertGreaterEqual(len(out["matched_slots"]), 2)
+        self.assertEqual(out["confidence"], "low")
+
+    def test_todo_entries_never_match(self) -> None:
+        # Entrées sans bbj ni candidats (todo locuteur) : rien à matcher.
+        lexicon = [
+            {"id": "pump", "bbj": [], "fr": "pompe",
+             "slot": "infrastructure", "maps_to": "water_point",
+             "verified": False, "source": None,
+             "todo": "locuteur requis"},
+        ]
+        out = bridge_bbj_to_french("pompe sôk", lexicon)
+        self.assertEqual(out["matched_slots"], [])
+
+
+class CoverageVerdictTest(unittest.TestCase):
+    def test_full_coverage_yields_indices(self) -> None:
+        out = bridge_bbj_to_french("shya sakú")
+        self.assertAlmostEqual(out["coverage"], 1.0)
+        self.assertEqual(out["verdict"], "indices")
+
+    def test_partial_coverage_above_threshold(self) -> None:
+        out = bridge_bbj_to_french("shya xyz")
+        self.assertAlmostEqual(out["coverage"], 0.5)
+        self.assertEqual(out["verdict"], "indices")
+        self.assertEqual(out["infrastructure_guess"], "water_point")
+
+    def test_low_coverage_forces_unknown_without_inventing(self) -> None:
+        # 1 mot reconnu sur 10 : l'indice est listé MAIS aucune panne
+        # n'est déduite (repli honnête).
+        out = bridge_bbj_to_french(
+            "sîm alpha bravo charlie delta echo foxtrot golf hotel india")
+        self.assertLess(out["coverage"], 0.30)
+        self.assertEqual(out["verdict"], "incertain")
+        self.assertEqual(out["issue_guess"], "unknown")
+        self.assertEqual(out["infrastructure_guess"], "unknown")
+        self.assertEqual(out["confidence"], "low")
+        self.assertTrue(out["matched_slots"])
+        self.assertIn("incertain", out["french_pivot"])
+        self.assertIn("aucune panne déduite", out["french_pivot"])
+
+    def test_zero_coverage(self) -> None:
+        out = bridge_bbj_to_french("xyzzy plugh")
+        self.assertAlmostEqual(out["coverage"], 0.0)
+        self.assertEqual(out["verdict"], "incertain")
+        self.assertIn("aucun mot reconnu", out["french_pivot"])
+
+    def test_empty_text_is_incertain(self) -> None:
+        out = bridge_bbj_to_french("")
+        self.assertAlmostEqual(out["coverage"], 0.0)
+        self.assertEqual(out["verdict"], "incertain")
+        self.assertTrue(out["french_pivot"])
+        self.assertTrue(out["needs_human_check"])
+
+    def test_result_exposes_coverage_and_verdict(self) -> None:
+        out = bridge_bbj_to_french("shya", FIXTURE_LEXICON)
+        self.assertIn("coverage", out)
+        self.assertIn("verdict", out)
+        self.assertIsInstance(out["coverage"], float)
+        self.assertGreaterEqual(out["coverage"], 0.0)
+        self.assertLessEqual(out["coverage"], 1.0)
+
+
+class RealCaseTest(unittest.TestCase):
+    def test_garbled_brother_voice_is_incertain(self) -> None:
+        """Cas réel WASH-2026-RIVTOZ : vocal ghomala' du frère transcrit
+        "da cas bolilam dmla" (Whisper FR forcé sur parole ghomala',
+        fixture tests/fixtures/voice_bbj_brother_01.ogg). Le pont ne doit
+        JAMAIS inventer une panne dessus : verdict "incertain", guesses
+        "unknown", tokens intacts dans `unmatched` pour le locuteur.
+        """
+        out = bridge_bbj_to_french("da cas bolilam dmla")
+        self.assertEqual(out["verdict"], "incertain")
+        self.assertEqual(out["infrastructure_guess"], "unknown")
+        self.assertEqual(out["issue_guess"], "unknown")
+        self.assertEqual(out["urgency_guess"], "unknown")
+        self.assertAlmostEqual(out["coverage"], 0.0)
+        self.assertEqual(out["matched_slots"], [])
+        self.assertEqual(out["unmatched"], ["da", "cas", "bolilam", "dmla"])
+        self.assertTrue(out["needs_human_check"])
+        self.assertIn("incertain", out["french_pivot"])
 
 
 if __name__ == "__main__":
