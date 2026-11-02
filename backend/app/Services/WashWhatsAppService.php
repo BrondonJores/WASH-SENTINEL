@@ -218,6 +218,8 @@ class WashWhatsAppService
 
         $audio = $photo = null;
         $channel = 'text';
+        $voiceDetected = null;
+        $langChoiceFreshEn = false;
 
         if (($message['type'] ?? '') === 'audio' && ($message['media_id'] ?? null)) {
             $download = $this->downloadMediaChecked($message['media_id']);
@@ -236,9 +238,17 @@ class WashWhatsAppService
             $channel = 'voice';
             // Transcription explicite (profil STT actif + langue locale de l'école).
             // En cas d'échec on garde l'audio seul : le triage fera sa propre STT.
-            $transcript = $this->transcribeVoice($audio, $contact->school->default_language ?? null);
+            // Langue DÉTECTÉE par le moteur (fr/en) : mémorisée aussitôt, elle
+            // reflète le locuteur (les marqueurs du transcript affinent après).
+            $voiceMeta = $this->transcribeVoiceWithMeta($audio, $contact->school->default_language ?? null);
+            $transcript = $voiceMeta['transcript'];
             if (is_string($transcript) && $transcript !== '') {
                 $text = $transcript;
+            }
+            $detected = $voiceMeta['language_detected'];
+            if ($detected === self::LANG_FR || $detected === self::LANG_EN) {
+                $voiceDetected = $detected;
+                $this->rememberLang($from, $detected === self::LANG_EN);
             }
         } elseif (($message['type'] ?? '') === 'image' && ($message['media_id'] ?? null)) {
             $download = $this->downloadMediaChecked($message['media_id']);
@@ -301,6 +311,27 @@ class WashWhatsAppService
             }
         }
 
+        // Réponse FR/EN au choix de langue : on rejoue le texte mis en attente
+        // (l'usager ne retape rien). Placé APRÈS les états en cours
+        // (clarification/suivi : un slot ne doit jamais être rejoué) mais
+        // AVANT les intentions : « EN » seul rejoue le vrai texte au lieu de
+        // partir en hors-sujet. Canal texte uniquement (le vocal a sa
+        // détection acoustique).
+        if ($channel === 'text' && is_string($text)) {
+            $awaitingText = Cache::get($this->langAwaitKey($from));
+            if (is_string($awaitingText) && $awaitingText !== '') {
+                Cache::forget($this->langAwaitKey($from));
+                if ($this->rememberLangChoice($from, $text)) {
+                    $text = $awaitingText;
+                    // Le texte rejoué est incertain par construction : la
+                    // réponse suit le choix frais, pas les marqueurs.
+                    $langChoiceFreshEn = $this->rememberedLang($from) === self::LANG_EN;
+                }
+                // Nouveau contenu au lieu du choix : on avance avec, sans
+                // reposer la question (le flag asked reste, anti-boucle).
+            }
+        }
+
         // SUIVI : détecté AVANT le filtre hors-sujet et AVANT le triage, pour
         // texte ET vocal-transcrit. Ne crée JAMAIS d'incident ni de Report.
         // (La clarification en attente ci-dessus garde priorité : le suivi
@@ -322,6 +353,20 @@ class WashWhatsAppService
             return ['status' => 'off_topic', 'from' => $from];
         }
 
+        // Choix de langue demandé uniquement pour un texte incertain SANS
+        // langue mémorisée (jamais demandé deux fois : flag asked). Placé
+        // APRÈS intentions suivi et filtre hors-sujet : une référence WASH
+        // seule ou un bonjour ne déclenchent jamais la question.
+        if ($channel === 'text' && is_string($text)
+            && $this->needsLangChoice($from, $text)
+            && !Cache::get($this->langAskedKey($from))) {
+            Cache::put($this->langAwaitKey($from), $text, self::DEFAULT_PENDING_TTL);
+            Cache::put($this->langAskedKey($from), true, self::DEFAULT_PENDING_TTL);
+            $this->reply($from, $this->langChoiceReply());
+
+            return ['status' => 'lang_choice_asked', 'from' => $from];
+        }
+
         // Plus de clarification ni de suivi en attente à ce stade : message normal.
         // Le pending Oui/Non est oublié aussi : un nouveau signalement interrompt
         // la confirmation précédente (un vieux « Oui » ne doit plus confirmer).
@@ -331,9 +376,12 @@ class WashWhatsAppService
 
         $result = $this->triage->ingest($contact->school, $channel, $text, $audio, $photo, null, 'whatsapp');
         $incident = $result['incident'];
-        // Langue de RÉPONSE depuis le texte usager (transcript vocal ou texte,
-        // jamais language_effective STT : la requête force souvent fr).
-        $english = is_string($text) && $text !== '' && $this->isEnglishReply($text);
+        // Langue de RÉPONSE : marqueurs du texte usager (transcript vocal ou
+        // texte), ou langue acoustique DÉTECTÉE (jamais language_effective
+        // STT : la requête force souvent fr).
+        $english = (is_string($text) && $text !== '' && $this->isEnglishReply($text))
+            || $voiceDetected === self::LANG_EN
+            || $langChoiceFreshEn;
         $staleNote = $staleClarification ? $this->staleClarificationNote($english) : '';
 
         if ($result['is_duplicate']) {
@@ -1429,8 +1477,21 @@ class WashWhatsAppService
      */
     protected function transcribeVoice(UploadedFile $audio, ?string $language): ?string
     {
+        return $this->transcribeVoiceWithMeta($audio, $language)['transcript'];
+    }
+
+    /**
+     * Transcription + langue DÉTECTÉE par le moteur (fr/en/bbj.../null).
+     * Le détecté non fr/en ne bascule AUCUNE mémoire (phrasebook à venir) :
+     * il transite juste pour le guidage et les tests.
+     *
+     * @return array{transcript: ?string, language_detected: ?string}
+     */
+    protected function transcribeVoiceWithMeta(UploadedFile $audio, ?string $language): array
+    {
+        $empty = ['transcript' => null, 'language_detected' => null];
         if (!$this->ai) {
-            return null;
+            return $empty;
         }
         try {
             $result = $this->ai->transcribe($audio->getRealPath(), $language ?: null);
@@ -1438,10 +1499,24 @@ class WashWhatsAppService
         } catch (\Throwable $e) {
             Log::info('WhatsApp transcribe fallback to triage STT: ' . $e->getMessage());
 
-            return null;
+            return $empty;
         }
+        $detected = $result['language_detected'] ?? null;
 
-        return $transcript === '' ? null : $transcript;
+        return [
+            'transcript' => $transcript === '' ? null : $transcript,
+            'language_detected' => is_string($detected) && $detected !== '' ? $detected : null,
+        ];
+    }
+
+    protected function langAwaitKey(string $from): string
+    {
+        return 'wash.whatsapp.langawait.' . SchoolContact::normalizePhone($from);
+    }
+
+    protected function langAskedKey(string $from): string
+    {
+        return 'wash.whatsapp.langasked.' . SchoolContact::normalizePhone($from);
     }
 
     // ------------------------------------------------------------------
