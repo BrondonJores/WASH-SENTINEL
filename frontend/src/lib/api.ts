@@ -349,8 +349,8 @@ async function req<T>(path: string, init?: RequestInit, timeoutMs?: number): Pro
   }
 }
 
-async function reqMultipart<T>(path: string, form: FormData, timeoutMs?: number): Promise<T> {
-  const ctrl = timeoutMs !== undefined ? new AbortController() : null;
+async function reqMultipart<T>(path: string, form: FormData, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
+  const ctrl = timeoutMs !== undefined && signal === undefined ? new AbortController() : null;
   const timer =
     ctrl !== null && timeoutMs !== undefined
       ? window.setTimeout(() => ctrl.abort(), timeoutMs)
@@ -359,7 +359,7 @@ async function reqMultipart<T>(path: string, form: FormData, timeoutMs?: number)
     const res = await guardedFetch(`${baseUrl}${path}`, {
       method: 'POST',
       headers: { Accept: 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      ...(ctrl !== null ? { signal: ctrl.signal } : {}),
+      ...(ctrl !== null ? { signal: ctrl.signal } : signal !== undefined ? { signal } : {}),
       body: form,
     });
     if (res.status === 401) handle401();
@@ -394,9 +394,24 @@ export const api = {
     message: string,
     history: ChatHistoryMessage[],
     signal?: AbortSignal,
-    opts?: { guided?: boolean },
-  ) =>
-    req<AgentChatResponse>('/v1/wash/agent/converse', {
+    opts?: { guided?: boolean; image?: File | Blob; imageName?: string },
+  ) => {
+    // Photo jointe : même route en multipart (history sérialisé en champs
+    // history[i][role|content] pour la validation Laravel). Sans photo :
+    // JSON actuel inchangé.
+    if (opts?.image) {
+      const form = new FormData();
+      form.append('message', message);
+      history.forEach((h, i) => {
+        form.append(`history[${i}][role]`, h.role);
+        form.append(`history[${i}][content]`, h.content);
+      });
+      if (opts.guided === true) form.append('guided', '1');
+      const name = opts.imageName ?? (opts.image instanceof File ? opts.image.name : 'photo.jpg');
+      form.append('image', opts.image, name);
+      return reqMultipart<AgentChatResponse>('/v1/wash/agent/converse', form, undefined, signal);
+    }
+    return req<AgentChatResponse>('/v1/wash/agent/converse', {
       method: 'POST',
       body: JSON.stringify({
         message,
@@ -404,7 +419,8 @@ export const api = {
         ...(opts?.guided === true ? { guided: true } : {}),
       }),
       ...(signal !== undefined ? { signal } : {}),
-    }),
+    });
+  },
   transcribeVoice: (blob: Blob, language?: string) => {
     const form = new FormData();
     form.append('audio', blob, VOICE_DICTATION_FILENAME);

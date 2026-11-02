@@ -27,7 +27,8 @@ export type IconName =
   | 'user'
   | 'folder'
   | 'edit'
-  | 'trash';
+  | 'trash'
+  | 'camera';
 
 const PATHS: Record<IconName, ReactNode> = {
   droplet: <path d="M12 3c3.2 4.1 6 7.2 6 10.6a6 6 0 1 1-12 0C6 10.2 8.8 7.1 12 3z" />,
@@ -135,6 +136,12 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M3 6h18" />
       <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </>
+  ),
+  camera: (
+    <>
+      <path d="M4 8h3l2-2.5h6L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="13.5" r="3.5" />
     </>
   ),
 };

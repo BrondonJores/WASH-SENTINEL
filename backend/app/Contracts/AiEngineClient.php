@@ -41,7 +41,7 @@ interface AiEngineClient
 
     public function replaceVsRepair(array $schoolHistory): array;
 
-    public function agentChat(string $message, array $history, array $context, bool $guided = false): array;
+    public function agentChat(string $message, array $history, array $context, bool $guided = false, ?string $imageBase64 = null, ?string $imageMime = null): array;
 
     public function dispatchPlan(string $district, array $schools): array;
 

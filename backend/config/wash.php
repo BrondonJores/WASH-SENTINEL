@@ -89,4 +89,15 @@ return [
         'default_destination_eid' => 'dtn://wash-sentinel/ingest',
     ],
 
+    /*
+     * Photo du chat Sentinel — MIROIR de WashReportController::PHOTO_MAX_KB
+     * (10 Mo) : plafond unique réutilisé par converse(image), pas une
+     * nouvelle limite. Parité verrouillée par WashAgentPhotoTest.
+     * Mimes alignés sur WashMeshController::MEDIA_MIMES (côté image).
+     */
+    'photo' => [
+        'max_kb' => 10240,
+        'mimes' => ['jpeg', 'png', 'jpg', 'webp'],
+    ],
+
 ];

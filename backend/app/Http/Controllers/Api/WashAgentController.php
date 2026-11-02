@@ -208,14 +208,23 @@ class WashAgentController extends Controller
         }
 
         $validated = $request->validate([
-            'message' => ['required', 'string', 'max:' . self::QUERY_MAX_CHARS],
+            // Photo seule acceptée (multipart) : le texte reste requis sans image (JSON inchangé).
+            'message' => ['required_without:image', 'nullable', 'string', 'max:' . self::QUERY_MAX_CHARS],
+            // Plafond photo réutilisé (wash.photo.max_kb, miroir de WashReportController::PHOTO_MAX_KB).
+            'image' => ['nullable', 'file', 'image', 'mimes:' . implode(',', config('wash.photo.mimes')), 'max:' . config('wash.photo.max_kb', WashReportController::PHOTO_MAX_KB)],
             'history' => ['nullable', 'array', 'max:' . self::CONVERSE_HISTORY_MAX],
             'history.*.role' => ['required_with:history', 'in:' . implode(',', self::HISTORY_ROLES)],
             'history.*.content' => ['required_with:history', 'string', 'max:' . self::CONVERSE_HISTORY_MESSAGE_MAX],
             'district' => ['nullable', 'string', 'max:' . self::DISTRICT_MAX_CHARS],
             'guided' => ['nullable', 'boolean'],
         ], [
+            'message.required_without' => "Dites-moi en quelques mots ce dont vous avez besoin, par exemple « Signale une fuite au forage ».",
             'message.required' => "Dites-moi en quelques mots ce dont vous avez besoin, par exemple « Signale une fuite au forage ».",
+            'image.file' => 'La photo doit être un fichier image.',
+            'image.image' => "Ce fichier n'est pas une photo lisible : choisissez une image JPEG, PNG ou WebP.",
+            'image.mimes' => 'Format de photo accepté : JPEG, PNG ou WebP uniquement.',
+            'image.max' => 'Votre photo est trop lourde (10 Mo maximum) : essayez une photo plus légère.',
+            'image.uploaded' => "La photo n'a pas pu être envoyée : réessayez avec une photo de moins de 10 Mo.",
             'message.string' => 'Votre message doit être un texte simple.',
             'message.max' => 'Votre message est un peu long (2000 caractères maximum) : essayez de le raccourcir.',
             'history.array' => "L'historique de conversation doit être une liste de messages.",
@@ -230,14 +239,24 @@ class WashAgentController extends Controller
             'guided.boolean' => 'Le mode guidé doit être vrai ou faux.',
         ]);
 
+        $message = (string) ($validated['message'] ?? '');
+        $imageBase64 = null;
+        $imageMime = null;
+        if ($request->hasFile('image')) {
+            $file = $request->file('image');
+            $imageBase64 = base64_encode((string) file_get_contents($file->getRealPath()));
+            $imageMime = $file->getMimeType() ?: $file->getClientMimeType();
+            $validated['has_image'] = true;
+        }
+
         $user = $this->optionalUser($request);
-        if ($user && ($vote = $this->interceptVote($user, $validated['message'], $proposals)) !== null) {
+        if ($user && ($vote = $this->interceptVote($user, $message, $proposals)) !== null) {
             return response()->json($vote);
         }
 
         // Jamais de 500 brut : moteur IA injoignable => 200 + guidage chaleureux.
         try {
-            $response = $this->agentChatResilient($ai, $validated);
+            $response = $this->agentChatResilient($ai, $validated, $message, $imageBase64, $imageMime);
         } catch (ConnectionException|GuzzleConnectException $e) {
             return response()->json($this->degradedGuidance());
         } catch (\Throwable $e) {
@@ -250,7 +269,7 @@ class WashAgentController extends Controller
 
         AiAnalysis::create([
             'analysis_type' => 'agent',
-            'input_payload' => ['message' => $validated['message']],
+            'input_payload' => ['message' => $message, 'has_image' => $imageBase64 !== null],
             'output_payload' => $response,
         ]);
 
@@ -266,7 +285,7 @@ class WashAgentController extends Controller
      * doublons : la persistance (propositions, AiAnalysis) a lieu une seule
      * fois après le succès, dans converse().
      */
-    protected function agentChatResilient(AiEngineClient $ai, array $validated): array
+    protected function agentChatResilient(AiEngineClient $ai, array $validated, string $message, ?string $imageBase64 = null, ?string $imageMime = null): array
     {
         $context = [
             'schools' => $this->maintenanceProfiles($validated['district'] ?? null),
@@ -278,13 +297,13 @@ class WashAgentController extends Controller
         $guided = (bool) ($validated['guided'] ?? false);
 
         try {
-            return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context, $guided);
+            return $ai->agentChat($message, $validated['history'] ?? [], $context, $guided, $imageBase64, $imageMime);
         } catch (ConnectionException|GuzzleConnectException $e) {
             if ($this->isTimeoutFailure($e)) {
                 throw $e;
             }
             sleep(self::AGENT_RETRY_DELAY_SECONDS);
-            return $ai->agentChat($validated['message'], $validated['history'] ?? [], $context, $guided);
+            return $ai->agentChat($message, $validated['history'] ?? [], $context, $guided, $imageBase64, $imageMime);
         }
     }
 

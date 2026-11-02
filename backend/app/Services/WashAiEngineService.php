@@ -201,7 +201,7 @@ class WashAiEngineService implements AiEngineClient
         return $this->client()->post($this->baseUrl . '/v1/wash/copilot/replace-vs-repair', $schoolHistory)->throw()->json();
     }
 
-    public function agentChat(string $message, array $history, array $context, bool $guided = false): array
+    public function agentChat(string $message, array $history, array $context, bool $guided = false, ?string $imageBase64 = null, ?string $imageMime = null): array
     {
         $payload = [
             'message' => $message,
@@ -210,6 +210,14 @@ class WashAiEngineService implements AiEngineClient
         ];
         if ($guided) {
             $payload['guided'] = true;
+        }
+        // CONTRAT ai-engine AgentChatRequest : image_base64 + image_mime
+        // (même URL). Absents sans photo : payload JSON inchangé.
+        if ($imageBase64 !== null) {
+            $payload['image_base64'] = $imageBase64;
+        }
+        if ($imageMime !== null) {
+            $payload['image_mime'] = $imageMime;
         }
 
         return $this->client()->post($this->baseUrl . '/v1/agent/chat', $payload)->throw()->json();

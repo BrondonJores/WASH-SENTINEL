@@ -26,6 +26,7 @@ import { UX_WAIT_TIMEOUT_MS } from '../lib/streaming';
 import { LOCALE } from '../lib/locale';
 import { MAX_VOICE_MESSAGE } from '../lib/voice-limits';
 import { AGENT_INPUT_MAX_CHARS } from '../lib/agent-limits';
+import { CHAT_PHOTO_ACCEPT, CHAT_PHOTO_MAX_BYTES, isChatPhotoMime } from '../lib/photo-limits';
 
 const CHUNK = 8;
 const TICK_MS = 18;
@@ -274,6 +275,7 @@ export default function ConsolePage() {
   const [preview, setPreview] = useState<string | null>(null);
   const [previewLang, setPreviewLang] = useState<string | null>(null);
   const [previewAudio, setPreviewAudio] = useState<string | null>(null);
+  const [photo, setPhoto] = useState<{ file: File; url: string } | null>(null);
   const [voiceLang, setVoiceLang] = useState<VoiceLanguage>(() => readVoiceLang());
   const [streamId, setStreamId] = useState<number | null>(null);
   const [voiceOpen, setVoiceOpen] = useState(false);
@@ -281,6 +283,8 @@ export default function ConsolePage() {
   const [visible, setVisible] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const photoUrlsRef = useRef<Set<string>>(new Set());
   const sceneRef = useRef<HTMLDivElement>(null);
   const [headerHidden, setHeaderHidden] = useState(false);
   const lastScrollY = useRef(0);
@@ -346,6 +350,9 @@ export default function ConsolePage() {
       ctrlRef.current?.abort();
       ctrlRef.current = null;
       attemptRef.current += 1;
+      photoUrlsRef.current.forEach((u) => URL.revokeObjectURL(u));
+      photoUrlsRef.current.clear();
+      setPhoto(null);
       setBusy(false);
       setRequestStart(null);
       setElapsedMs(0);
@@ -407,10 +414,11 @@ export default function ConsolePage() {
       assistantIdx: number,
       attemptId: number,
       ctrl: AbortController,
+      image: File | null = null,
     ) => {
       try {
         // Console texte : guided absent (parcours classique, inchangé).
-        const res = await api.converse(message, prior, ctrl.signal);
+        const res = await api.converse(message, prior, ctrl.signal, image ? { image } : undefined);
         if (attemptId !== attemptRef.current) return;
         setMessages((prev) => [
           ...prev,
@@ -448,12 +456,46 @@ export default function ConsolePage() {
     [calm],
   );
 
+  /** Valide la photo côté client (miroir des règles Laravel) puis l'arme pour l'envoi. */
+  const pickPhoto = useCallback((file: File | undefined) => {
+    if (!file) return;
+    if (!isChatPhotoMime(file.type)) {
+      setError('Format de photo accepté : JPEG, PNG ou WebP uniquement.');
+      return;
+    }
+    if (file.size > CHAT_PHOTO_MAX_BYTES) {
+      setError('Photo trop lourde (10 Mo maximum) : choisissez une photo plus légère.');
+      return;
+    }
+    setError(null);
+    if (photo !== null) {
+      URL.revokeObjectURL(photo.url);
+      photoUrlsRef.current.delete(photo.url);
+    }
+    const url = URL.createObjectURL(file);
+    photoUrlsRef.current.add(url);
+    setPhoto({ file, url });
+  }, [photo]);
+
+  /** Retire la photo avant envoi (l'URL objet est libérée). */
+  const clearPhoto = useCallback(() => {
+    if (photo !== null) {
+      URL.revokeObjectURL(photo.url);
+      photoUrlsRef.current.delete(photo.url);
+    }
+    setPhoto(null);
+  }, [photo]);
+
   const send = useCallback(async (raw: string) => {
     const message = raw.trim();
-    if (message === '' || busy || streaming) return;
+    if ((message === '' && photo === null) || busy || streaming) return;
     setError(null);
     setBusy(true);
     setInput('');
+    // La photo part avec le message : l'aperçu est consommé, l'URL survit dans la bulle.
+    const attached = photo;
+    setPhoto(null);
+    if (photoInputRef.current) photoInputRef.current.value = '';
     setWaitRounds(0);
     setRequestStart(Date.now());
     setElapsedMs(0);
@@ -461,12 +503,12 @@ export default function ConsolePage() {
       .slice(-19)
       .map((m) => ({ role: m.role, content: m.content }));
     const idx = messages.length + 1;
-    setMessages((prev) => [...prev, { role: 'user', content: message, tools: [], cards: [], model: '', at: Date.now(), follow_ups: [] }]);
+    setMessages((prev) => [...prev, { role: 'user', content: message, imageUrl: attached?.url ?? null, tools: [], cards: [], model: '', at: Date.now(), follow_ups: [] }]);
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
     attemptRef.current += 1;
-    await runAttempt(message, prior, idx, attemptRef.current, ctrl);
-  }, [busy, streaming, messages, runAttempt]);
+    await runAttempt(message, prior, idx, attemptRef.current, ctrl, attached?.file ?? null);
+  }, [busy, streaming, messages, photo, runAttempt]);
 
   const ask = useCallback(
     (q: string) => {
@@ -586,12 +628,34 @@ export default function ConsolePage() {
         ? PLACEHOLDER_EXAMPLES[0]
         : PLACEHOLDER_EXAMPLES[placeholderIdx];
 
+  const photoPreview =
+    photo !== null ? (
+      <div className="msg-in mb-2 flex items-center gap-3 rounded-xl border border-line bg-card/80 p-2 text-left backdrop-blur-md">
+        <img src={photo.url} alt="Photo à envoyer" className="h-14 w-14 shrink-0 rounded-lg object-cover" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[13px] font-medium text-ink">{photo.file.name}</p>
+          <p className="font-mono text-[11px] text-ink-faint">Photo prête — elle partira avec votre message.</p>
+        </div>
+        <button
+          type="button"
+          onClick={clearPhoto}
+          disabled={busy || streaming}
+          aria-label="Retirer la photo"
+          title="Retirer la photo"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line bg-card text-ink-soft transition-colors duration-150 hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+        >
+          <Icon name="x" className="h-4 w-4" />
+        </button>
+      </div>
+    ) : null;
+
   const composer = (large: boolean) =>
     large ? (
       <div>
         <div className="mb-2 flex justify-end">
           <VoiceLangSelector value={voiceLang} onChange={setVoiceLang} />
         </div>
+      {photoPreview}
       <form
         onSubmit={submit}
         className="composer-hero glass flex items-center gap-3 rounded-2xl p-2 pl-5 text-left"
@@ -631,11 +695,33 @@ export default function ConsolePage() {
           onBlur={() => setComposerFocus(false)}
           className="h-12 w-full bg-transparent text-[16px] caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
         />
+        <button
+          type="button"
+          onClick={() => photoInputRef.current?.click()}
+          disabled={busy || streaming}
+          aria-label="Joindre une photo"
+          title="Joindre une photo (JPEG, PNG, WebP — 10 Mo max)"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line bg-card text-ink-soft transition-colors duration-150 hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+        >
+          <Icon name="camera" className="h-5 w-5" />
+        </button>
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept={CHAT_PHOTO_ACCEPT}
+          tabIndex={-1}
+          aria-hidden="true"
+          className="hidden"
+          onChange={(e) => {
+            pickPhoto(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+        />
         <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} languageLabel={voiceLangLabel} />
         <Button
           type="submit"
           variant="primary"
-          disabled={busy || streaming || input.trim() === ''}
+          disabled={busy || streaming || (input.trim() === '' && photo === null)}
           aria-label="Envoyer"
           className="btn-drop h-12 w-12 shrink-0"
         >
@@ -648,6 +734,7 @@ export default function ConsolePage() {
         <div className="mb-2 flex justify-end">
           <VoiceLangSelector value={voiceLang} onChange={setVoiceLang} />
         </div>
+      {photoPreview}
       <form
         onSubmit={submit}
         className="composer-hero glass flex items-center gap-2 rounded-xl p-1.5 pl-4 text-left"
@@ -664,11 +751,33 @@ export default function ConsolePage() {
           autoFocus
           className="h-10 w-full bg-transparent text-sm caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
         />
+        <button
+          type="button"
+          onClick={() => photoInputRef.current?.click()}
+          disabled={busy || streaming}
+          aria-label="Joindre une photo"
+          title="Joindre une photo (JPEG, PNG, WebP — 10 Mo max)"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line bg-card text-ink-soft transition-colors duration-150 hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+        >
+          <Icon name="camera" className="h-5 w-5" />
+        </button>
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept={CHAT_PHOTO_ACCEPT}
+          tabIndex={-1}
+          aria-hidden="true"
+          className="hidden"
+          onChange={(e) => {
+            pickPhoto(e.target.files?.[0]);
+            e.target.value = '';
+          }}
+        />
         <VoiceRecorder onAudio={(blob) => void dictate(blob)} disabled={busy || streaming} languageLabel={voiceLangLabel} />
         <Button
           type="submit"
           variant="primary"
-          disabled={busy || streaming || input.trim() === ''}
+          disabled={busy || streaming || (input.trim() === '' && photo === null)}
           aria-label="Envoyer"
           className="btn-drop h-10 w-10 shrink-0"
         >
@@ -688,6 +797,9 @@ export default function ConsolePage() {
   );
 
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const sendingPhotoUrl = busy
+    ? ([...messages].reverse().find((m) => m.role === 'user')?.imageUrl ?? null)
+    : null;
   const errorBox = error && (
     <div className="mt-3 rounded-md border border-danger/30 bg-danger-soft px-3 py-2.5">
       <p className="text-sm text-danger">{error}</p>
@@ -880,6 +992,9 @@ export default function ConsolePage() {
               <div key={i}>
                 <div className="flex justify-end">
                   <div className="msg-in glass max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 text-[15px] leading-relaxed">
+                    {m.imageUrl ? (
+                      <img src={m.imageUrl} alt="Photo envoyée" className="mb-2 max-h-56 w-full rounded-lg object-cover" />
+                    ) : null}
                     {m.content}
                   </div>
                 </div>
@@ -952,6 +1067,18 @@ export default function ConsolePage() {
                 <SentinelAvatar className="h-7 w-7 shrink-0 motion-safe:animate-pulse" />
                 <WaitingSteps elapsedMs={elapsedMs} calm={calm} />
               </div>
+              {sendingPhotoUrl !== null && (
+                <div className="flex items-center gap-2.5 rounded-xl border border-line bg-card/60 px-3 py-2" role="status">
+                  <img src={sendingPhotoUrl} alt="" className="h-10 w-10 shrink-0 rounded-lg object-cover" />
+                  <span className="inline-flex items-center gap-2 text-[13px] text-ink-soft">
+                    <span aria-hidden="true" className="relative flex h-2 w-2">
+                      <span className="absolute h-full w-full rounded-full bg-teal-500 opacity-60 motion-safe:animate-ping" />
+                      <span className="relative h-2 w-2 rounded-full bg-teal-500" />
+                    </span>
+                    Analyse de la photo…
+                  </span>
+                </div>
+              )}
               {showSlow && (
                 <SlowWaitActions
                   elapsedSec={Math.max(90, Math.floor(elapsedMs / 1000))}

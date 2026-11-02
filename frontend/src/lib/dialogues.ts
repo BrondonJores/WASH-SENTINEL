@@ -7,6 +7,8 @@ export const CHAT_TITLE_MAX_CHARS = 42;
 export interface DialogueMessage {
   role: 'user' | 'assistant';
   content: string;
+  /** Photo jointe (URL objet locale, jamais persistée : toMessagePayload l'ignore). */
+  imageUrl?: string | null;
   tools: string[];
   cards: AgentCard[];
   model: string;
