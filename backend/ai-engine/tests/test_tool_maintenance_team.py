@@ -83,6 +83,37 @@ class MaintenanceTeamPluginTest(unittest.TestCase):
         self.assertEqual(cards[0].type, "maintenance_team")
         self.assertIsNotNone(cards[0])
 
+    def test_tour_suggests_district_team(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        ctx = _fixture_context()
+        ctx["teams"] = [
+            {"id": 1, "name": "Équipe Wouri Nord", "district": "Wouri",
+             "is_active": True},
+            {"id": 2, "name": "Équipe Mvila Rurale", "district": "Mvila",
+             "is_active": True},
+            {"id": 3, "name": "Équipe Fantôme", "district": "Wouri",
+             "is_active": False},
+        ]
+        res = TOOL_EXECUTORS["maintenance_team"]({}, ctx)
+        self.assertNotIn("error", res)
+        by_school = {s["school_name"]: s for s in res["suggested_tour"]}
+        self.assertEqual(by_school["EP Bonanjo"]["suggested_team"],
+                         "Équipe Wouri Nord")
+        self.assertEqual(by_school["EP Deido"]["suggested_team"],
+                         "Équipe Wouri Nord")
+        self.assertEqual(by_school["EP Mendong"]["suggested_team"],
+                         "Équipe Mvila Rurale")
+        self.assertIn("Équipe Wouri Nord", res["insight"])
+        by_d = {w["district"]: w for w in res["workload"]}
+        self.assertEqual(by_d["Wouri"]["suggested_team"], "Équipe Wouri Nord")
+
+    def test_tour_without_teams_has_no_suggestion(self) -> None:
+        from app.agent_tools import TOOL_EXECUTORS
+        res = TOOL_EXECUTORS["maintenance_team"]({}, _fixture_context())
+        self.assertNotIn("error", res)
+        self.assertTrue(all(s["suggested_team"] is None
+                            for s in res["suggested_tour"]))
+
 
 if __name__ == "__main__":
     unittest.main()

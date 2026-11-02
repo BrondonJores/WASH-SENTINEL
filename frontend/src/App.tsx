@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage';
 import ConsolePage from './pages/ConsolePage';
 import IncidentsPage from './pages/IncidentsPage';
 import SchoolsPage from './pages/SchoolsPage';
+import TeamsPage from './pages/TeamsPage';
 import ReportsPage from './pages/ReportsPage';
 import JournalPage from './pages/JournalPage';
 import NotificationsPage from './pages/NotificationsPage';
@@ -78,6 +79,7 @@ function AuthedApp() {
             <Route path="/" element={authed(<ConsolePage />)} />
             <Route path="/admin/incidents" element={authed(<IncidentsPage />)} />
             <Route path="/admin/ecoles" element={authed(<SchoolsPage />)} />
+            <Route path="/admin/equipes" element={authed(<TeamsPage />)} />
             <Route path="/admin/signalements" element={authed(<ReportsPage />)} />
             <Route path="/admin/journal" element={adminOnly(<JournalPage />)} />
             <Route path="/admin/notifications" element={authed(<NotificationsPage />)} />

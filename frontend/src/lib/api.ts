@@ -496,6 +496,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  teams: (params?: { district?: string; search?: string; active_only?: boolean; page?: number; per_page?: number }) =>
+    req<Paginated<Team>>(`/v1/wash/teams${qs(params ?? {})}`),
+  team: (id: number) => req<Team>(`/v1/wash/teams/${id}`),
+  createTeam: (payload: TeamPayload) =>
+    req<{ message: string; team: Team }>('/v1/wash/teams', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  updateTeam: (id: number, payload: Partial<TeamPayload>) =>
+    req<{ message: string; team: Team }>(`/v1/wash/teams/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  deleteTeam: (id: number) =>
+    req<{ message: string }>(`/v1/wash/teams/${id}`, { method: 'DELETE' }),
   incidents: (params?: {
     school_id?: number;
     status?: string;
@@ -673,6 +688,25 @@ export interface School {
   maintenance_logs?: MaintenanceLog[];
 }
 
+export interface Team {
+  id: number;
+  name: string;
+  district: string;
+  phone: string | null;
+  specialties: string[] | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamPayload {
+  name: string;
+  district: string;
+  phone?: string;
+  specialties?: string[];
+  is_active?: boolean;
+}
+
 export interface SchoolPayload {
   name: string;
   code: string;
@@ -702,7 +736,7 @@ export interface AssignableUser {
   name: string;
 }
 
-function qs(params: Record<string, string | number | undefined>): string {
+function qs(params: Record<string, string | number | boolean | undefined>): string {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== '') q.set(k, String(v));

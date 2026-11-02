@@ -179,6 +179,72 @@ class PluginSlotsTest(unittest.TestCase):
         self.assertIn("Équipe Wouri Nord", obs.get("team_choices", []))
 
 
+TEAMS = [
+    {"id": 1, "name": "Équipe Wouri Nord", "district": "Wouri",
+     "phone": "+237 690 11 22", "specialties": ["forage"],
+     "is_active": True},
+    {"id": 2, "name": "Équipe Wouri Sud", "district": "Wouri",
+     "phone": None, "specialties": ["latrines"], "is_active": True},
+    {"id": 3, "name": "Équipe Mvila Rurale", "district": "Mvila",
+     "phone": None, "specialties": ["forage solaire"], "is_active": True},
+    {"id": 4, "name": "Équipe Fantôme", "district": "Wouri",
+     "phone": None, "specialties": [], "is_active": False},
+]
+
+
+def _ctx_with_teams():
+    ctx = {k: [dict(r) for r in v] for k, v in CONTEXT.items()}
+    ctx["teams"] = [dict(t) for t in TEAMS]
+    return ctx
+
+
+class TeamChoicesFromTeamsTest(unittest.TestCase):
+    def test_district_scoped(self) -> None:
+        from app.tools.prepare_intervention import execute
+        obs = execute({"incident": "pompe principale", "today": TODAY},
+                      _ctx_with_teams())
+        self.assertNotIn("error", obs)
+        self.assertEqual(obs["team_choices"],
+                         ["Équipe Wouri Nord", "Équipe Wouri Sud"])
+
+    def test_question_suggests_teams(self) -> None:
+        from app.tools.prepare_intervention import execute
+        obs = execute({"incident": "pompe principale",
+                       "date_text": "lendemain",
+                       "budget": "100 000 XAF",
+                       "school": "Bonanjo", "today": TODAY},
+                      _ctx_with_teams())
+        self.assertEqual(obs["missing"], ["team"])
+        self.assertEqual(len(obs["questions"]), 1)
+        self.assertIn("Équipe Wouri Nord", obs["questions"][0])
+
+    def test_no_district_all_teams(self) -> None:
+        from app.tools.prepare_intervention import execute
+        ctx = {"incidents": [], "schools": [],
+               "teams": [dict(t) for t in TEAMS]}
+        obs = execute({"today": TODAY}, ctx)
+        self.assertNotIn("error", obs)
+        self.assertEqual(obs["team_choices"],
+                         ["Équipe Wouri Nord", "Équipe Wouri Sud",
+                          "Équipe Mvila Rurale"])
+
+    def test_no_teams_falls_back_to_assignees(self) -> None:
+        from app.tools.prepare_intervention import execute
+        ctx = {k: [dict(r) for r in v] for k, v in CONTEXT.items()}
+        ctx["incidents"][0]["assignee"] = "Amina la technicienne"
+        obs = execute({"incident": "pompe principale", "today": TODAY}, ctx)
+        self.assertIn("Amina la technicienne", obs.get("team_choices", []))
+
+    def test_other_district_falls_back_to_all_teams(self) -> None:
+        from app.tools.prepare_intervention import execute
+        ctx = _ctx_with_teams()
+        ctx["incidents"] = [{**PUMP, "school_name": "EP Inconnue",
+                             "district": "Dja-et-Lobo"}]
+        ctx["schools"] = []
+        obs = execute({"incident": "pompe principale", "today": TODAY}, ctx)
+        self.assertIn("Équipe Wouri Nord", obs.get("team_choices", []))
+
+
 class LoopBranchTest(unittest.IsolatedAsyncioTestCase):
     async def test_jury_scenario_bypasses_llm(self) -> None:
         stub = PrepStubLLM()

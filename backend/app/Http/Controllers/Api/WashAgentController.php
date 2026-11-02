@@ -7,6 +7,7 @@ use App\Models\AiAnalysis;
 use App\Models\Incident;
 use App\Models\MaintenanceLog;
 use App\Models\School;
+use App\Models\Team;
 use App\Contracts\AiEngineClient;
 use App\Exceptions\ProposalGuidanceException;
 use App\Models\AgentProposal;
@@ -310,6 +311,7 @@ class WashAgentController extends Controller
             'incidents' => $this->openIncidentSnapshots($validated['district'] ?? null),
             'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
             'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
+            'teams' => $this->teamSnapshots($validated['district'] ?? null),
         ];
         // Map incident_id -> categorie pour les incidents liés aux journaux
         // (même résolus/clos ou hors fenêtre recent) : le moteur ventile
@@ -515,6 +517,24 @@ class WashAgentController extends Controller
                 'category' => $i->category,
                 'status' => $i->status,
                 'reported_at' => $i->created_at->toIso8601String(),
+            ])->all();
+    }
+
+    // Équipes actives pour le dispatch IA (prepare_intervention,
+    // maintenance_team) : filtrées par district si demandé.
+    protected function teamSnapshots(?string $district): array
+    {
+        return Team::query()
+            ->where('is_active', true)
+            ->when($district, fn ($q, $v) => $q->where('district', $v))
+            ->orderBy('district')->orderBy('name')->get()
+            ->map(fn (Team $t) => [
+                'id' => $t->id,
+                'name' => $t->name,
+                'district' => $t->district,
+                'phone' => $t->phone,
+                'specialties' => $t->specialties ?? [],
+                'is_active' => (bool) $t->is_active,
             ])->all();
     }
 

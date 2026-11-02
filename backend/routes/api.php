@@ -16,6 +16,7 @@ use App\Http\Controllers\Api\WashNotificationController;
 use App\Http\Controllers\Api\WashWhatsAppController;
 use App\Http\Controllers\Api\WashReportController;
 use App\Http\Controllers\Api\WashSchoolController;
+use App\Http\Controllers\Api\WashTeamController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -56,6 +57,7 @@ Route::prefix('v1/wash')->group(function () {
         Route::post('/agent/proposals/{proposal}/cancel', [WashAgentProposalController::class, 'cancel'])->middleware('throttle:30,1');
         Route::get('/library', [WashConversationController::class, 'library']);
         Route::apiResource('/projects', WashProjectController::class)->only(['index', 'store', 'update', 'destroy']);
+        Route::apiResource('/teams', WashTeamController::class)->only(['index', 'store', 'show', 'update', 'destroy']);
         Route::post('/conversations', [WashConversationController::class, 'store']);
         Route::patch('/conversations/{conversation}', [WashConversationController::class, 'update']);
         Route::delete('/conversations/{conversation}', [WashConversationController::class, 'destroy']);

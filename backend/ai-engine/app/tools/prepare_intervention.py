@@ -290,7 +290,36 @@ def _assignee_of(row: dict[str, Any]) -> str | None:
     return None
 
 
-def _team_choices(pool: list[dict[str, Any]]) -> list[str]:
+def _active_teams(context: dict[str, Any],
+                district: str | None) -> list[str]:
+    """Noms des équipes actives, restreintes au district si connu.
+
+    Repli géographique : aucun match dans le district mais des équipes
+    ailleurs -> toutes les équipes (mieux que rien proposer).
+    """
+    teams = [t for t in context.get("teams", []) or []
+             if isinstance(t, dict) and t.get("is_active", True)
+             and str(t.get("name") or "").strip()]
+    if district:
+        scoped = [t for t in teams
+                  if str(t.get("district") or "").strip().lower()
+                  == district.strip().lower()]
+        if scoped:
+            teams = scoped
+    seen: list[str] = []
+    for team in teams:
+        name = str(team.get("name")).strip()
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _team_choices(context: dict[str, Any], pool: list[dict[str, Any]],
+                  district: str | None) -> list[str]:
+    """Équipes proposées : vraies équipes du contexte, sinon assignés."""
+    teams = _active_teams(context, district)
+    if teams:
+        return teams
     seen: list[str] = []
     for row in pool:
         who = _assignee_of(row)
@@ -425,9 +454,13 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
         team_pool = [i for i in pool
                      if school_name and str(i.get("school_name") or "") == school_name] or pool
-        team_choices = _team_choices(team_pool)
-        if team_choices and "team" in missing and len(questions) < 2:
-            questions.append(f"Équipe déjà sur place : {', '.join(team_choices[:3])} ?")
+        team_choices = _team_choices(context, team_pool, district)
+        if team_choices and "team" in missing:
+            # La question propose les équipes au lieu de rester vide.
+            suggest = (f"Quelle équipe doit intervenir "
+                       f"({', '.join(team_choices[:3])}) ?")
+            questions = [suggest if q == _SLOT_QUESTIONS["team"] else q
+                         for q in questions]
 
         rows = [f"{k} : {v}" for k, v in
                 (("Incident", label), ("École", school_name),

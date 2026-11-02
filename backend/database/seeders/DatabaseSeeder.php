@@ -15,7 +15,7 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
-        $this->call([AiModelProfileSeeder::class, AiSttProfileSeeder::class, WashRoleSeeder::class, WashDemoSeeder::class]);
+        $this->call([AiModelProfileSeeder::class, AiSttProfileSeeder::class, WashRoleSeeder::class, WashDemoSeeder::class, WashTeamSeeder::class]);
 
         User::firstOrCreate(
             ['email' => 'test@example.com'],

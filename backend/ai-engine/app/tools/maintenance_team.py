@@ -79,6 +79,22 @@ def _assignee_of(row: dict[str, Any]) -> str | None:
     return None
 
 
+def _teams_by_district(context: dict[str, Any]) -> dict[str, list[str]]:
+    """Noms des équipes actives groupés par district (clé minuscule)."""
+    out: dict[str, list[str]] = {}
+    for team in context.get("teams", []) or []:
+        if not isinstance(team, dict):
+            continue
+        if not team.get("is_active", True):
+            continue
+        name = str(team.get("name") or "").strip()
+        if not name:
+            continue
+        key = str(team.get("district") or "").strip().lower()
+        out.setdefault(key, []).append(name)
+    return out
+
+
 def _float_of(value: Any) -> float:
     try:
         return float(value or 0)
@@ -125,6 +141,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             }
 
         # --- Charge par district ---
+        teams = _teams_by_district(context)
         by_district: dict[str, list[dict[str, Any]]] = {}
         for row in open_inc:
             district = str(row.get("district") or "").strip() or "Sans district"
@@ -154,10 +171,12 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                     school_best.get(skey, 0),
                     _int_of(row.get("affected_students", row.get("estimated_affected_students"))),
                 )
+            district_teams = teams.get(district.lower(), [])
             workload.append({
                 "district": district,
                 "open_incidents": len(rows),
                 "schools": len(school_keys),
+                "suggested_team": district_teams[0] if district_teams else None,
                 "by_urgency": by_urgency,
                 "assigned": assigned,
                 "unassigned": len(rows) - assigned,
@@ -232,6 +251,8 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             "affected_students": e["affected_students"],
             "affected_students_max": e["affected_students_max"],
             "incidents": e["incidents"],
+            # Équipe du district à envoyer sur cette étape (None si inconnue).
+            "suggested_team": (teams.get(str(e["district"]).lower()) or [None])[0],
         } for e in tour]
 
         total = len(open_inc)
@@ -239,7 +260,9 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         head = ", ".join(f"{w['district']} ({w['open_incidents']})" for w in workload[:4])
         extra = f" (+{len(workload) - 4})" if len(workload) > 4 else ""
         stops = " → ".join(
-            f"{s['school_name']} ({s['max_urgency']})" for s in suggested_tour[:3])
+            f"{s['school_name']} ({s['max_urgency']}"
+            f"{', ' + s['suggested_team'] if s['suggested_team'] else ''})"
+            for s in suggested_tour[:3])
         insight = (
             f"{total} incident{'s' if total > 1 else ''} ouvert{'s' if total > 1 else ''} "
             f"dans {len(workload)} district{'s' if len(workload) > 1 else ''} : {head}{extra}. "

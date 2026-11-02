@@ -11,6 +11,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Sentinel', icon: 'chat' },
   { path: '/admin/incidents', label: 'Interventions', icon: 'alert' },
   { path: '/admin/ecoles', label: 'Écoles', icon: 'school' },
+  { path: '/admin/equipes', label: 'Équipes', icon: 'user' },
   { path: '/admin/signalements', label: 'Signalements', icon: 'inbox' },
   { path: '/admin/journal', label: 'Journal IA', icon: 'file', adminOnly: true },
   { path: '/admin/notifications', label: 'Notifications', icon: 'bell' },
