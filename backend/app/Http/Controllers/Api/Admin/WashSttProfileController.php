@@ -14,7 +14,7 @@ class WashSttProfileController extends Controller
 {
     public const NAME_MAX = 128;
 
-    public const DRIVERS = ['whisper_cpp', 'omnilingual_onnx', 'cloud_whisper'];
+    public const DRIVERS = ['whisper_cpp', 'omnilingual_onnx', 'cloud_whisper', 'meta_transcribe'];
 
     public const URL_MAX = 255;
 

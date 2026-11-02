@@ -101,6 +101,34 @@ class AiSttProfileTest extends TestCase
             ->assertStatus(422);
     }
 
+    public function test_meta_transcribe_profile_seeded_inactive(): void
+    {
+        $this->seed(\Database\Seeders\AiSttProfileSeeder::class);
+
+        $profile = AiSttProfile::where('name', 'Meta Muse Transcribe (cloud)')->firstOrFail();
+        $this->assertEquals('meta_transcribe', $profile->driver);
+        $this->assertEquals('https://api.meta.ai/v1', $profile->base_url);
+        $this->assertEquals('muse-voice-transcribe-1.0', $profile->model);
+        $this->assertFalse($profile->is_active);
+        $this->assertNull($profile->plainApiKey());
+    }
+
+    public function test_admin_can_store_meta_transcribe_profile(): void
+    {
+        $user = User::factory()->create();
+        $user->givePermissionTo('manage ai settings');
+
+        $response = $this->actingAs($user)->postJson('/api/v1/admin/stt-profiles', [
+            'name' => 'Meta perso',
+            'driver' => 'meta_transcribe',
+            'base_url' => 'https://api.meta.ai/v1',
+            'model' => 'muse-voice-transcribe-1.0',
+        ]);
+
+        $response->assertCreated();
+        $this->assertEquals('meta_transcribe', AiSttProfile::where('name', 'Meta perso')->firstOrFail()->driver);
+    }
+
     public function test_reseed_preserves_active_choice(): void
     {
         // start.sh re-seed à chaque boot : le choix actif de l'admin doit survivre.

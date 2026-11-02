@@ -467,11 +467,27 @@ class CloudWhisperProvider(BaseSTTProvider):
                 data=data,
             )
             response.raise_for_status()
-            return {
-                "transcript": response.json().get("text", ""),
+            payload = response.json()
+            if not isinstance(payload, dict):
+                payload = {}
+            result: dict[str, Any] = {
+                # OpenAI renvoie "text" ; des endpoints compatibles
+                # (Meta...) peuvent renvoyer "transcript" : on tolère.
+                "transcript": payload.get("text") or payload.get("transcript") or "",
                 "language": language,
                 "language_effective": effective,
             }
+            # Langue détectée renvoyée par l'endpoint (verbose_json
+            # "language", variantes) : propagée honnêtement, jamais
+            # inventée (absente = clé absente).
+            detected = (
+                payload.get("language")
+                or payload.get("detected_language")
+                or payload.get("language_detected")
+            )
+            if isinstance(detected, str) and detected.strip():
+                result["detected_language"] = detected.strip()
+            return result
 
 
 STT_REGISTRY: dict[str, type[BaseSTTProvider]] = {
@@ -481,6 +497,9 @@ STT_REGISTRY: dict[str, type[BaseSTTProvider]] = {
     "omnilingual": OmnilingualOnnxProvider,
     "cloud_whisper": CloudWhisperProvider,
     "cloud": CloudWhisperProvider,
+    # Meta Muse Transcribe : même contrat OpenAI-compatible
+    # (/audio/transcriptions), défauts Meta (cf. STT_PROVIDER_TYPES).
+    "meta_transcribe": CloudWhisperProvider,
 }
 
 
@@ -607,6 +626,19 @@ STT_PROVIDER_TYPES: list[dict[str, Any]] = [
             {"name": "model", "label": "Modèle (ex: whisper-1)", "type": "text", "default": "whisper-1", "required": True},
             {"name": "timeout", "label": "Timeout (s)", "type": "number", "default": "120", "required": False},
             {"name": "prompt", "label": "Prompt initial Whisper (vide = prompt métier WASH auto FR/EN)", "type": "text", "default": "", "required": False},
+        ],
+    },
+    {
+        "id": "meta_transcribe",
+        "label": "Meta Muse Transcribe (cloud)",
+        "description": "Transcription cloud Meta (endpoint OpenAI-compatible) : modèle muse-voice-transcribe-1.0. Collez votre clé api.meta.ai. Couverture langues locales selon Meta, non vérifiée — testez depuis Réglages avec un vrai vocal.",
+        "api_key_required": True,
+        "local_languages": False,
+        "fields": [
+            {"name": "base_url", "label": "URL de base (/v1)", "type": "url", "default": "https://api.meta.ai/v1", "required": True},
+            {"name": "model", "label": "Modèle", "type": "text", "default": "muse-voice-transcribe-1.0", "required": True},
+            {"name": "timeout", "label": "Timeout (s)", "type": "number", "default": "120", "required": False},
+            {"name": "prompt", "label": "Prompt initial (vide = prompt métier WASH auto FR/EN)", "type": "text", "default": "", "required": False},
         ],
     },
 ]

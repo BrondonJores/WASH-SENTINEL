@@ -41,6 +41,19 @@ class AiSttProfileSeeder extends Seeder
             'threads' => 2,
             'timeout' => 120,
         ], false, false);
+
+        // Meta Muse Transcribe : inactif par défaut, clé à coller dans
+        // Réglages (jamais écrasée au re-seed, cf. seedProfile).
+        $this->seedProfile('Meta Muse Transcribe (cloud)', [
+            'driver' => 'meta_transcribe',
+            'base_url' => 'https://api.meta.ai/v1',
+            'model' => 'muse-voice-transcribe-1.0',
+            'tokens_path' => null,
+            'api_key' => null,
+            'default_language' => 'fr',
+            'threads' => 2,
+            'timeout' => 120,
+        ], false, false);
     }
 
     /**
