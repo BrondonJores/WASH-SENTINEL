@@ -20,22 +20,44 @@ from app.bbj_bridge import (
 LEXICON_FILE = Path(__file__).resolve().parent.parent / "app" / "data" / "bbj_wash_lexicon.json"
 
 #: Fixture SYNTHÉTIQUE — variantes inventées préfixées zz_ (pas du ghomala').
+#: verified=True ici UNIQUEMENT pour exercer le matching en test ; le vrai
+#: lexique reste entièrement verified=false tant qu'un locuteur natif n'a
+#: pas validé (voir test_all_entries_unvalidated_by_default).
 FIXTURE_LEXICON = [
     {"id": "water", "bbj": ["zz_wata"], "fr": "eau",
-     "slot": "infrastructure", "maps_to": "water_point"},
+     "slot": "infrastructure", "maps_to": "water_point",
+     "verified": True, "source": "fixture-test (zz_ synthétique)"},
     {"id": "broken", "bbj": ["zz_broken_a", "zz_broken_b"], "fr": "cassé",
-     "slot": "issue", "maps_to": "total_breakdown"},
+     "slot": "issue", "maps_to": "total_breakdown",
+     "verified": True, "source": "fixture-test (zz_ synthétique)"},
     {"id": "toilets", "bbj": ["zz_toilet"], "fr": "toilettes / latrines",
-     "slot": "infrastructure", "maps_to": "toilets_latrines"},
+     "slot": "infrastructure", "maps_to": "toilets_latrines",
+     "verified": True, "source": "fixture-test (zz_ synthétique)"},
     {"id": "urgent", "bbj": ["zz_urgent"], "fr": "urgent",
-     "slot": "urgency", "maps_to": "high"},
+     "slot": "urgency", "maps_to": "high",
+     "verified": True, "source": "fixture-test (zz_ synthétique)"},
 ]
 
 
 class RealLexiconTest(unittest.TestCase):
     def test_loads_and_has_minimum_entries(self) -> None:
         entries = load_lexicon()
-        self.assertGreaterEqual(len(entries), 15)
+        self.assertGreaterEqual(len(entries), 30)
+
+    def test_no_bbj_word_without_verified_source(self) -> None:
+        """Garde-fou : aucun mot bbj sans validation + source citées.
+
+        Règle : si bbj est non vide → verified=true ET source non vide.
+        Entrées vides : source null autorisé + todo locuteur obligatoire.
+        """
+        for entry in load_lexicon():
+            eid = entry.get("id")
+            self.assertIn("source", entry, eid)
+            if entry.get("bbj"):
+                self.assertIs(entry.get("verified"), True, eid)
+                self.assertTrue(entry.get("source"), eid)
+            else:
+                self.assertIn("todo", entry, eid)
 
     def test_all_entries_unvalidated_by_default(self) -> None:
         with open(LEXICON_FILE, encoding="utf-8") as fh:
@@ -64,6 +86,16 @@ class RealLexiconTest(unittest.TestCase):
 
 
 class MatchingTest(unittest.TestCase):
+    def test_unverified_entry_never_matches(self) -> None:
+        lexicon = [
+            {"id": "water", "bbj": ["zz_wata"], "fr": "eau",
+             "slot": "infrastructure", "maps_to": "water_point",
+             "verified": False, "source": None},
+        ]
+        out = bridge_bbj_to_french("report zz_wata problem", lexicon)
+        self.assertEqual(out["matched_slots"], [])
+        self.assertEqual(out["infrastructure_guess"], "unknown")
+
     def test_exact_match(self) -> None:
         out = bridge_bbj_to_french("report zz_wata problem", FIXTURE_LEXICON)
         self.assertEqual(len(out["matched_slots"]), 1)

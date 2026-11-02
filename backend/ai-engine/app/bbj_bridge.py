@@ -104,6 +104,11 @@ def bridge_bbj_to_french(
     matched: list[dict[str, Any]] = []
 
     for entry in entries:
+        # Garde-fou anti-invention : seules les entrées validées par un
+        # locuteur natif (verified=true) participent au matching. Une entrée
+        # non vérifiée ne matche JAMAIS, même si elle porte des variantes.
+        if entry.get("verified") is not True:
+            continue
         variants = entry.get("bbj") or []
         for variant in variants:
             folded_variant = _norm(variant)

@@ -4,7 +4,8 @@
     "language": "bbj (ghomala', Cameroun, région Ouest)",
     "license_note": "Données lexicales à valider — usage interne WASH-SENTINEL.",
     "status": "UNVALIDATED — locuteur natif requis",
-    "version": "0.1.0"
+    "version": "0.2.0",
+    "source_policy": "Règle d'or : aucun mot bbj sans verified=true ET source citée (transcription Omnilingual ASR + nom du validateur locuteur natif, ou référence d'ouvrage + page). Le pont bbj_bridge.py ignore toute entrée non vérifiée (garde-fou testé)."
   },
   "entries": [
     {
@@ -15,7 +16,8 @@
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -25,7 +27,8 @@
       "note": "à valider par locuteur natif",
       "slot": "issue",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -35,7 +38,8 @@
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -45,7 +49,8 @@
       "note": "à valider par locuteur natif",
       "slot": "issue",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -55,7 +60,8 @@
       "note": "à valider par locuteur natif",
       "slot": "issue",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -65,7 +71,8 @@
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -75,7 +82,8 @@
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -85,7 +93,8 @@
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -95,7 +104,8 @@
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -105,7 +115,8 @@
       "note": "à valider par locuteur natif",
       "slot": "issue",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -115,7 +126,8 @@
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -125,7 +137,8 @@
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -135,7 +148,8 @@
       "note": "à valider par locuteur natif",
       "slot": "context",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -145,7 +159,8 @@
       "note": "à valider par locuteur natif",
       "slot": "context",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -155,7 +170,8 @@
       "note": "à valider par locuteur natif",
       "slot": "context",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -165,7 +181,8 @@
       "note": "à valider par locuteur natif",
       "slot": "urgency",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -175,7 +192,8 @@
       "note": "à valider par locuteur natif",
       "slot": "issue",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -185,7 +203,8 @@
       "note": "à valider par locuteur natif",
       "slot": "issue",
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
-      "verified": false
+      "verified": false,
+      "source": null
     },
     {
       "bbj": [],
@@ -194,6 +213,172 @@
       "maps_to": "sewage_drainage",
       "note": "à valider par locuteur natif",
       "slot": "infrastructure",
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false,
+      "source": null
+    },
+    {
+      "bbj": [],
+      "fr": "filles / jeunes filles",
+      "id": "girls",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "enseignant / directeur / maître",
+      "id": "teacher",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "boire / eau potable",
+      "id": "drink",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "réparer / arranger",
+      "id": "repair",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "remplacer / neuf / nouveau",
+      "id": "replace_new",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "merci",
+      "id": "thanks",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "bonjour / bonsoir",
+      "id": "hello",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "oui / d'accord",
+      "id": "yes",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "non / pas du tout",
+      "id": "no",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "combien / nombre de",
+      "id": "how_many",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "aujourd'hui",
+      "id": "today",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "demain",
+      "id": "tomorrow",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "château d'eau / citerne / réservoir",
+      "id": "tank",
+      "maps_to": "water_point",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "tuyau / canalisation",
+      "id": "pipe",
+      "maps_to": "water_point",
+      "note": "à valider par locuteur natif",
+      "slot": "infrastructure",
+      "source": null,
+      "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
+      "verified": false
+    },
+    {
+      "bbj": [],
+      "fr": "inondation / eau partout / flaque",
+      "id": "flood",
+      "maps_to": null,
+      "note": "à valider par locuteur natif",
+      "slot": "context",
+      "source": null,
       "todo": "locuteur requis : fournir les variantes ghomala' (telles que transcrites par Omnilingual ASR)",
       "verified": false
     }
