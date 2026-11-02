@@ -1,0 +1,9 @@
+# WASH-SENTINEL : fins de ligne verrouillées (équipe Windows + WSL).
+# Sans ceci, core.autocrlf convertit les scripts en CRLF au checkout
+# et WSL échoue avec « /usr/bin/env: ‘bash\r’: No such file or directory ».
+*.sh text eol=lf
+*.py text eol=lf
+*.php text eol=lf
+Dockerfile* text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
