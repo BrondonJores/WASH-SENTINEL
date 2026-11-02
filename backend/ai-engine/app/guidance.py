@@ -8,6 +8,7 @@ Ton : francais parle, phrases courtes, zero jargon (lu a voix haute).
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.router import normalize as _norm
@@ -220,6 +221,156 @@ def _school_scoped_actions(school: str) -> list[dict[str, str]]:
         {"label": f"Urgences à {school}",
          "question": f"Y a-t-il des urgences à {school} ?"},
     ]
+
+
+# ---------------------------------------------------------------------------
+# Clarification guidée : le périmètre exigé n'est pas nommé (« Compare un
+# district ? » sans district). On repose LA question en une phrase et on
+# propose des choix cliquables bâtis UNIQUEMENT sur les lieux du contexte
+# (reçus en paramètres) : jamais de district ni d'école inventés.
+# ---------------------------------------------------------------------------
+
+#: La question de clarification (une phrase) par périmètre et par langue.
+CLARIFY_QUESTIONS: dict[str, dict[str, str]] = {
+    "district": {
+        "fr": "De quel district s'agit-il ?",
+        "en": "Which district do you mean?",
+    },
+    "school": {
+        "fr": "De quelle école s'agit-il ?",
+        "en": "Which school do you mean?",
+    },
+}
+
+#: Mots génériques (normalisés, cf. _norm) ignorés pour le nom court d'école.
+_SHORT_NAME_SKIPS = frozenset({
+    "ecole", "ecoles", "lycee", "lycees", "college", "colleges",
+    "publique", "publiques", "public", "publics",
+    "rural", "rurale", "rurales", "ruraux",
+    "primaire", "primaires", "maternelle", "maternelles",
+    "secondaire", "secondaires", "groupe", "groupement",
+    "scolaire", "scolaires", "centre", "centres",
+    "de", "du", "des", "le", "la", "les", "l", "d", "un", "une",
+    "au", "aux", "en", "et",
+})
+
+#: Gabarits de choix district par intention (question complète + lieu réel).
+_DISTRICT_CHOICE_TEMPLATES: dict[str, dict[str, str]] = {
+    "compare": {"fr": "Comparer le district {place}",
+                "en": "Compare district {place}"},
+    "trends": {"fr": "Tendances du district {place} ?",
+               "en": "Trends for district {place}?"},
+    "budget": {"fr": "Budget réparations du district {place} ?",
+               "en": "Repair budget for district {place}?"},
+    "map": {"fr": "Voir le district {place} sur la carte",
+            "en": "Show district {place} on the map"},
+    "journal": {"fr": "Interventions du district {place}",
+                "en": "Interventions in district {place}"},
+    "recap": {"fr": "Résumer le district {place}",
+              "en": "Summarize district {place}"},
+}
+
+#: Gabarits de choix école par intention (nom court + lieu réel).
+_SCHOOL_CHOICE_TEMPLATES: dict[str, dict[str, str]] = {
+    "trends": {"fr": "Tendances de {place} ?",
+               "en": "Trends for {place}?"},
+    "budget": {"fr": "Budget réparations de {place} ?",
+               "en": "Repair budget for {place}?"},
+    "map": {"fr": "Voir {place} sur la carte",
+            "en": "Show {place} on the map"},
+    "journal": {"fr": "Interventions à {place} ?",
+                "en": "Interventions at {place}?"},
+    "recap": {"fr": "Récap de {place} ?",
+              "en": "Summary for {place}?"},
+    "default": {"fr": "Que se passe-t-il à {place} ?",
+                "en": "What is happening at {place}?"},
+}
+
+
+def clarify_question(kind: str, lang: str = "fr") -> str:
+    """La question de clarification en une phrase (repli FR district)."""
+    entry = CLARIFY_QUESTIONS.get(kind or "", CLARIFY_QUESTIONS["district"])
+    if str(lang or "").strip().lower().startswith("en"):
+        return entry["en"]
+    return entry["fr"]
+
+
+def short_school_name(label: str) -> str:
+    """Nom court distinctif (« École Rurale de Ngok » -> « Ngok »).
+
+    Premier mot non générique (>= 4 lettres), casse d'origine ; libellé
+    complet en repli. Ne lève jamais.
+    """
+    try:
+        text = str(label or "").strip()
+        if not text:
+            return ""
+        for word in re.split(r"[\s\-'’]+", text):
+            folded = _norm(word)
+            if len(folded) >= 4 and folded not in _SHORT_NAME_SKIPS:
+                return word.strip(".,;:!?()\"'")
+        return text
+    except Exception:
+        return str(label or "")
+
+
+def clarify_choices(kind: str, intent: str = "recap",
+                   schools: Any = (), districts: Any = (),
+                   lang: str = "fr", limit: int = 3) -> list[str]:
+    """Choix cliquables de clarification (questions complètes, fonction pure).
+
+    Chaque choix cite un lieu REÇU (écoles/districts du contexte) : sans
+    lieu, liste vide (l'appelant replie sur les relances actuelles) ; jamais
+    de lieu inventé, jamais d'erreur. Comparaison d'écoles : paires réelles
+    (« Comparer Ngok et Bonanjo ») quand au moins deux écoles sont connues.
+    """
+    try:
+        use_en = str(lang or "").strip().lower().startswith("en")
+        count = max(1, min(int(limit or 3), 10))
+    except (TypeError, ValueError):
+        use_en, count = False, 3
+    code = "en" if use_en else "fr"
+    try:
+        if kind == "district":
+            places: list[str] = []
+            seen: set[str] = set()
+            for district in districts or ():
+                name = str(district or "").strip()
+                key = _norm(name)
+                if name and key and key not in seen:
+                    seen.add(key)
+                    places.append(name)
+            template = _DISTRICT_CHOICE_TEMPLATES.get(
+                intent or "", _DISTRICT_CHOICE_TEMPLATES["recap"])[code]
+            return [template.format(place=p) for p in places[:count]]
+        if kind == "school":
+            shorts: list[str] = []
+            seen_shorts: set[str] = set()
+            for school in schools or ():
+                short = short_school_name(school)
+                key = _norm(short)
+                if short and key and key not in seen_shorts:
+                    seen_shorts.add(key)
+                    shorts.append(short)
+            if not shorts:
+                return []
+            if (intent or "") == "compare" and len(shorts) >= 2:
+                pairs = [(shorts[i], shorts[j])
+                         for i in range(len(shorts))
+                         for j in range(i + 1, len(shorts))][:count]
+                if use_en:
+                    return [f"Compare {a} and {b}" for a, b in pairs]
+                return [f"Comparer {a} et {b}" for a, b in pairs]
+            if (intent or "") == "compare":
+                single = {"fr": "Comparer l'école {place}",
+                          "en": "Compare school {place}"}[code]
+                return [single.format(place=s) for s in shorts[:count]]
+            template = _SCHOOL_CHOICE_TEMPLATES.get(
+                intent or "", _SCHOOL_CHOICE_TEMPLATES["default"])[code]
+            return [template.format(place=s) for s in shorts[:count]]
+        return []
+    except Exception:
+        return []
 
 
 def build_guidance_card(tool_name: str, observation: dict,

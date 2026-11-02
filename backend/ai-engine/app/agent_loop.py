@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ONLY, TOOL_EXECUTORS
-from .guidance import build_guidance_card
+from .guidance import (
+    build_guidance_card,
+    clarify_choices,
+    clarify_question,
+    short_school_name,
+)
 from .guided_voice import guided_turn, resolve_guided_lang
 from .image_analyzer import ImageAnalyzer, decode_chat_image, is_vision_unavailable
 from .place_suggest import suggest_places
@@ -314,6 +319,220 @@ def detect_scope(message: str, context: dict[str, Any] | None) -> dict[str, Any]
     if not schools:
         return {"scope": "district", **result}
     return {"scope": "school", **result}
+
+
+# ---------------------------------------------------------------------------
+# Clarification guidée : périmètre manquant (le lieu exigé n'est pas nommé).
+# « Compare un district ? » sans district : la réponse repose LA question en
+# une phrase et les relances deviennent des choix cliquables tirés du
+# contexte réel, au lieu de laisser le modèle deviner. Questions globales
+# légitimes (comptes, tout-le-territoire, classements, envois) : jamais
+# interceptées. Mémo conversation : un lieu seul (« Mvila ») se rattache à
+# la question précédente en attente via l'historique, sans état serveur.
+# ---------------------------------------------------------------------------
+
+#: Mots (normalisés) qui cadrent « district » au singulier (« mon district »).
+_DISTRICT_PRECEDERS = frozenset({
+    "un", "mon", "ton", "son", "ce", "cet", "quel", "quelle",
+    "le", "du", "au", "en", "dans", "par", "pour", "sur", "vers",
+    "chaque", "de", "d", "notre", "votre",
+    "a", "an", "my", "the", "this", "that", "which", "what",
+    "each", "per", "in", "for", "of", "our", "your",
+})
+
+#: Mots (normalisés) qui cadrent « école »/« school » au singulier.
+_SCHOOL_PRECEDERS = frozenset({
+    "une", "la", "l", "cette", "quelle", "ma", "ta", "sa",
+    "le", "de", "d", "en", "dans", "par", "pour", "sur", "vers",
+    "chaque", "mon", "notre", "votre",
+    "a", "an", "the", "this", "that", "which", "what", "my",
+    "each", "per", "in", "for", "of", "at", "our", "your",
+})
+
+#: Questions globales légitimes (texte normalisé) : jamais interceptées.
+_GLOBAL_OK_RES = (
+    re.compile(r"\bcombien\b|how many|how much"),
+    re.compile(r"\ble plus\b|\bla plus\b|\bles plus\b|\bmost\b|\btop\b|"
+               r"classement|ranking|priorita|besoin d aide|need help"),
+    re.compile(r"\btoutes?\b|\btous\b|\bchaque\b|\ball\b|\bevery\b"),
+    re.compile(r"qui envoyer|envoyer|depech|dispatch|\bsend\b"),
+)
+
+#: Intention de la question (gabarit des choix), testée dans l'ordre.
+_CLARIFY_INTENT_RES = (
+    ("compare", re.compile(r"\bcompar|comparison|\bvs\b|versus")),
+    ("trends", re.compile(r"\btendanc|\btrend")),
+    ("budget", re.compile(r"\bbudget|\bcouts?\b|\bcost")),
+    ("map", re.compile(r"\bcartes?\b|\bmaps?\b|\bwhere\b")),
+    ("journal", re.compile(r"\binterventions?\b|\bjournal|\blogs?\b|"
+                           r"\bhistorique\b|\bhistory\b|\btravaux\b|\brealis")),
+    ("recap", re.compile(r"\bresum|\brecap|\bsummary|\bsynthese|\bbriefing|"
+                         r"\bbilan|\banalys|\betat\b|\bpoint\b")),
+)
+
+#: Mots ignorés autour d'un lieu seul (« le district Mvila », « Mvila »).
+_BARE_PLACE_SKIPS = frozenset({
+    "le", "la", "les", "un", "une", "des", "du", "de", "d", "au", "aux",
+    "a", "mon", "ma", "mes", "ton", "ta", "son", "sa", "ce", "cet",
+    "cette", "notre", "votre",
+    "ecole", "ecoles", "district", "districts", "classe", "classes",
+    "lycee", "lycees", "college", "colleges",
+    "the", "an", "my", "this", "that", "school", "schools",
+})
+
+
+def _scope_framing(message: str) -> tuple[bool, bool]:
+    """Cadrage explicite du périmètre : (district, école) (fonction pure).
+
+    Singulier cadré (« mon district », « l'école », « which district ») ou
+    mot-classe (« classe »). Les pluriels (« les écoles », « districts »)
+    désignent tout l'ensemble : pas de cadrage (question globale).
+    """
+    tokens = re.findall(r"[a-z]+", _norm(message or ""))
+    district = school = False
+    for i, token in enumerate(tokens):
+        prev = tokens[i - 1] if i > 0 else ""
+        if token == "district":
+            if prev in _DISTRICT_PRECEDERS:
+                district = True
+        elif token == "ecole" or token == "school":
+            if prev in _SCHOOL_PRECEDERS:
+                school = True
+        elif token in ("classe", "classes", "class"):
+            school = True
+    return district, school
+
+
+def needs_clarification(
+    message: str,
+    context: dict[str, Any] | None = None,
+    scope: dict[str, Any] | None = None,
+) -> Literal["district", "school"] | None:
+    """Périmètre manquant : "district"/"school" si la question exige un lieu
+    nommé sans le donner, None sinon (fonction pure).
+
+    Déclencheurs : comparaison, district/école/classe au singulier cadré,
+    sans école ni district résolu. Jamais : lieu résolu, question globale
+    légitime (comptes, tout-le-territoire, classements, envois), création
+    (le dossier prepare_* demande déjà l'école), pluriels d'ensemble.
+    """
+    text = message or ""
+    if not text.strip():
+        return None
+    resolved = scope if scope is not None else detect_scope(text, context)
+    if resolved.get("school") or resolved.get("schools") or resolved.get("district"):
+        return None
+    normed = _norm(text)
+    for global_re in _GLOBAL_OK_RES:
+        if global_re.search(normed):
+            return None
+    if router_route(text, PLUGIN_HINTS)["intent"] == "create":
+        return None
+    district_framed, school_framed = _scope_framing(text)
+    signals = detect_scope_signals(text)
+    if signals["territory"] and not (district_framed or school_framed):
+        return None
+    if signals["compare"]:
+        tokens = set(re.findall(r"[a-z]+", normed))
+        if tokens & {"ecoles", "schools", "districts"}:
+            return None
+        if "district" in tokens or district_framed:
+            return "district"
+        return "school"
+    if district_framed:
+        return "district"
+    if school_framed:
+        return "school"
+    return None
+
+
+def _clarify_intent(message: str) -> str:
+    """Intention (compare/trends/budget/map/journal/recap) pour les gabarits."""
+    normed = _norm(message or "")
+    for intent, intent_re in _CLARIFY_INTENT_RES:
+        if intent_re.search(normed):
+            return intent
+    return "recap"
+
+
+def clarify_follow_ups(
+    kind: str,
+    message: str,
+    context: dict[str, Any] | None = None,
+    lang: str = "fr",
+    limit: int = 3,
+) -> list[str]:
+    """Choix cliquables de clarification depuis le contexte réel (fonction pure).
+
+    Questions complètes citant des lieux connus ; [] sans lieu connu
+    (l'appelant replie alors sur les relances actuelles). Jamais d'erreur.
+    """
+    try:
+        schools, districts = known_places(context or {})
+    except (AttributeError, TypeError, ValueError):
+        return []
+    return clarify_choices(kind, _clarify_intent(message), schools, districts,
+                           lang=lang, limit=limit)
+
+
+def _with_clarify_question(answer: str, kind: str, lang: str) -> str:
+    """Panorama + question de clarification (une phrase, sans doublon)."""
+    question = clarify_question(kind, lang)
+    if not answer or not answer.strip():
+        return question
+    normed = _norm(answer)
+    for candidate in (question, clarify_question(
+            "school" if kind == "district" else "district", lang)):
+        if _norm(candidate.rstrip("? ")) in normed:
+            return answer
+    return f"{answer.strip()} {question}"
+
+
+def _last_user_turn(history: Any) -> str:
+    """Contenu du dernier tour utilisateur (ChatTurn ou dict), "" sinon."""
+    for turn in reversed(history or []):
+        if isinstance(turn, dict):
+            role, content = turn.get("role"), turn.get("content")
+        else:
+            role, content = getattr(turn, "role", None), getattr(turn, "content", None)
+        if role == "user" and content and str(content).strip():
+            return str(content)
+    return ""
+
+
+def resolve_bare_place_followup(
+    message: str,
+    history: Any,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Rattache un lieu seul à la question précédente en attente (fonction pure).
+
+    « Mvila » après « Compare un district ? » -> « Compare un district
+    Mvila » (l'intention compare/tendances/récap reprend). Inchangé si le
+    message n'est pas un lieu seul, sans historique, ou si la question
+    précédente n'attendait aucun lieu. Sans état serveur : que l'historique.
+    """
+    text = message or ""
+    stripped = text.strip()
+    if not stripped or len(stripped) > 40 or len(stripped.split()) > 4:
+        return text
+    place = resolve_place(stripped, context or {})
+    if place is None:
+        return text
+    label_tokens = set(re.findall(r"[a-z]+", _norm(place[1])))
+    leftovers = [t for t in re.findall(r"[a-z]+", _norm(stripped))
+                 if len(t) >= 4 and t not in label_tokens
+                 and t not in _BARE_PLACE_SKIPS]
+    if leftovers:
+        return text
+    previous = _last_user_turn(history)
+    if not previous or needs_clarification(previous, context) is None:
+        return text
+    base = previous.strip()
+    while base and base[-1] in "?!":
+        base = base[:-1].rstrip()
+    label = short_school_name(place[1]) if place[0] == "school" else place[1]
+    return f"{base} {label}"
 
 
 def _single_school_scope(scope: dict[str, Any] | None) -> str | None:
@@ -1337,6 +1556,11 @@ class AgentLoop:
 
     async def chat(self, req: AgentChatRequest) -> AgentChatResponse:
         context = req.context.model_dump()
+        # Mémo conversation : un lieu seul (« Mvila ») reprend la question
+        # précédente en attente via l'historique (sans état serveur).
+        memo_message = resolve_bare_place_followup(req.message, req.history, context)
+        if memo_message != req.message:
+            req = req.model_copy(update={"message": memo_message})
         # CANAL 3 : dialogue guidé vocal (opt-in). Hors signalement, guided_turn
         # retourne None et le flux normal ci-dessous est strictement inchangé.
         if getattr(req, "guided", False):
@@ -1375,6 +1599,9 @@ class AgentLoop:
             photo_mime = CHAT_IMAGE_DEFAULT_MIME
         lang = _resolve_lang(req)
         scope_info = detect_scope(req.message, context)
+        # Clarification guidée : périmètre exigé mais non nommé (« Compare un
+        # district ? ») -> question + choix cliquables du contexte réel.
+        clarify_kind = needs_clarification(req.message, context, scope_info)
         intent = route_intent(req.message)
         active_tools = compact_tools(tools_for_intent(intent, scope_info), self.llm.model)
         messages: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(lang, scope_info)}]
@@ -1474,6 +1701,9 @@ class AgentLoop:
         answer = strip_other_school_mentions(answer, scope_info, context)
         if not answer.strip():
             answer = self._fallback_answer(executed, context, photo, scope=scope_info)
+        # Clarification guidée : panorama court + LA question en une phrase.
+        if clarify_kind is not None:
+            answer = _with_clarify_question(answer, clarify_kind, lang)
         cards = self._build_cards(executed, context, photo=photo, scope=scope_info)
         # Annonce-carte sans carte construite : force la carte si des écoles
         # avec lat/lng existent (petit LLM : CAS "voici la carte..." seul).
@@ -1488,12 +1718,19 @@ class AgentLoop:
                     title="Quel lieu vouliez-vous dire ?",
                     data=suggest,
                 ))
+        follow_ups = _follow_ups(req.message, executed, context, scope_info)
+        if clarify_kind is not None:
+            # Choix cliquables du contexte réel ; sans lieu connu, repli sur
+            # les relances actuelles (puis démarrage) : jamais vide, jamais
+            # d'erreur.
+            follow_ups = (clarify_follow_ups(clarify_kind, req.message, context, lang)
+                          or follow_ups or list(STARTER_CHIPS))
         return AgentChatResponse(
             answer=answer.strip(),
             tools_executed=[name for name, _ in executed],
             cards=cards,
             model_used=self.llm.model,
-            follow_ups=_follow_ups(req.message, executed, context, scope_info),
+            follow_ups=follow_ups,
         )
 
     def _execute_tool(self, name: str, arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

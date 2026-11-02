@@ -86,6 +86,11 @@ AGENT_RULES: tuple[str, ...] = (
     "= talk only about that school).",
     "N'invente aucune comparaison entre écoles que l'utilisateur n'a pas "
     "demandée explicitement (EN: never invent unrequested comparisons).",
+    "Si le district ou l'école nécessaire à la réponse n'est pas nommé, "
+    "demande-le en proposant les choix du contexte au lieu de deviner, "
+    "sans inventer aucun nom de lieu (EN: if the needed district or school "
+    "is unnamed, ask for it with context choices instead of guessing, "
+    "never invent a place name).",
 )
 
 AGENT_OUTPUT_CONTRACT = (
