@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .thresholds import DUPLICATE_DECISION_THRESHOLD
 
@@ -54,6 +56,13 @@ DEFAULT_STT_DRIVER = "whisper_cpp"
 
 #: Nom de fichier de l'échantillon audio de test STT.
 DEFAULT_STT_TEST_FILENAME = "test.wav"
+
+#: Taille max d'une photo envoyée au chat agent (base64 décodé, en octets).
+#: Au-delà, la requête est rejetée (422) avant tout appel LLM.
+CHAT_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+#: MIME supposé quand Laravel envoie une image sans type explicite.
+CHAT_IMAGE_DEFAULT_MIME = "image/jpeg"
 
 
 # ==========================================
@@ -386,6 +395,33 @@ class AgentChatRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list, description="Historique court de conversation")
     context: AgentContext = Field(default_factory=AgentContext, description="Données factuelles fournies par Laravel")
     guided: bool = Field(False, description="CANAL 3 : dialogue guidé vocal par slots pour les signalements")
+    image_base64: str | None = Field(None, description="Photo jointe encodée en base64 (base64 décodé ≤ 10 Mo)")
+    image_mime: str | None = Field(None, description="Type MIME de la photo (ex. 'image/jpeg')")
+
+    @field_validator("image_base64")
+    @classmethod
+    def _check_image_size(cls, value: str | None) -> str | None:
+        """Rejette les photos > 10 Mo (base64 décodé) ou au base64 invalide.
+
+        Lève ValueError -> FastAPI répond 422, avant tout appel LLM.
+        Un éventuel préfixe data-URL et les blancs sont ignorés pour la mesure.
+        """
+        if value is None:
+            return None
+        raw = value.strip()
+        if raw.startswith("data:") and ";base64," in raw:
+            raw = raw.split(";base64,", 1)[1]
+        raw = "".join(raw.split())
+        try:
+            decoded_size = len(base64.b64decode(raw, validate=True))
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("image_base64 invalide : base64 illisible") from exc
+        if decoded_size > CHAT_IMAGE_MAX_BYTES:
+            raise ValueError(
+                f"image trop lourde : {decoded_size} octets décodés "
+                f"(max {CHAT_IMAGE_MAX_BYTES}, soit 10 Mo)"
+            )
+        return value
 
 
 # Source unique de vérité des types de cartes (AXE 7) : tout type émis

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -11,6 +12,7 @@ from typing import Any, Literal
 from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ONLY, TOOL_EXECUTORS
 from .guidance import build_guidance_card
 from .guided_voice import guided_turn, resolve_guided_lang
+from .image_analyzer import ImageAnalyzer, decode_chat_image, is_vision_unavailable
 from .place_suggest import suggest_places
 from .prompts import SMALL_MODEL_RE, render_agent_prompt
 
@@ -38,7 +40,13 @@ def _env_int(name: str, default: int) -> int:
 from .providers import BaseLLMProvider
 from .router import is_data_question
 from .router import route as router_route
-from .schemas import AgentCard, AgentChatRequest, AgentChatResponse
+from .schemas import (
+    CHAT_IMAGE_DEFAULT_MIME,
+    AgentCard,
+    AgentChatRequest,
+    AgentChatResponse,
+    ImageAnalysisResponse,
+)
 
 #: Prompt système : rendu neutre des sections prompts.agent_sections()
 #: (mêmes règles comportementales, une phrase par règle).
@@ -937,6 +945,53 @@ def maybe_force_map_card(
     return cards
 
 
+#: Type de la carte d'analyse photo (rendu AgentCards.tsx géré en parallèle
+#: côté frontend ; le backend émet ce type via une constante pour garder le
+#: contrat de parité vert tant que le case frontend n'existe pas — voir
+#: tests/test_card_contracts.py — puis repasser au littéral + CardType).
+PHOTO_ANALYSIS_CARD_TYPE = "photo_analysis"
+
+#: Marqueur d'injection du résumé photo dans le message user (le LLM
+#: commente l'analyse, il ne devine rien).
+PHOTO_CONTEXT_PREFIX = (
+    "[Photo jointe — analyse automatique, commente-la sans rien inventer : "
+)
+
+
+def summarize_photo_analysis(photo: ImageAnalysisResponse) -> str:
+    """Résumé FR déterministe d'une analyse photo (fonction pure).
+
+    Injecté dans le contexte de conclusion : le LLM commente ce résumé
+    (et voit la photo au premier tour) au lieu de deviner. Vision en
+    panne -> consigne explicite de ne pas décrire la photo.
+    """
+    if is_vision_unavailable(photo):
+        reason = photo.vision_error or "raison inconnue"
+        return (
+            f"Photo fournie mais analyse vision indisponible ({reason}). "
+            "Ne décris pas la photo, propose de renvoyer une photo nette."
+        )
+    if not photo.is_wash_related:
+        return (
+            "La photo fournie ne montre pas d'infrastructure WASH "
+            "(hors sujet, sévérité 0/100). Signale-le poliment, "
+            "sans décrire de panne."
+        )
+    try:
+        severity = int(round(float(photo.visual_severity_score)))
+    except (TypeError, ValueError):
+        severity = 0
+    severity = max(0, min(100, severity))
+    hazard = "oui" if photo.health_hazard_detected else "non"
+    return (
+        f"Photo analysée : {photo.infrastructure_detected} — "
+        f"{photo.visible_damage} "
+        f"Sévérité visuelle : {severity}/100. "
+        f"Danger sanitaire visible : {hazard}. "
+        f"Note technicien : {photo.technician_notes}"
+    )
+
+
 class AgentLoop:
     """Boucle agentique réelle : le LLM choisit ses outils, Python les exécute."""
 
@@ -961,6 +1016,26 @@ class AgentLoop:
             if turn is not None and turn.get("status") == "confirmed":
                 # Bascule sur le flux normal avec le signalement reconstitué.
                 req = req.model_copy(update={"message": turn["report_text"]})
+        # VISION : photo jointe -> analyse (ImageAnalyzer, sans duplication)
+        # + résumé déterministe injecté en contexte. Sans image, photo vaut
+        # None et tout le flux ci-dessous est strictement inchangé.
+        photo: ImageAnalysisResponse | None = None
+        photo_summary = ""
+        photo_send: str | None = None
+        photo_b64 = (req.image_base64 or "").strip() or None
+        if photo_b64 is not None:
+            photo_mime = req.image_mime or CHAT_IMAGE_DEFAULT_MIME
+            photo = await ImageAnalyzer(self.llm).analyze_base64(photo_b64, photo_mime)
+            photo_summary = summarize_photo_analysis(photo)
+            try:
+                photo_send = (
+                    base64.b64encode(decode_chat_image(photo_b64)).decode("ascii")
+                    or None
+                )
+            except ValueError:
+                photo_send = None
+        else:
+            photo_mime = CHAT_IMAGE_DEFAULT_MIME
         lang = _resolve_lang(req)
         intent = route_intent(req.message)
         active_tools = compact_tools(tools_for_intent(intent), self.llm.model)
@@ -969,6 +1044,8 @@ class AgentLoop:
         user_content = req.message
         if req.history and intent == "other":
             user_content += followup_hint(req.message, context)
+        if photo_summary:
+            user_content += f"\n\n{PHOTO_CONTEXT_PREFIX}{photo_summary}]"
         messages.append({"role": "user", "content": user_content})
 
         started = time.monotonic()
@@ -978,6 +1055,7 @@ class AgentLoop:
         answer = ""
         used_iterations = 0
         budget = {"llm_calls": 0}
+        vision_sent = False
         for _ in range(MAX_ITERATIONS):
             if time.monotonic() - started > RUN_BUDGET_S:
                 break
@@ -985,7 +1063,12 @@ class AgentLoop:
                 break
             used_iterations += 1
             budget["llm_calls"] += 1
-            reply = await self.llm.chat(messages, active_tools)
+            if photo_send is not None and not vision_sent:
+                vision_sent = True
+                reply = await self._vision_first_turn(
+                    messages, active_tools, photo_send, photo_mime)
+            else:
+                reply = await self.llm.chat(messages, active_tools)
             messages.append(reply["raw"])
             calls = reply.get("tool_calls", [])
             if not calls:
@@ -1009,22 +1092,23 @@ class AgentLoop:
                     break
                 nudged = True
         else:
-            answer = self._fallback_answer(executed, context)
+            answer = self._fallback_answer(executed, context, photo)
 
         over_budget = time.monotonic() - started > RUN_BUDGET_S
         if (not executed and answer.strip()
                 and self._looks_like_data_question(req.message)
                 and not over_budget):
             answer = await self._force_tool_pass(
-                messages, context, executed, active_tools, budget)
+                messages, context, executed, active_tools, budget, photo=photo)
 
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            answer = self._fallback_answer(executed, context)
+            answer = self._fallback_answer(executed, context, photo)
 
         if answer.strip() and _claims_absence(answer) and not _has_read_tool(executed):
             if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
-                    messages, context, executed, seen, active_tools, budget)
+                    messages, context, executed, seen, active_tools, budget,
+                    photo=photo)
             else:
                 answer = UNVERIFIED_HONEST_ANSWER
 
@@ -1033,14 +1117,14 @@ class AgentLoop:
             if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
                     messages, context, executed, seen, active_tools, budget,
-                    nudge=CONTRADICTION_CORRECTION_NUDGE)
+                    nudge=CONTRADICTION_CORRECTION_NUDGE, photo=photo)
             else:
-                answer = self._fallback_answer(executed, context)
+                answer = self._fallback_answer(executed, context, photo)
 
         # Réparation déterministe AVANT envoi : puces vides remplies depuis
         # les observations, placeholders [...] supprimés (fonctions pures).
         answer = repair_final_answer(answer, executed)
-        cards = self._build_cards(executed, context)
+        cards = self._build_cards(executed, context, photo=photo)
         # Annonce-carte sans carte construite : force la carte si des écoles
         # avec lat/lng existent (petit LLM : CAS "voici la carte..." seul).
         cards = maybe_force_map_card(answer, executed, cards, context)
@@ -1071,6 +1155,28 @@ class AgentLoop:
         except Exception as exc:
             return {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
+    async def _vision_first_turn(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        image_base64: str,
+        image_mime: str,
+    ) -> dict[str, Any]:
+        """Premier tour avec photo : le LLM voit l'image si possible.
+
+        Provider sans support (méthode absente, NotImplementedError) ou
+        appel vision en échec -> repli texte immédiat sur le même contexte
+        (qui contient déjà le résumé déterministe) : jamais de crash.
+        """
+        chat_with_image = getattr(self.llm, "chat_with_image", None)
+        if chat_with_image is None:
+            return await self.llm.chat(messages, tools)
+        try:
+            return await chat_with_image(messages, image_base64, image_mime, tools)
+        except Exception as exc:
+            print(f"[agent] chat vision indisponible ({type(exc).__name__}), repli texte.")
+            return await self.llm.chat(messages, tools)
+
     @staticmethod
     def _looks_like_data_question(message: str) -> bool:
         """Heuristique large : en cas de doute on exige un outil.
@@ -1088,6 +1194,7 @@ class AgentLoop:
         executed: list[tuple[str, dict[str, Any]]],
         tools: list[dict[str, Any]] | None = None,
         budget: dict[str, int] | None = None,
+        photo: ImageAnalysisResponse | None = None,
     ) -> str:
         """Dernier recadrage : réponse directe à une question de données.
 
@@ -1098,7 +1205,7 @@ class AgentLoop:
         tools = AGENT_TOOLS if tools is None else tools
         budget = {"llm_calls": 0} if budget is None else budget
         if budget["llm_calls"] >= MAX_LLM_CALLS:
-            return self._fallback_answer(executed, context)
+            return self._fallback_answer(executed, context, photo)
         messages.append({"role": "user", "content": NO_TOOL_NUDGE})
         budget["llm_calls"] += 1
         retry = await self.llm.chat(messages, tools)
@@ -1110,15 +1217,15 @@ class AgentLoop:
             executed.append((name, observation))
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not executed:
-            return self._fallback_answer(executed, context)
+            return self._fallback_answer(executed, context, photo)
         if budget["llm_calls"] >= MAX_LLM_CALLS:
-            return self._fallback_answer(executed, context)
+            return self._fallback_answer(executed, context, photo)
         budget["llm_calls"] += 1
         final = await self.llm.chat(messages, tools)
         messages.append(final["raw"])
         answer = final.get("content", "")
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            return self._fallback_answer(executed, context)
+            return self._fallback_answer(executed, context, photo)
         return answer
 
     async def _absence_correction_pass(
@@ -1130,6 +1237,7 @@ class AgentLoop:
         tools: list[dict[str, Any]],
         budget: dict[str, int] | None = None,
         nudge: str = ABSENCE_CORRECTION_NUDGE,
+        photo: ImageAnalysisResponse | None = None,
     ) -> str:
         """Recadrage anti-hallucination : absence affirmée sans lecture
         (ou contradiction référence + absence, via un nudge adapté).
@@ -1141,7 +1249,7 @@ class AgentLoop:
         """
         budget = {"llm_calls": 0} if budget is None else budget
         if budget["llm_calls"] >= MAX_LLM_CALLS:
-            return self._fallback_answer(executed, context)
+            return self._fallback_answer(executed, context, photo)
         messages.append({"role": "user", "content": nudge})
         budget["llm_calls"] += 1
         retry = await self.llm.chat(messages, tools)
@@ -1161,13 +1269,13 @@ class AgentLoop:
         if not _has_read_tool(executed):
             return UNVERIFIED_HONEST_ANSWER
         if budget["llm_calls"] >= MAX_LLM_CALLS:
-            return self._fallback_answer(executed, context)
+            return self._fallback_answer(executed, context, photo)
         budget["llm_calls"] += 1
         final = await self.llm.chat(messages, tools)
         messages.append(final["raw"])
         answer = final.get("content", "")
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
-            return self._fallback_answer(executed, context)
+            return self._fallback_answer(executed, context, photo)
         return answer
 
     def _is_bogus_refusal(self, answer: str, executed: list[tuple[str, dict[str, Any]]]) -> bool:
@@ -1185,11 +1293,14 @@ class AgentLoop:
         self,
         executed: list[tuple[str, dict[str, Any]]],
         context: dict[str, Any] | None = None,
+        photo: ImageAnalysisResponse | None = None,
     ) -> str:
         """Résumé humain déterministe quand le modèle ne conclut pas.
 
         Prend la dernière observation réussie et la raconte en une phrase
         chiffrée qui pointe vers la carte (pas de jargon robotique).
+        Sans observation d'outil mais avec photo : le résumé photo
+        déterministe (le LLM commente, ne devine pas — y compris ici).
         """
         for name, observation in reversed(executed):
             if "error" in observation:
@@ -1208,6 +1319,11 @@ class AgentLoop:
                 "district de Wouri ». Demandez par exemple : « Quelles écoles "
                 "ont le plus besoin d'aide ? » ou « Montrez la carte du "
                 "territoire »."
+            )
+        if photo is not None:
+            return (
+                f"{summarize_photo_analysis(photo)} "
+                "Le détail est dans la carte ci-dessous."
             )
         districts = known_places(context or {})[1] if context else []
         if districts:
@@ -1229,8 +1345,21 @@ class AgentLoop:
         )
 
     def _build_cards(self, executed: list[tuple[str, dict[str, Any]]],
-                     context: dict[str, Any] | None = None) -> list[AgentCard]:
+                     context: dict[str, Any] | None = None,
+                     photo: ImageAnalysisResponse | dict[str, Any] | None = None,
+                     ) -> list[AgentCard]:
         cards: list[AgentCard] = []
+        if photo is not None:
+            obs = photo.model_dump() if hasattr(photo, "model_dump") else dict(photo)
+            if obs.get("vision_unavailable"):
+                title = "Analyse photo — vision indisponible"
+            else:
+                title = f"Analyse photo — {obs.get('infrastructure_detected', '?')}"
+            cards.append(AgentCard(
+                type=PHOTO_ANALYSIS_CARD_TYPE,
+                title=title,
+                data=obs,
+            ))
         district_examples: str | None = None
         if context:
             try:

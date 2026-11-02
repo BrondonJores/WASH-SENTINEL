@@ -39,6 +39,7 @@ le triage continue sur le texte seul.
 """
 
 import base64
+import binascii
 import os
 
 from .providers import (
@@ -54,6 +55,7 @@ __all__ = [
     "VISION_UNAVAILABLE_MARKER",
     "WASH_VISION_SYSTEM",
     "ImageAnalyzer",
+    "decode_chat_image",
     "is_vision_unavailable",
     "resolve_vision_model",
     "vision_unavailable_response",
@@ -125,6 +127,23 @@ def vision_unavailable_response(reason: str) -> ImageAnalysisResponse:
     )
 
 
+def decode_chat_image(image_base64: str) -> bytes:
+    """Décode une image base64 du chat (unique point de décodage).
+
+    Tolère un préfixe data-URL (``data:...;base64,``) et les blancs.
+    Lève ValueError si le base64 est illisible (l'appelant décide : 422
+    côté schéma, repli « vision indisponible » côté boucle agent).
+    """
+    raw = (image_base64 or "").strip()
+    if raw.startswith("data:") and ";base64," in raw:
+        raw = raw.split(";base64,", 1)[1]
+    raw = "".join(raw.split())
+    try:
+        return base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("image base64 illisible") from exc
+
+
 def is_vision_unavailable(response: ImageAnalysisResponse) -> bool:
     """Vrai si le diagnostic est un repli « vision indisponible » (pas un 0 legitime)."""
     haystack = " ".join((
@@ -180,6 +199,23 @@ class ImageAnalyzer:
                 pass
         else:
             self.vision_model = getattr(llm, "vision_model", None) or resolve_vision_model()
+
+    async def analyze_base64(
+        self, image_base64: str, mime: str | None = None
+    ) -> ImageAnalysisResponse:
+        """Pont chat -> vision : décode le base64 puis analyse (sans lever).
+
+        ``mime`` est accepté pour le contrat inter-agents (les drivers
+        actuels n'en ont pas besoin : Ollama prend le b64 brut, le driver
+        OpenAI forme son data-URL lui-même). Base64 illisible -> repli
+        « vision indisponible » explicite, jamais d'exception.
+        """
+        _ = mime  # contrat accepté, sans usage par les drivers actuels
+        try:
+            image_bytes = decode_chat_image(image_base64)
+        except ValueError as exc:
+            return vision_unavailable_response(str(exc))
+        return await self.analyze(image_bytes)
 
     async def analyze(self, image_bytes: bytes) -> ImageAnalysisResponse:
         """Analyse la photo ; en cas de panne vision, repli explicite (sans lever)."""

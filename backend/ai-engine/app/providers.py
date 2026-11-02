@@ -512,9 +512,63 @@ class BaseLLMProvider:
         """
         raise NotImplementedError
 
+    async def chat_with_image(
+        self,
+        messages: list[dict[str, Any]],
+        image_base64: str,
+        image_mime: str = "image/jpeg",
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Conversation en voyant la photo jointe (même retour que chat()).
+
+        Implémentation par défaut : NotImplementedError — l'appelant
+        (boucle agent) replie alors sur le chat texte avec le résumé
+        déterministe de l'analyse vision. Ne jamais laisser fuir
+        l'exception jusqu'à l'utilisateur : repli texte, jamais de crash.
+        """
+        raise NotImplementedError(
+            f"{self.provider_name} ne supporte pas la vision dans le chat."
+        )
+
     def format_tool_result(self, name: str, result: Any, call_id: str | None = None) -> dict[str, Any]:
         """Forme le message d'observation d'outil au format natif du provider."""
         raise NotImplementedError
+
+
+def _openai_multimodal_messages(
+    messages: list[dict[str, Any]], image_base64: str, image_mime: str
+) -> list[dict[str, Any]]:
+    """Copie des messages dont le dernier user devient multimodal (fonction pure).
+
+    Contenu OpenAI : [{"type": "text", ...}, {"type": "image_url", ...}].
+    Sans message user texte : liste inchangée (jamais de crash).
+    """
+    mime = image_mime if image_mime and "/" in image_mime else "image/jpeg"
+    converted = [dict(m) for m in messages]
+    for message in reversed(converted):
+        if message.get("role") == "user" and isinstance(message.get("content"), str):
+            message["content"] = [
+                {"type": "text", "text": message["content"]},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{mime};base64,{image_base64}"}},
+            ]
+            break
+    return converted
+
+
+def _ollama_image_messages(
+    messages: list[dict[str, Any]], image_base64: str
+) -> list[dict[str, Any]]:
+    """Copie des messages dont le dernier user porte images:[b64] (fonction pure).
+
+    Format /api/chat natif Ollama. Sans message user : inchangé.
+    """
+    converted = [dict(m) for m in messages]
+    for message in reversed(converted):
+        if message.get("role") == "user":
+            message["images"] = [image_base64]
+            break
+    return converted
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -680,8 +734,31 @@ class OllamaProvider(BaseLLMProvider):
     async def chat(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
+        return await self._chat_with_model(messages, tools, self.model)
+
+    async def chat_with_image(
+        self,
+        messages: list[dict[str, Any]],
+        image_base64: str,
+        image_mime: str = "image/jpeg",
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Chat /api/chat en voyant la photo (dernier user + images:[b64]).
+
+        Utilise le modèle vision (le modèle texte ne sait pas voir).
+        `image_mime` accepté pour le contrat, sans usage (b64 brut suffit).
+        """
+        _ = image_mime
+        return await self._chat_with_model(
+            _ollama_image_messages(messages, image_base64), tools, self.vision_model
+        )
+
+    async def _chat_with_model(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
+        model: str,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "stream": False,
             "options": {"temperature": LLM_TEMPERATURE},
@@ -690,16 +767,16 @@ class OllamaProvider(BaseLLMProvider):
             payload["tools"] = tools
         try:
             response = await self._post_with_retry(f"{self.base_url}/api/chat", payload)
-            raise_for_ollama(response, self.model)
+            raise_for_ollama(response, model)
         except httpx.HTTPStatusError as exc:
             if not tools or exc.response.status_code != 400:
                 raise
             # Petit modèle sans function-calling (ex. gemma 1B/2B) :
             # on rejoue sans outils plutôt que d'échouer.
-            print(f"[ollama] {self.model} refuse les outils (400), repli sans tools.")
+            print(f"[ollama] {model} refuse les outils (400), repli sans tools.")
             payload = {k: v for k, v in payload.items() if k != "tools"}
             response = await self._post_with_retry(f"{self.base_url}/api/chat", payload)
-            raise_for_ollama(response, self.model)
+            raise_for_ollama(response, model)
         msg = response.json().get("message", {})
         calls: list[dict[str, Any]] = []
         for tc in msg.get("tool_calls", []) or []:
@@ -919,7 +996,30 @@ class OpenAICompatibleProvider(BaseLLMProvider):
     async def chat(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": LLM_TEMPERATURE}
+        return await self._chat_with_model(messages, tools, self.model)
+
+    async def chat_with_image(
+        self,
+        messages: list[dict[str, Any]],
+        image_base64: str,
+        image_mime: str = "image/jpeg",
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Chat /chat/completions en voyant la photo (contenu multimodal).
+
+        Dernier message user -> content=[{type:text},{type:image_url,...}].
+        Utilise le modèle vision (= modèle texte par défaut).
+        """
+        return await self._chat_with_model(
+            _openai_multimodal_messages(messages, image_base64, image_mime),
+            tools, self.vision_model,
+        )
+
+    async def _chat_with_model(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None,
+        model: str,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"model": model, "messages": messages, "temperature": LLM_TEMPERATURE}
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
