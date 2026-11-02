@@ -91,6 +91,15 @@ AGENT_RULES: tuple[str, ...] = (
     "sans inventer aucun nom de lieu (EN: if the needed district or school "
     "is unnamed, ask for it with context choices instead of guessing, "
     "never invent a place name).",
+    "Si une photo est jointe et que la question porte uniquement sur elle, "
+    "commente-la sans appeler d'outil ni citer d'autres chiffres (EN: with "
+    "a photo and a photo-only question, comment on it without tools or "
+    "other counts).",
+    "Si une période est demandée (aujourd'hui, hier, cette semaine, ce "
+    "mois-ci), filtre strictement sur cette période, dis la période et le "
+    "compte, sans jamais la mélanger avec le stock général (EN: with a "
+    "requested period, filter strictly on it, state the period and the "
+    "count, never mix it with the general stock).",
 )
 
 AGENT_OUTPUT_CONTRACT = (

@@ -43,3 +43,29 @@ MAX_ECOLE_OPTIONS = 6
 
 #: Score difflib minimal pour apparier un incident par titre flou.
 INCIDENT_FUZZY_MIN_RATIO = 0.6
+
+# ---------------------------------------------------------------------------
+# Périmètre temporel du chat agent (parse_time_window, agent_loop).
+# « Aujourd'hui » = date du serveur (SERVER_DATE_TZ), documentée une fois
+# ici : aucun fuseau inventé, aucune conversion cachée. Les lignes sont
+# comparées en date civile (pas datetime), bornes incluses. Sans période
+# exprimée, le contexte d'exécution est inchangé (général = ouverts).
+# ---------------------------------------------------------------------------
+
+#: Fuseau de la date serveur servant de référence à « aujourd'hui ».
+SERVER_DATE_TZ = "UTC"
+#: Fenêtre glissante « 7 derniers jours » (jours, bornes incluses).
+TIME_WINDOW_LAST_7D_DAYS = 7
+#: Fenêtre glissante « 30 derniers jours » (jours, bornes incluses).
+TIME_WINDOW_LAST_30D_DAYS = 30
+#: Presets reconnus par parse_time_window (+ "last_{N}d" dynamique).
+TIME_WINDOW_PRESETS = (
+    "today",
+    "yesterday",
+    "last_7d",
+    "last_30d",
+    "this_week",
+    "this_month",
+    "this_year",
+    "since",
+)

@@ -6,10 +6,19 @@ import os
 import re
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
-from .agent_tools import AGENT_TOOLS, PLUGIN_CARDS, PLUGIN_HINTS, PLUGIN_READ_ONLY, TOOL_EXECUTORS
+from .agent_tools import (
+    AGENT_TOOLS,
+    PLUGIN_CARDS,
+    PLUGIN_HINTS,
+    PLUGIN_READ_ONLY,
+    TOOL_EXECUTORS,
+    open_incidents_in_scope,
+    open_incidents_in_window,
+    scope_context_to_window,
+)
 from .guidance import (
     build_guidance_card,
     clarify_choices,
@@ -52,6 +61,7 @@ from .schemas import (
     AgentChatResponse,
     ImageAnalysisResponse,
 )
+from .tool_consts import TIME_WINDOW_LAST_7D_DAYS, TIME_WINDOW_LAST_30D_DAYS
 
 #: Prompt système : rendu neutre des sections prompts.agent_sections()
 #: (mêmes règles comportementales, une phrase par règle).
@@ -120,8 +130,11 @@ def tools_for_intent(intent: str, scope: dict[str, Any] | None = None) -> list[d
 
     Périmètre école unique : les outils district/territoire/comparaison sont
     aussi masqués (le garde-fou d'exécution _blocked_by_scope reste premier).
+    Périmètre photo : aucun outil exposé (commentaire de la photo seule).
     scope=None (ou périmètre large) = comportement historique.
     """
+    if _is_photo_scope(scope):
+        return []
     if intent == "list":
         tools = [t for t in AGENT_TOOLS
                  if not t.get("function", {}).get("name", "").startswith("prepare_")]
@@ -319,6 +332,554 @@ def detect_scope(message: str, context: dict[str, Any] | None) -> dict[str, Any]
     if not schools:
         return {"scope": "district", **result}
     return {"scope": "school", **result}
+
+
+# ---------------------------------------------------------------------------
+# Périmètre PHOTO : image jointe + question portant sur l'image seule.
+# « Qu'est-ce que tu vois ? » + photo (même hors sujet WASH) ne doit ni
+# appeler d'outil ni émettre de carte district/territoire/alertes/synthèse :
+# carte photo_analysis UNIQUEMENT, synthèse = commentaire de la photo seule.
+# Question mixte explicite (« analyse cette photo et résume Mvila ») : les
+# deux périmètres restent autorisés (photo + demande explicite).
+# ---------------------------------------------------------------------------
+
+#: Mots désignant la photo jointe (texte normalisé, cf. _norm).
+_PHOTO_WORDS = frozenset({
+    "photo", "photos", "picture", "pictures", "image", "images",
+    "pic", "pics", "cliche", "cliches", "snapshot", "snapshots",
+    "selfie", "selfies",
+})
+
+#: La question porte sur l'image (FR + EN, normalisé, apostrophes -> espace) :
+#: vision, description, avis, analyse d'un élément désigné (« ça », « this »).
+_PHOTO_ABOUT_RES = (
+    re.compile(r"\bvois\b|\bvoyez\b|\bvoient\b|\bvoir\b|do you see|can you see"),
+    re.compile(r"\bqu ?est ce\b|\bc ?est quoi\b"
+               r"|\bwhat ?s (this|that|these|those|it|here)\b"
+               r"|\bwhat is (this|that|these|those|it|here)\b"
+               r"|\bwhat are (these|those)\b"),
+    re.compile(r"\bdecris\b|\bdecrit\b|\bdecrire\b|\bdescribe\b"),
+    re.compile(r"tu en penses|qu en penses|what do you think"
+               r"|\bton avis\b|your opinion|que penses tu"),
+    re.compile(r"\bcommente\b|\bcomment\b|look at|\bregarde\b"),
+    re.compile(r"analys\w*\s+(cette?|ca|cela|ceci|ceux|celles?|\bce\b|"
+               r"this|that|these|those|it|them)\b"),
+)
+
+#: Mots courts qui cadrent une question photo de 1-2 tokens (« et ça ? »).
+_PHOTO_SHORT_WORDS = frozenset({
+    "ca", "ceci", "cela", "this", "that", "these", "those", "it",
+    "quoi", "que", "hein", "alors", "voila", "voici",
+})
+
+#: Verbes de demande retirés du résidu testé pour l'intention mixte
+#: (« montre-moi ce que tu vois » : « montre » vise la photo, pas les données).
+_PHOTO_PROBE_EXTRA_RES = (
+    re.compile(r"\bmontre\b|\bmontrez\b|\baffiche\b|\baffichez\b"
+               r"|\bshow\b|\btell\b|\bdis\b|\bdites\b"),
+)
+
+
+def _photo_norm(message: str) -> str:
+    """Texte normalisé pour les motifs photo (apostrophes/tirets -> espace)."""
+    return re.sub(r"[''’`\-]", " ", _norm(message or ""))
+
+
+def is_photo_question(message: str) -> bool:
+    """La question porte-t-elle sur l'image jointe ? (fonction pure, FR+EN).
+
+    Photo sans texte (blanc), mention de la photo, ou motif vision /
+    description / avis / analyse désignée. Sans image jointe, l'appelant
+    ignore ce signal (voir is_photo_only_scope).
+    """
+    normed = _photo_norm(message)
+    tokens = re.findall(r"[a-z0-9]+", normed)
+    if not tokens:
+        return True
+    if any(token in _PHOTO_WORDS for token in tokens):
+        return True
+    if any(rx.search(normed) for rx in _PHOTO_ABOUT_RES):
+        return True
+    return len(tokens) <= 2 and any(t in _PHOTO_SHORT_WORDS for t in tokens)
+
+
+def _photo_probe(message: str) -> str:
+    """Message privé de ses mentions/demandes photo (intention résiduelle).
+
+    Sert à tester l'intention mixte : si le résidu route encore vers une
+    consultation/création ou une question de données, les deux périmètres
+    sont autorisés (photo + demande explicite).
+    """
+    normed = _photo_norm(message)
+    for rx in _PHOTO_ABOUT_RES + _PHOTO_PROBE_EXTRA_RES:
+        normed = rx.sub(" ", normed)
+    return " ".join(t for t in re.findall(r"[a-z0-9]+", normed)
+                    if t not in _PHOTO_WORDS)
+
+
+def is_photo_only_scope(message: str, context: dict[str, Any] | None = None,
+                        has_image: bool = False) -> bool:
+    """Périmètre PHOTO exclusif (fonction pure).
+
+    Vrai quand une image est jointe ET que la question porte sur l'image
+    sans autre intention explicite : aucun lieu nommé (école/district),
+    aucun signal d'élargissement (district, territoire, comparaison,
+    toutes/autres écoles), et résidu hors-photo sans intent
+    liste/création ni question de données. Question mixte explicite
+    (« analyse cette photo et résume Mvila ») : faux, les deux
+    périmètres restent autorisés.
+    """
+    if not has_image or not is_photo_question(message):
+        return False
+    schools, districts = mentioned_places(message or "", context)
+    if schools or districts:
+        return False
+    signals = detect_scope_signals(message or "")
+    if (signals["district"] or signals["territory"] or signals["compare"]
+            or signals["all_schools"] or signals["other_school"]):
+        return False
+    probe = _photo_probe(message)
+    if router_route(probe, PLUGIN_HINTS)["intent"] in ("list", "create"):
+        return False
+    return not is_data_question(probe, PLUGIN_HINTS)
+
+
+def _is_photo_scope(scope: dict[str, Any] | None) -> bool:
+    """Scope restreint à la photo jointe (voir is_photo_only_scope)."""
+    return bool(scope) and scope.get("scope") == "photo"
+
+
+# ---------------------------------------------------------------------------
+# Périmètre TEMPOREL : une période demandée = UNIQUEMENT cette période.
+# « Donne-moi les incidents signalés aujourd'hui à Bonanjo » ne retourne
+# QUE ceux du jour (jamais les 6 ouverts au total) : parse_time_window()
+# détecte la période (déterministe FR/EN, aucun appel LLM), le contexte
+# d'exécution est restreint aux lignes de la période (agent_tools :
+# reported_at/repaired_at, dates civiles, bornes incluses), les cartes
+# n'affichent que la période (titres suffixés) et la synthèse dit la
+# période et le compte. Période vide : message canonique + total général
+# + proposition (« Voir les ouverts ? »), jamais de vide sec.
+# « Aujourd'hui » = date du serveur (SERVER_DATE_TZ, UTC) : pas de fuseau
+# inventé. Sans période exprimée : comportement historique inchangé.
+# ---------------------------------------------------------------------------
+
+#: Nombres en toutes lettres (texte normalisé, cf. _norm) : « sept derniers
+#: jours », « last seven days ». Clamp de garde 1..365 dans le parseur.
+_TIME_NUMBER_WORDS = {
+    "un": 1, "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5,
+    "six": 6, "sept": 7, "huit": 8, "neuf": 9, "dix": 10,
+    "onze": 11, "douze": 12, "treize": 13, "quatorze": 14, "quinze": 15,
+    "seize": 16, "vingt": 20, "trente": 30,
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "seven": 7,  # ("six" déjà ci-dessus, identique en FR/EN)
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "twenty": 20,
+    "thirty": 30,
+}
+
+#: Jours de semaine (noms complets seuls : les abréviations comme « mon »
+#: ou « mar » sont ambiguës en français) -> lundi=0 .. dimanche=6.
+_TIME_WEEKDAYS = {
+    "lundi": 0, "mardi": 1, "mercredi": 2, "jeudi": 3,
+    "vendredi": 4, "samedi": 5, "dimanche": 6,
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+
+#: Mois (normalisés) -> 1..12. « mai » couvre FR « mai » ; EN « may » idem.
+_TIME_MONTHS = {
+    "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5,
+    "juin": 6, "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10,
+    "novembre": 11, "decembre": 12,
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5,
+    "june": 6, "july": 7, "august": 8, "september": 9, "october": 10,
+    "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7,
+    "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+#: Motifs de période (texte normalisé). Gardes anti-faux-positifs :
+#: « avant-hier » et « day before yesterday » exclus (ni hier ni géré),
+#: « de la semaine dernière » / « ce mois dernier » lus comme semaine/mois
+#: derniers (regard négatif), « le 15 du mois » pas un mois entier.
+_TIME_TODAY_RES = (
+    re.compile(r"aujourd['’ ]?hui\b"),
+    re.compile(r"\btoday\b"),
+    re.compile(r"\bce\s+jour\b"),
+    re.compile(r"\bce\s+matin\b"),
+    re.compile(r"\bcet\s+apres-midi\b"),
+    re.compile(r"\bce\s+soir\b"),
+    re.compile(r"\bthis\s+morning\b"),
+    re.compile(r"\btonight\b"),
+)
+_TIME_YESTERDAY_RES = (
+    re.compile(r"(?<!avant[- ])\bhier\b"),
+    re.compile(r"(?<!before\s)\byesterday\b"),
+    re.compile(r"\blast\s+night\b"),
+    re.compile(r"\bnuit\s+derniere\b"),
+    re.compile(r"\bderniere\s+nuit\b"),
+)
+_TIME_THIS_WEEK_RES = (
+    re.compile(r"\bcette\s+semaine(?!\s+derniere)\b"),
+    re.compile(r"\bde\s+la\s+semaine(?!\s+derniere)\b"),
+    re.compile(r"\bthis\s+week\b"),
+    re.compile(r"\bof\s+the\s+week\b"),
+)
+_TIME_THIS_MONTH_RES = (
+    re.compile(r"\bce\s+mois(?!\s+dernier)(?:\s*-?\s*ci)?\b"),
+    re.compile(r"(?<!\d\s)\bdu\s+mois\b"),
+    re.compile(r"\bde\s+ce\s+mois\b"),
+    re.compile(r"\bthis\s+month\b"),
+    re.compile(r"\bof\s+the\s+month\b"),
+)
+_TIME_THIS_YEAR_RES = (
+    re.compile(r"\bcette\s+annee\b"),
+    re.compile(r"\bthis\s+year\b"),
+)
+_TIME_LAST_WEEK_RES = (
+    re.compile(r"\bderniere\s+semaine\b"),
+    re.compile(r"\bsemaine\s+derniere\b"),
+    re.compile(r"\blast\s+week\b"),
+    re.compile(r"\bpast\s+week\b"),
+)
+_TIME_LAST_MONTH_RES = (
+    re.compile(r"\bdernier\s+mois\b"),
+    re.compile(r"\bmois\s+dernier\b"),
+    re.compile(r"\blast\s+month\b"),
+    re.compile(r"\bpast\s+month\b"),
+)
+_TIME_LAST_N_FR_RE = re.compile(
+    r"\b(?:les|ces|des|ses)?\s*(\d{1,3}|[a-z]+)\s+derniers?\s+jours?\b")
+_TIME_LAST_N_EN_RE = re.compile(
+    r"\b(?:last|past)\s+(\d{1,3}|[a-z]+)\s+days?\b")
+_TIME_SINCE_RE = re.compile(r"\bdepuis\b|\bsince\b")
+_TIME_LAST_N_RE = re.compile(r"last_(\d+)d")
+
+#: Proposition déterministe quand la période est vide (jamais de vide sec).
+EMPTY_PERIOD_FOLLOW_UPS = {"fr": "Voir les ouverts ?", "en": "See open ones?"}
+
+
+def server_today() -> date:
+    """Date du serveur (tool_consts.SERVER_DATE_TZ) : référence de « aujourd'hui ».
+
+    Documentée une fois ici (pas de fuseau inventé) : même source que le
+    rappel de date du prompt système et le défaut de list_maintenance_logs.
+    """
+    return datetime.now(timezone.utc).date()
+
+
+def _normalize_today(value: Any) -> date:
+    """Normalise today (date|datetime|str ISO) ; défaut = date du serveur."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(
+                value.strip().replace("Z", "+00:00")).date()
+        except ValueError:
+            pass
+    return server_today()
+
+
+def _parse_time_number(token: str) -> int | None:
+    """Chiffres ou nombre en toutes lettres FR/EN -> entier, None sinon."""
+    cleaned = (token or "").strip().lower()
+    if re.fullmatch(r"\d{1,3}", cleaned):
+        return int(cleaned)
+    return _TIME_NUMBER_WORDS.get(cleaned)
+
+
+def _past_year_day(month: int, day: int, ref: date, year: int | None) -> date | None:
+    """Jour calendaire explicite : année donnée, sinon année courante (N-1 si future)."""
+    try:
+        if year is not None:
+            return date(year, month, day)
+        candidate = date(ref.year, month, day)
+    except ValueError:
+        return None
+    if candidate > ref:
+        try:
+            return date(ref.year - 1, month, day)
+        except ValueError:
+            return None
+    return candidate
+
+
+def _parse_since_origin(rest: str, ref: date) -> date | None:
+    """Origine d'un « depuis/since ... » (texte normalisé) -> date, None sinon.
+
+    Comprend : ce matin/hier/aujourd'hui (+EN), date ISO, JJ/MM[/AAAA]
+    (jour d'abord), « 3 novembre [AAAA] », « November 3 [AAAA] », jour de
+    semaine (le plus récent, jour même inclus), « N jours/semaines/mois »
+    (mois = 30 j glissants, documenté). Année omise -> courante (N-1 si
+    future) ; origine future -> None (l'appelant n'émet aucun candidat).
+    """
+    text = re.sub(r"^(le|la|les|the|l)\s+", "", (rest or "").strip())
+    if not text:
+        return None
+    if re.match(r"^(ce\s+matin|this\s+morning|cet\s+apres-midi|ce\s+soir|"
+                r"tonight|aujourd['’ ]?hui|today|ce\s+jour)\b", text):
+        return ref
+    if re.match(r"^hier\b", text) or re.match(r"^yesterday\b", text):
+        return ref - timedelta(days=1)
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})\b", text)
+    if match:
+        try:
+            candidate = date(int(match.group(1)), int(match.group(2)),
+                             int(match.group(3)))
+        except ValueError:
+            return None
+        return candidate if candidate <= ref else None
+    match = re.match(r"^(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b", text)
+    if match:
+        day, month = int(match.group(1)), int(match.group(2))
+        raw_year = match.group(3)
+        year = None
+        if raw_year is not None:
+            year = int(raw_year)
+            if year < 100:
+                year += 2000
+            try:
+                candidate = date(year, month, day)
+            except ValueError:
+                return None
+            return candidate if candidate <= ref else None
+        return _past_year_day(month, day, ref, None)
+    match = re.match(r"^(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?\b", text)
+    if match:
+        month = _TIME_MONTHS.get(match.group(2))
+        if month is not None:
+            year = int(match.group(3)) if match.group(3) else None
+            if year is not None:
+                try:
+                    candidate = date(year, month, int(match.group(1)))
+                except ValueError:
+                    return None
+                return candidate if candidate <= ref else None
+            return _past_year_day(month, int(match.group(1)), ref, None)
+    match = re.match(r"^([a-z]+)\s+(\d{1,2})(?:\s+(\d{4}))?\b", text)
+    if match:
+        month = _TIME_MONTHS.get(match.group(1))
+        if month is not None:
+            year = int(match.group(3)) if match.group(3) else None
+            if year is not None:
+                try:
+                    candidate = date(year, month, int(match.group(2)))
+                except ValueError:
+                    return None
+                return candidate if candidate <= ref else None
+            return _past_year_day(month, int(match.group(2)), ref, None)
+        weekday = _TIME_WEEKDAYS.get(match.group(1))
+        if weekday is not None and match.group(3) is None and int(match.group(2)) <= 31:
+            # « lundi 3 » : le jour de semaine prime (le quantième est un
+            # rappel redondant dans les rédactions usuelles).
+            return ref - timedelta(days=(ref.weekday() - weekday) % 7)
+    match = re.match(r"^([a-z]+)\b", text)
+    if match:
+        weekday = _TIME_WEEKDAYS.get(match.group(1))
+        if weekday is not None:
+            return ref - timedelta(days=(ref.weekday() - weekday) % 7)
+    match = re.match(r"^(\d{1,3}|[a-z]+)\s+(jours?|days?|semaines?|weeks?|"
+                     r"mois|months?)\b", text)
+    if match:
+        count = _parse_time_number(match.group(1))
+        if count is not None and count >= 1:
+            unit = match.group(2)
+            span = count * (7 if unit.startswith(("semaine", "week")) else
+                            30 if unit.startswith("moi") or unit.startswith("month") else 1)
+            return ref - timedelta(days=min(span, 3650))
+    return None
+
+
+def parse_time_window(message: str, today: Any = None) -> dict[str, Any]:
+    """Période exprimée dans le message (fonction pure, déterministe FR/EN).
+
+    Retourne exactement {"preset", "start", "end"} : preset parmi today,
+    yesterday, last_7d, last_30d (ou last_{N}d dynamique), this_week
+    (lundi -> aujourd'hui), this_month (1er -> aujourd'hui), this_year,
+    since (origine -> aujourd'hui), ou None sans période (start/end None).
+    today injectable (date|datetime|str ISO, tests) ; défaut = date du
+    serveur. En cas de mentions multiples, la première citée gagne.
+    Aucun appel LLM.
+    """
+    ref = _normalize_today(today)
+    text = _norm(message or "")
+    if not text.strip():
+        return {"preset": None, "start": None, "end": None}
+    candidates: list[tuple[int, int, str, date, date]] = []
+
+    def _add(patterns: tuple[re.Pattern[str], ...], priority: int,
+            preset: str, start: date, end: date) -> None:
+        for pattern in patterns:
+            found = pattern.search(text)
+            if found:
+                candidates.append((found.start(), priority, preset, start, end))
+
+    yesterday = ref - timedelta(days=1)
+    _add(_TIME_TODAY_RES, 1, "today", ref, ref)
+    _add(_TIME_YESTERDAY_RES, 2, "yesterday", yesterday, yesterday)
+    for last_rx in (_TIME_LAST_N_FR_RE, _TIME_LAST_N_EN_RE):
+        for found in last_rx.finditer(text):
+            count = _parse_time_number(found.group(1))
+            if count is None:
+                continue
+            count = min(max(count, 1), 365)
+            if count == TIME_WINDOW_LAST_7D_DAYS:
+                preset = "last_7d"
+            elif count == TIME_WINDOW_LAST_30D_DAYS:
+                preset = "last_30d"
+            else:
+                preset = f"last_{count}d"
+            candidates.append((found.start(), 3, preset,
+                               ref - timedelta(days=count - 1), ref))
+    _add(_TIME_LAST_WEEK_RES, 3, "last_7d",
+         ref - timedelta(days=TIME_WINDOW_LAST_7D_DAYS - 1), ref)
+    _add(_TIME_LAST_MONTH_RES, 3, "last_30d",
+         ref - timedelta(days=TIME_WINDOW_LAST_30D_DAYS - 1), ref)
+    _add(_TIME_THIS_WEEK_RES, 4, "this_week",
+         ref - timedelta(days=ref.weekday()), ref)
+    _add(_TIME_THIS_MONTH_RES, 5, "this_month", ref.replace(day=1), ref)
+    _add(_TIME_THIS_YEAR_RES, 6, "this_year", date(ref.year, 1, 1), ref)
+    for found in _TIME_SINCE_RE.finditer(text):
+        origin = _parse_since_origin(text[found.end():], ref)
+        if origin is not None:
+            candidates.append((found.start(), 0, "since", origin, ref))
+    if not candidates:
+        return {"preset": None, "start": None, "end": None}
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    _, _, preset, start, end = candidates[0]
+    return {"preset": preset, "start": start, "end": end}
+
+
+def time_window_label(window: dict[str, Any] | None, lang: str = "fr") -> str:
+    """Libellé court de la période (« aujourd'hui », « hier »...) ; "" si aucune."""
+    preset = (window or {}).get("preset") if isinstance(window, dict) else None
+    if not preset:
+        return ""
+    english = str(lang or "").lower().startswith("en")
+    labels = {
+        "today": ("aujourd'hui", "today"),
+        "yesterday": ("hier", "yesterday"),
+        "last_7d": ("les 7 derniers jours", "the last 7 days"),
+        "last_30d": ("les 30 derniers jours", "the last 30 days"),
+        "this_week": ("cette semaine", "this week"),
+        "this_month": ("ce mois-ci", "this month"),
+        "this_year": ("cette année", "this year"),
+    }
+    if preset in labels:
+        return labels[preset][1] if english else labels[preset][0]
+    match = _TIME_LAST_N_RE.fullmatch(str(preset))
+    if match:
+        count = match.group(1)
+        return f"the last {count} days" if english else f"les {count} derniers jours"
+    if preset == "since":
+        start = (window or {}).get("start")
+        if isinstance(start, (datetime, date)):
+            start = start.isoformat() if isinstance(start, date) and not isinstance(
+                start, datetime) else str(start)[:10]
+        if start:
+            return f"since {start}" if english else f"depuis le {start}"
+        return "recently" if english else "ces derniers temps"
+    return ""
+
+
+def period_place_suffix(scope: dict[str, Any] | None, lang: str = "fr") -> str:
+    """Suffixe lieu de la période (« à Bonanjo », « dans le district Mvila »)."""
+    english = str(lang or "").lower().startswith("en")
+    schools = (scope or {}).get("schools") or []
+    if len(schools) == 1 or ((scope or {}).get("scope") == "school"
+                             and (scope or {}).get("school") and not schools):
+        school = schools[0] if schools else (scope or {}).get("school")
+        short = short_school_name(str(school)) or str(school)
+        return f" at {short}" if english else f" à {short}"
+    district = (scope or {}).get("district")
+    if (scope or {}).get("scope") == "district" and district:
+        return f" in the {district} district" if english else f" dans le district {district}"
+    return ""
+
+
+def format_empty_period_message(window: dict[str, Any] | None,
+                                scope: dict[str, Any] | None,
+                                total: int, lang: str = "fr") -> str:
+    """Message canonique période vide : absence datée + stock général (jamais de vide sec)."""
+    label = time_window_label(window, lang)
+    place = period_place_suffix(scope, lang)
+    if str(lang or "").lower().startswith("en"):
+        return f"No incidents reported {label}{place}. ({total} open in total.)"
+    return f"Aucun incident signalé {label}{place}. ({total} ouverts au total.)"
+
+
+def _annotate_period_obs(name: str, observation: dict[str, Any],
+                         window: dict[str, Any] | None,
+                         total: int, place: str) -> None:
+    """Tamponne une observation réussie (période + stock général), en place.
+
+    Le modèle lit la période, le libellé et le total hors-période ; les
+    synthèses déterministes (_summarize_*) et les cartes s'en servent aussi.
+    Créations (prepare_*) et erreurs : jamais tamponnées.
+    """
+    if window is None or not isinstance(observation, dict):
+        return
+    if "error" in observation or name.startswith("prepare_"):
+        return
+    start, end = window.get("start"), window.get("end")
+    observation["time_window"] = {
+        "preset": window.get("preset"),
+        "label": time_window_label(window, "fr"),
+        "start": start.isoformat() if isinstance(start, date) else start,
+        "end": end.isoformat() if isinstance(end, date) else end,
+    }
+    observation["total_ouverts"] = total
+    if place:
+        observation["period_place"] = place
+
+
+#: Outils de lecture « liste d'incidents » : leur succès sur une période
+#: vide autorise le message canonique « aucun incident signalé ». Le
+#: journal (interventions réalisées), le détail d'un incident
+#: (explain_incident) et les plugins (sémantiques propres) ne l'autorisent
+#: pas : leur réponse garde son sens même quand le compte période est nul.
+PERIOD_EMPTY_TOOLS = frozenset({
+    "summarize_district",
+    "analyze_school",
+    "rank_schools_by_need",
+    "repair_trends",
+    "territory_overview",
+    "build_briefing",
+})
+
+
+def _has_successful_period_list(executed: list[tuple[str, dict[str, Any]]]) -> bool:
+    """Au moins un outil liste d'incidents a-t-il réussi ce tour-ci ?"""
+    return any(name in PERIOD_EMPTY_TOOLS
+               and isinstance(obs, dict) and "error" not in obs
+               for name, obs in (executed or []))
+
+
+def _has_prepare_exec(executed: list[tuple[str, dict[str, Any]]]) -> bool:
+    """Une création (prepare_*) a-t-elle été exécutée ce tour-ci ?"""
+    return any(name.startswith("prepare_") for name, _ in (executed or []))
+
+
+#: Types de cartes de données : titres suffixés de la période quand elle est
+#: exprimée (« Synthèse du district (aujourd'hui) »). Créations, guidage,
+#: photo et suggestions de lieux : jamais suffixés. Cartes plugins en
+#: lecture seule : suffixées via le nom d'outil (PLUGIN_READ_ONLY).
+PERIOD_TITLE_TYPES = frozenset({
+    "school_analysis",
+    "school_ranking",
+    "district_summary",
+    "incident_detail",
+    "incident_timeline",
+    "briefing_deck",
+    "territory_map",
+    "trend_chart",
+    "calendar_heatmap",
+    "budget_compare",
+    "maintenance_logs",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -597,8 +1158,15 @@ def _blocked_by_scope(name: str, arguments: dict[str, Any] | None,
 
     Bloque les outils district/territoire/comparaison, les appels globaux des
     outils mixtes (repair_trends sans école ou avec district, journal sans
-    école) et les appels visant une autre école. Fonction pure.
+    école) et les appels visant une autre école. Périmètre photo : TOUS les
+    outils sont bloqués (commentaire de la photo seule). Fonction pure.
     """
+    if _is_photo_scope(scope):
+        return (
+            "Hors périmètre : la question porte uniquement sur la photo jointe ; "
+            f"l'outil {name} interroge les données WASH. "
+            "Commente la photo sans appeler d'outil."
+        )
     school = _single_school_scope(scope)
     if school is None:
         return None
@@ -879,19 +1447,39 @@ def _resolve_lang(req: AgentChatRequest) -> Literal["fr", "en"]:
     return _detect_lang(req.message)
 
 
-def _build_system_prompt(lang: str, scope: dict[str, Any] | None = None) -> str:
+def _build_system_prompt(lang: str, scope: dict[str, Any] | None = None,
+                        time_window: dict[str, Any] | None = None) -> str:
     """Prompt système + langue de réponse explicite transmise au provider (en tête : primauté).
 
     Périmètre école unique : consigne de périmètre ajoutée (défense en
-    profondeur, les garde-fous déterministes restant premiers).
+    profondeur, les garde-fous déterministes restant premiers). Période
+    exprimée : consigne de verrou temporel (les observations sont déjà
+    restreintes à la période, le modèle doit la dire et compter juste).
     """
     head = "REPLY ONLY IN ENGLISH. Never use French." if lang == "en" else "Réponds en français."
     today = datetime.now(timezone.utc).date().isoformat()
     text = (
         f"{head}\n{SYSTEM_PROMPT}\nLangue de réponse : {lang}.\n"
         f"Aujourd'hui : {today} (date du jour — utilise-la pour 'aujourd'hui' ; "
-        "'hier' = la veille, 'cette semaine' = les 7 derniers jours)."
+        "'hier' = la veille, 'cette semaine' = lundi à aujourd'hui, "
+        "'ce mois-ci' = du 1er à aujourd'hui)."
     )
+    if time_window is not None and time_window.get("preset"):
+        label = time_window_label(time_window, lang)
+        start, end = time_window.get("start"), time_window.get("end")
+        if lang == "en":
+            text += (
+                f"\nTime lock: the user asked about {label} ({start} to {end}) "
+                "ONLY — answer strictly about this period, state the period "
+                "and the count, never mix with the general stock."
+            )
+        else:
+            text += (
+                f"\nPérimètre temporel imposé : l'utilisateur demande {label} "
+                f"({start} au {end}) UNIQUEMENT — réponds strictement sur "
+                "cette période, dis la période et le compte, ne mélange "
+                "jamais avec le stock général."
+            )
     school = _single_school_scope(scope)
     if school is not None:
         if lang == "en":
@@ -905,6 +1493,19 @@ def _build_system_prompt(lang: str, scope: dict[str, Any] | None = None) -> str:
                 f"\nPérimètre imposé : l'utilisateur demande l'école {school} "
                 "UNIQUEMENT — ne parle que de cette école, ne cite aucune "
                 "autre école, et n'invente aucune comparaison non demandée."
+            )
+    if _is_photo_scope(scope):
+        if lang == "en":
+            text += (
+                "\nPhoto-only scope: the user asked about the attached photo "
+                "ONLY — comment on it without calling any tool and without "
+                "other figures."
+            )
+        else:
+            text += (
+                "\nPérimètre imposé : l'utilisateur demande UNIQUEMENT un "
+                "commentaire de la photo jointe — sans appeler d'outil ni "
+                "citer d'autres chiffres."
             )
     return text
 
@@ -927,11 +1528,60 @@ def _plural(count: int, singular: str, plural: str | None = None) -> str:
     return singular if count == 1 else (plural or singular + "s")
 
 
+def _unified_pupils_total(obs: dict[str, Any]) -> Any:
+    """Effectif unifié (somme des max par école), repli legacy si absent.
+
+    Le texte dit la même chose que les cartes (qui lisent *_max) : sans
+    cette unification, la synthèse cite le vieux total sommé (double-compte
+    à l'école) alors que la carte affiche le max unifié.
+    """
+    value = obs.get("total_affected_students_max")
+    if value is None:
+        value = obs.get("total_affected_students", 0)
+    return value
+
+
+def _period_meta(obs: dict[str, Any]) -> tuple[str, str, Any]:
+    """Annotation période d'une observation : (libellé, suffixe lieu, stock général).
+
+    ("", "", None) sans période exprimée : les synthèses suivent alors le
+    chemin historique, strictement inchangé.
+    """
+    window = obs.get("time_window") or {}
+    label = str(window.get("label") or "")
+    if not label:
+        return "", "", None
+    return label, str(obs.get("period_place") or ""), obs.get("total_ouverts")
+
+
+def _period_stock(stock_n: Any) -> str:
+    """Parenthèse stock général (« (6 ouverts au total.) »), "" si inconnu."""
+    if stock_n is None:
+        return ""
+    try:
+        return f" ({int(stock_n)} ouverts au total.)"
+    except (TypeError, ValueError):
+        return ""
+
+
 def _summarize_district(obs: dict[str, Any]) -> str:
     n = int(obs.get("open_incidents", 0) or 0)
-    pupils = _fmt_int(obs.get("total_affected_students", 0))
+    pupils = _fmt_int(_unified_pupils_total(obs))
     schools = obs.get("schools_involved", []) or []
     critical = int((obs.get("by_urgency", {}) or {}).get("critical", 0) or 0)
+    label, place, stock_n = _period_meta(obs)
+    if label:
+        stock = _period_stock(stock_n)
+        if n == 0:
+            return f"Aucun incident signalé {label}{place}.{stock}"
+        text = (
+            f"{n} {_plural(n, 'incident signalé', 'incidents signalés')} "
+            f"{label}{place} ({pupils} élèves, {len(schools)} "
+            f"{_plural(len(schools), 'école')}"
+        )
+        if critical:
+            text += f", dont {critical} {_plural(critical, 'critique')}"
+        return text + f".{stock} Le détail est dans la carte ci-dessous."
     text = (
         f"{n} {_plural(n, 'incident ouvert', 'incidents ouverts')} "
         f"{_plural(n, 'touche', 'touchent')} "
@@ -944,6 +1594,16 @@ def _summarize_district(obs: dict[str, Any]) -> str:
 
 def _summarize_trends(obs: dict[str, Any]) -> str:
     figures = obs.get("figures", {}) or {}
+    label, _place, stock_n = _period_meta(obs)
+    if label:
+        n = int(figures.get("total_incidents", 0) or 0)
+        return (
+            f"À {obs.get('school_name', '?')} {label} : "
+            f"{n} {_plural(n, 'panne', 'pannes')}, "
+            f"{_fmt_int(figures.get('total_cost', 0))} "
+            f"{figures.get('currency', 'XAF')} de réparations."
+            f"{_period_stock(stock_n)} Le graphique est dans la carte ci-dessous."
+        )
     trend = {"up": "en hausse", "down": "en baisse"}.get(
         str(figures.get("trend_direction", "")), "stable"
     )
@@ -966,6 +1626,19 @@ def _summarize_trends(obs: dict[str, Any]) -> str:
 
 def _summarize_ranking(obs: dict[str, Any]) -> str:
     ranking = obs.get("ranking", []) or []
+    label, place, stock_n = _period_meta(obs)
+    if label:
+        stock = _period_stock(stock_n)
+        if not ranking:
+            return f"Aucune école avec panne signalée {label}{place}.{stock}"
+        top = ranking[0]
+        total = int(obs.get("total", len(ranking)) or 0)
+        return (
+            f"{total} {_plural(total, 'école concernée', 'écoles concernées')} "
+            f"par des pannes signalées {label}{place}, en tête : "
+            f"{top.get('school_name', '?')} (score {_fmt_1(top.get('need_score', 0))})."
+            f"{stock} Le classement complet est dans la carte ci-dessous."
+        )
     if not ranking:
         return "Aucune école avec panne ouverte pour le moment."
     top = ranking[0]
@@ -1058,6 +1731,20 @@ def _summarize_analysis(obs: dict[str, Any]) -> str:
         "MONITOR_CLOSELY": "renforcer la surveillance",
     }.get(str(obs.get("recommendation", "")), "étudier le dossier")
     n = len(obs.get("open_incidents", []) or [])
+    label, _place, stock_n = _period_meta(obs)
+    if label:
+        stock = _period_stock(stock_n)
+        if n == 0:
+            return (
+                f"À {obs.get('school_name', '?')} : aucune panne signalée {label}."
+                f"{stock} L'analyse complète est dans la carte ci-dessous."
+            )
+        return (
+            f"À {obs.get('school_name', '?')} : {n} "
+            f"{_plural(n, 'panne signalée', 'pannes signalées')} {label}, "
+            f"ratio réparations/neuf de {_fmt_1(obs.get('repair_ratio_percent', 0))} %. "
+            f"Verdict : {verdict}.{stock} L'analyse complète est dans la carte ci-dessous."
+        )
     return (
         f"À {obs.get('school_name', '?')} : {n} {_plural(n, 'panne ouverte', 'pannes ouvertes')}, "
         f"ratio réparations/neuf de {_fmt_1(obs.get('repair_ratio_percent', 0))} %. "
@@ -1119,6 +1806,16 @@ def _summarize_territory(obs: dict[str, Any]) -> str:
     total = int(obs.get("total", 0) or 0)
     n = int(obs.get("open_incidents", 0) or 0)
     missing = len(obs.get("missing_gps", []) or [])
+    label, place, stock_n = _period_meta(obs)
+    if label:
+        text = (
+            f"{total} {_plural(total, 'école géolocalisée', 'écoles géolocalisées')}, "
+            f"{n} {_plural(n, 'incident signalé', 'incidents signalés')} {label}{place}."
+            f"{_period_stock(stock_n)} La carte interactive est ci-dessous."
+        )
+        if missing:
+            text += f" ({missing} {_plural(missing, 'école sans', 'écoles sans')} GPS.)"
+        return text
     text = (
         f"{total} {_plural(total, 'école géolocalisée', 'écoles géolocalisées')}, "
         f"{n} {_plural(n, 'incident ouvert', 'incidents ouverts')}. "
@@ -1127,6 +1824,23 @@ def _summarize_territory(obs: dict[str, Any]) -> str:
     if missing:
         text += f" ({missing} {_plural(missing, 'école sans', 'écoles sans')} GPS.)"
     return text
+
+
+def _summarize_briefing(obs: dict[str, Any]) -> str:
+    slides = int(obs.get("total", 0) or 0)
+    value = (obs.get("slides", [{}])[0].get("stats", [{}])[0].get("value", "?"))
+    label, _place, stock_n = _period_meta(obs)
+    if label:
+        return (
+            f"Briefing prêt {label} : {slides} slides "
+            f"({value} incidents signalés {label}).{_period_stock(stock_n)} "
+            "La présentation est dans la carte ci-dessous."
+        )
+    return (
+        f"Briefing prêt : {slides} slides "
+        f"({value} "
+        "incidents ouverts). La présentation est dans la carte ci-dessous."
+    )
 
 
 FALLBACK_SUMMARIES = {
@@ -1140,11 +1854,7 @@ FALLBACK_SUMMARIES = {
     "prepare_incident": _summarize_proposal,
     "prepare_maintenance_log": _summarize_proposal,
     "territory_overview": _summarize_territory,
-    "build_briefing": lambda obs: (
-        f"Briefing prêt : {int(obs.get('total', 0) or 0)} slides "
-        f"({(obs.get('slides', [{}])[0].get('stats', [{}])[0].get('value', '?'))} "
-        "incidents ouverts). La présentation est dans la carte ci-dessous."
-    ),
+    "build_briefing": _summarize_briefing,
 }
 
 _STARTER_RE = re.compile(
@@ -1486,12 +2196,14 @@ def maybe_force_map_card(
     cards: list[AgentCard] | None,
     context: dict[str, Any] | None = None,
     scope: dict[str, Any] | None = None,
+    time_window: dict[str, Any] | None = None,
 ) -> list[AgentCard]:
     """Force la carte si le texte l'annonce sans qu'elle soit construite.
 
     Seulement quand des écoles avec lat/lng existent (observations, puis
     contexte). N'ajoute jamais de doublon. Fonction pure (nouvelle liste).
     Périmètre école unique : jamais de carte territoire imposée.
+    Période exprimée : titre suffixé (données déjà restreintes en amont).
     """
     cards = list(cards or [])
     if _single_school_scope(scope) is not None:
@@ -1503,7 +2215,11 @@ def maybe_force_map_card(
     points = collect_map_points(executed, context)
     if not points:
         return cards
-    cards.append(build_forced_map_card(points))
+    card = build_forced_map_card(points)
+    label = time_window_label(time_window, "fr")
+    if label:
+        card.title = f"{card.title} ({label})"
+    cards.append(card)
     return cards
 
 
@@ -1548,13 +2264,30 @@ def summarize_photo_analysis(photo: ImageAnalysisResponse) -> str:
     )
 
 
+def _photo_card(photo: Any) -> AgentCard | None:
+    """Carte photo_analysis depuis une analyse (None sans photo)."""
+    if photo is None:
+        return None
+    obs = photo.model_dump() if hasattr(photo, "model_dump") else dict(photo)
+    if obs.get("vision_unavailable"):
+        title = "Analyse photo — vision indisponible"
+    else:
+        title = f"Analyse photo — {obs.get('infrastructure_detected', '?')}"
+    return AgentCard(type="photo_analysis", title=title, data=obs)
+
+
 class AgentLoop:
     """Boucle agentique réelle : le LLM choisit ses outils, Python les exécute."""
 
     def __init__(self, llm: BaseLLMProvider):
         self.llm = llm
 
-    async def chat(self, req: AgentChatRequest) -> AgentChatResponse:
+    async def chat(self, req: AgentChatRequest, today: Any = None) -> AgentChatResponse:
+        """Un tour de conversation (today injectable : date|datetime|str ISO, tests).
+
+        today=None (défaut, prod) : la période « aujourd'hui » suit la date
+        du serveur (server_today, UTC documenté).
+        """
         context = req.context.model_dump()
         # Mémo conversation : un lieu seul (« Mvila ») reprend la question
         # précédente en attente via l'historique (sans état serveur).
@@ -1599,12 +2332,44 @@ class AgentLoop:
             photo_mime = CHAT_IMAGE_DEFAULT_MIME
         lang = _resolve_lang(req)
         scope_info = detect_scope(req.message, context)
+        # Périmètre PHOTO : image + question sur l'image seule -> aucun outil,
+        # carte photo_analysis unique, synthèse = commentaire de la photo.
+        photo_only = is_photo_only_scope(
+            req.message, context, photo_b64 is not None)
+        if photo_only:
+            scope_info = {"scope": "photo", "school": None,
+                          "schools": [], "district": None}
         # Clarification guidée : périmètre exigé mais non nommé (« Compare un
         # district ? ») -> question + choix cliquables du contexte réel.
-        clarify_kind = needs_clarification(req.message, context, scope_info)
+        # Jamais en périmètre photo (aucun lieu à demander).
+        clarify_kind = (None if photo_only
+                        else needs_clarification(req.message, context, scope_info))
+        # Périmètre TEMPOREL : période exprimée -> les outils s'exécutent sur
+        # le contexte restreint (incidents/logs de la période, bornes
+        # incluses) ; le contexte original sert aux totaux (« N ouverts au
+        # total ») et au lieu. Jamais en périmètre photo (commentaire seul).
+        time_window = (None if photo_only
+                       else parse_time_window(req.message, today))
+        if time_window is not None and not time_window.get("preset"):
+            time_window = None
+        period_total = 0
+        period_count = 0
+        period_place = ""
+        exec_context = context
+        period: dict[str, Any] | None = None
+        if time_window is not None:
+            period_total = len(open_incidents_in_scope(context, scope_info))
+            period_count = len(open_incidents_in_window(
+                context, time_window, scope_info))
+            period_place = period_place_suffix(scope_info, "fr")
+            exec_context = scope_context_to_window(context, time_window)
+            period = {"window": time_window, "total": period_total,
+                      "place": period_place}
         intent = route_intent(req.message)
         active_tools = compact_tools(tools_for_intent(intent, scope_info), self.llm.model)
-        messages: list[dict[str, Any]] = [{"role": "system", "content": _build_system_prompt(lang, scope_info)}]
+        messages: list[dict[str, Any]] = [
+            {"role": "system",
+             "content": _build_system_prompt(lang, scope_info, time_window)}]
         messages.extend(_scoped_history(req.history))
         user_content = req.message
         if req.history and intent == "other":
@@ -1654,7 +2419,10 @@ class AgentLoop:
                     continue
                 seen.add(key)
                 fresh = True
-                observation = self._execute_tool(name, arguments, context)
+                observation = self._execute_tool(name, arguments, exec_context)
+                if period is not None:
+                    _annotate_period_obs(name, observation, time_window,
+                                         period_total, period_place)
                 executed.append((name, observation))
                 messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
             if not fresh:
@@ -1665,32 +2433,33 @@ class AgentLoop:
             answer = self._fallback_answer(executed, context, photo, scope=scope_info)
 
         over_budget = time.monotonic() - started > RUN_BUDGET_S
-        if (not executed and answer.strip()
+        if (not photo_only and not executed and answer.strip()
                 and self._looks_like_data_question(req.message)
                 and not over_budget):
             answer = await self._force_tool_pass(
-                messages, context, executed, active_tools, budget, photo=photo,
-                scope=scope_info)
+                messages, exec_context, executed, active_tools, budget,
+                photo=photo, scope=scope_info, period=period)
 
         if not answer.strip() or self._is_bogus_refusal(answer, executed):
             answer = self._fallback_answer(executed, context, photo, scope=scope_info)
 
-        if answer.strip() and _claims_absence(answer) and not _has_read_tool(executed):
+        if (not photo_only and answer.strip() and _claims_absence(answer)
+                and not _has_read_tool(executed)):
             if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
-                    messages, context, executed, seen, active_tools, budget,
-                    nudge=_absence_nudge(scope_info), photo=photo,
-                    scope=scope_info)
+                    messages, exec_context, executed, seen, active_tools,
+                    budget, nudge=_absence_nudge(scope_info), photo=photo,
+                    scope=scope_info, period=period)
             else:
                 answer = UNVERIFIED_HONEST_ANSWER
 
-        if (answer.strip() and _cites_reference(answer) and _claims_absence(answer)
-                and _has_empty_list_obs(executed)):
+        if (not photo_only and answer.strip() and _cites_reference(answer)
+                and _claims_absence(answer) and _has_empty_list_obs(executed)):
             if not over_budget and used_iterations < MAX_ITERATIONS:
                 answer = await self._absence_correction_pass(
-                    messages, context, executed, seen, active_tools, budget,
-                    nudge=CONTRADICTION_CORRECTION_NUDGE, photo=photo,
-                    scope=scope_info)
+                    messages, exec_context, executed, seen, active_tools,
+                    budget, nudge=CONTRADICTION_CORRECTION_NUDGE, photo=photo,
+                    scope=scope_info, period=period)
             else:
                 answer = self._fallback_answer(executed, context, photo, scope=scope_info)
 
@@ -1699,15 +2468,32 @@ class AgentLoop:
         answer = repair_final_answer(answer, executed)
         # Discipline de périmètre : purge des phrases citant une autre école.
         answer = strip_other_school_mentions(answer, scope_info, context)
+        # Périmètre TEMPOREL vide : une liste d'incidents a été lue sur la
+        # période (sans création en cours) et le compte période est nul ->
+        # le message canonique (absence datée + stock général) remplace
+        # toute liste générale déguisée ou vide sec. Jamais en photo.
+        empty_period = (
+            time_window is not None
+            and not _has_prepare_exec(executed)
+            and _has_successful_period_list(executed)
+            and period_count == 0
+        )
+        if empty_period:
+            answer = format_empty_period_message(
+                time_window, scope_info, period_total, lang)
         if not answer.strip():
             answer = self._fallback_answer(executed, context, photo, scope=scope_info)
         # Clarification guidée : panorama court + LA question en une phrase.
         if clarify_kind is not None:
             answer = _with_clarify_question(answer, clarify_kind, lang)
-        cards = self._build_cards(executed, context, photo=photo, scope=scope_info)
+        cards = self._build_cards(executed, context, photo=photo,
+                                  scope=scope_info, time_window=time_window)
         # Annonce-carte sans carte construite : force la carte si des écoles
         # avec lat/lng existent (petit LLM : CAS "voici la carte..." seul).
-        cards = maybe_force_map_card(answer, executed, cards, context, scope=scope_info)
+        # Jamais en périmètre photo (photo_analysis unique).
+        cards = (cards if photo_only else maybe_force_map_card(
+            answer, executed, cards, context,
+            scope=scope_info, time_window=time_window))
         if not cards:
             # Aucune carte (échec ou lieu inconnu) : suggestions cliquables.
             suggest = suggest_places(req.message, context)
@@ -1725,6 +2511,11 @@ class AgentLoop:
             # d'erreur.
             follow_ups = (clarify_follow_ups(clarify_kind, req.message, context, lang)
                           or follow_ups or list(STARTER_CHIPS))
+        if empty_period:
+            chip = EMPTY_PERIOD_FOLLOW_UPS.get(
+                lang, EMPTY_PERIOD_FOLLOW_UPS["fr"])
+            if chip not in follow_ups:
+                follow_ups = [chip, *follow_ups]
         return AgentChatResponse(
             answer=answer.strip(),
             tools_executed=[name for name, _ in executed],
@@ -1783,6 +2574,7 @@ class AgentLoop:
         budget: dict[str, int] | None = None,
         photo: ImageAnalysisResponse | None = None,
         scope: dict[str, Any] | None = None,
+        period: dict[str, Any] | None = None,
     ) -> str:
         """Dernier recadrage : réponse directe à une question de données.
 
@@ -1790,6 +2582,7 @@ class AgentLoop:
         sur les observations ; sinon, réponse honnête (jamais d'invention).
         Chaque appel LLM consomme le budget partagé (MAX_LLM_CALLS).
         Périmètre école unique : recadrage et exécutions cantonnés à l'école.
+        Période exprimée (period) : observations tamponnées (période + stock).
         """
         tools = AGENT_TOOLS if tools is None else tools
         budget = {"llm_calls": 0} if budget is None else budget
@@ -1807,6 +2600,9 @@ class AgentLoop:
                 messages.append(self.llm.format_tool_result(name, {"note": blocked}, call.get("id")))
                 continue
             observation = self._execute_tool(name, arguments, context)
+            if period is not None:
+                _annotate_period_obs(name, observation, period.get("window"),
+                                     period.get("total", 0), period.get("place", ""))
             executed.append((name, observation))
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not executed:
@@ -1832,6 +2628,7 @@ class AgentLoop:
         nudge: str = ABSENCE_CORRECTION_NUDGE,
         photo: ImageAnalysisResponse | None = None,
         scope: dict[str, Any] | None = None,
+        period: dict[str, Any] | None = None,
     ) -> str:
         """Recadrage anti-hallucination : absence affirmée sans lecture
         (ou contradiction référence + absence, via un nudge adapté).
@@ -1841,6 +2638,7 @@ class AgentLoop:
         réponse honnête (jamais d'invention).
         Chaque appel LLM consomme le budget partagé (MAX_LLM_CALLS).
         Périmètre école unique : exécutions cantonnées à l'école.
+        Période exprimée (period) : observations tamponnées (période + stock).
         """
         budget = {"llm_calls": 0} if budget is None else budget
         if budget["llm_calls"] >= MAX_LLM_CALLS:
@@ -1865,6 +2663,9 @@ class AgentLoop:
                 continue
             seen.add(key)
             observation = self._execute_tool(name, arguments, context)
+            if period is not None:
+                _annotate_period_obs(name, observation, period.get("window"),
+                                     period.get("total", 0), period.get("place", ""))
             executed.append((name, observation))
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not _has_read_tool(executed):
@@ -1986,14 +2787,22 @@ class AgentLoop:
                      context: dict[str, Any] | None = None,
                      photo: ImageAnalysisResponse | dict[str, Any] | None = None,
                      scope: dict[str, Any] | None = None,
+                     time_window: dict[str, Any] | None = None,
                      ) -> list[AgentCard]:
         """Cartes UI depuis les observations (périmètre école unique filtré).
 
         En périmètre école unique : seules les cartes de cette école sont
         émises (analyse, tendances, calendrier, détail/picker de SES incidents,
         journal filtré, guidage cantonné) ; les cartes district/territoire/
-        comparaison globale sont supprimées. scope=None = historique.
+        comparaison globale sont supprimées. Périmètre photo : carte
+        photo_analysis UNIQUEMENT. scope=None = historique. Période exprimée
+        (time_window) : les cartes de données sont suffixées de la période
+        (leurs données sont déjà restreintes en amont, jamais de mélange).
         """
+        if _is_photo_scope(scope):
+            card = _photo_card(photo)
+            return [card] if card is not None else []
+        period_label = time_window_label(time_window, "fr")
         school = _single_school_scope(scope)
         other_schools: list[str] = []
         if school is not None:
@@ -2004,17 +2813,9 @@ class AgentLoop:
             own = _norm(school)
             other_schools = [s for s in known if _norm(s) != own]
         cards: list[AgentCard] = []
-        if photo is not None:
-            obs = photo.model_dump() if hasattr(photo, "model_dump") else dict(photo)
-            if obs.get("vision_unavailable"):
-                title = "Analyse photo — vision indisponible"
-            else:
-                title = f"Analyse photo — {obs.get('infrastructure_detected', '?')}"
-            cards.append(AgentCard(
-                type="photo_analysis",
-                title=title,
-                data=obs,
-            ))
+        photo_card = _photo_card(photo)
+        if photo_card is not None:
+            cards.append(photo_card)
         district_examples: str | None = None
         if context:
             try:
@@ -2153,7 +2954,13 @@ class AgentLoop:
                 for builder in PLUGIN_CARDS[name].values():
                     card = builder(observation)
                     if card is not None:
+                        if period_label and name in PLUGIN_READ_ONLY:
+                            card.title = f"{card.title} ({period_label})"
                         cards.append(card)
+        if period_label:
+            for card in cards:
+                if card.type in PERIOD_TITLE_TYPES:
+                    card.title = f"{card.title} ({period_label})"
         unique: list[AgentCard] = []
         fingerprints: set[str] = set()
         for card in cards:

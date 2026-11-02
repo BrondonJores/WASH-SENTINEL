@@ -3,7 +3,7 @@ from __future__ import annotations
 import difflib
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 try:
@@ -78,6 +78,144 @@ TREND_RATIO_THRESHOLD = _env_float("AGENT_TOOLS_TREND_RATIO_THRESHOLD", 0.15)
 
 def _open_incidents(context: dict[str, Any]) -> list[dict[str, Any]]:
     return [i for i in context.get("incidents", []) if i.get("status") not in ("resolved", "closed")]
+
+
+# ---------------------------------------------------------------------------
+# PÉRIMÈTRE TEMPOREL : filtrage déterministe incidents/logs par période.
+# Quand le chat détecte une période exprimée (parse_time_window, agent_loop),
+# le contexte d'exécution est restreint aux lignes de la période : les outils
+# gardent leur sémantique (ouverts, etc.) sur ce sous-ensemble. Comparaison
+# en date civile (pas datetime), bornes incluses ; une ligne sans date
+# prouvée dans la période est exclue (on ne prétend jamais « signalé
+# aujourd'hui » sans date). Sans période : scope_context_to_window retourne
+# le contexte inchangé (même objet, comportement historique).
+# ---------------------------------------------------------------------------
+
+#: Clés de date d'un incident, par priorité (signalement).
+INCIDENT_WINDOW_KEYS = ("reported_at",)
+#: Clés de date d'un journal, par priorité (réparation puis replis).
+LOG_WINDOW_KEYS = ("repaired_at", "created_at", "reported_at")
+
+
+def row_window_day(row: dict[str, Any], keys: tuple[str, ...] = INCIDENT_WINDOW_KEYS) -> date | None:
+    """Jour civil d'une ligne (première clé horodatée valide), None sinon."""
+    if not isinstance(row, dict):
+        return None
+    for key in keys:
+        dt = _parse_dt(row.get(key))
+        if dt is not None:
+            return dt.date()
+    return None
+
+
+def incident_window_day(incident: dict[str, Any]) -> date | None:
+    """Jour civil de signalement d'un incident (reported_at), None sinon."""
+    return row_window_day(incident, INCIDENT_WINDOW_KEYS)
+
+
+def log_window_day(log: dict[str, Any]) -> date | None:
+    """Jour civil d'un journal (repaired_at, replis created_at/reported_at)."""
+    return row_window_day(log, LOG_WINDOW_KEYS)
+
+
+def in_time_window(day: date | None, start: date | None, end: date | None) -> bool:
+    """Jour dans [start, end] (inclusif) ; None ou bornes absentes = False."""
+    if day is None or start is None or end is None:
+        return False
+    return start <= day <= end
+
+
+def _as_window_date(value: Any) -> date | None:
+    """Normalise une borne de fenêtre (date|datetime|str ISO) en date."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    dt = _parse_dt(value)
+    return dt.date() if dt is not None else None
+
+
+def filter_incidents_by_window(rows: list[dict[str, Any]] | None,
+                               start: date | None, end: date | None) -> list[dict[str, Any]]:
+    """Incidents signalés dans [start, end] (inclusif, dates civiles)."""
+    return [r for r in (rows or [])
+            if in_time_window(incident_window_day(r), start, end)]
+
+
+def filter_logs_by_window(rows: list[dict[str, Any]] | None,
+                          start: date | None, end: date | None) -> list[dict[str, Any]]:
+    """Journaux réparés dans [start, end] (inclusif, dates civiles)."""
+    return [r for r in (rows or [])
+            if in_time_window(log_window_day(r), start, end)]
+
+
+def scope_context_to_window(context: dict[str, Any], window: dict[str, Any] | None) -> dict[str, Any]:
+    """Contexte restreint à la période (copie légère, listes filtrées).
+
+    Incidents + recent_incidents par reported_at, journaux par repaired_at
+    (replis created_at/reported_at). Fenêtre absente ou sans preset/bornes :
+    contexte retourné tel quel (même objet, comportement historique).
+    """
+    if not window or not window.get("preset"):
+        return context
+    start = _as_window_date(window.get("start"))
+    end = _as_window_date(window.get("end"))
+    if start is None or end is None:
+        return context
+    scoped = dict(context)
+    scoped["incidents"] = filter_incidents_by_window(context.get("incidents"), start, end)
+    scoped["recent_incidents"] = filter_incidents_by_window(context.get("recent_incidents"), start, end)
+    scoped["maintenance_logs"] = filter_logs_by_window(context.get("maintenance_logs"), start, end)
+    return scoped
+
+
+def _scope_place_predicate(scope: dict[str, Any] | None):  # noqa: ANN202
+    """Prédicat lieu du périmètre (école(s) ou district), None si global."""
+    if not scope:
+        return None
+    if scope.get("scope") == "school":
+        schools = [s for s in (scope.get("schools") or []) if s] or (
+            [scope["school"]] if scope.get("school") else [])
+        folded = [fold(s) for s in schools if fold(s)]
+        if not folded:
+            return None
+
+        def _match_school(row: dict[str, Any]) -> bool:
+            candidate = fold(row.get("school_name", ""))
+            return bool(candidate) and any(
+                want == candidate or want in candidate or candidate in want
+                for want in folded)
+        return _match_school
+    if scope.get("scope") == "district" and scope.get("district"):
+        want = fold(scope.get("district"))
+
+        def _match_district(row: dict[str, Any]) -> bool:
+            candidate = fold(row.get("district", ""))
+            return bool(want and candidate) and (
+                want == candidate or want in candidate or candidate in want)
+        return _match_district
+    return None
+
+
+def open_incidents_in_scope(context: dict[str, Any],
+                            scope: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Incidents ouverts du lieu demandé (stock général, sans filtre date)."""
+    predicate = _scope_place_predicate(scope)
+    rows = _open_incidents(context or {})
+    return [r for r in rows if predicate is None or predicate(r)]
+
+
+def open_incidents_in_window(context: dict[str, Any], window: dict[str, Any] | None,
+                             scope: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Incidents ouverts du lieu, signalés dans la période (sous-ensemble strict)."""
+    if not window or not window.get("preset"):
+        return open_incidents_in_scope(context, scope)
+    start = _as_window_date(window.get("start"))
+    end = _as_window_date(window.get("end"))
+    if start is None or end is None:
+        return []
+    return [r for r in open_incidents_in_scope(context, scope)
+            if in_time_window(incident_window_day(r), start, end)]
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +954,9 @@ def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[s
     sids = {s.get("school_id") for s in schools}
     open_incs = [i for i in _open_incidents(context) if i.get("school_id") in sids]
     weights = {"critical": 10.0, "high": 5.0, "medium": 2.0, "low": 0.5}
-    affected = sum(int(i.get("affected_students", 0) or 0) for i in open_incs)
+    # Sémantique unifiée : somme des max par école (le texte dit la même
+    # chose que les cartes, jamais le vieux total sommé double-compté).
+    affected = _affected_unified_total(open_incs)
     now = datetime.now(timezone.utc)
 
     top = sorted(open_incs,
