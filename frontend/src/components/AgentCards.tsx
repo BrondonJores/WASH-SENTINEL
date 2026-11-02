@@ -308,6 +308,65 @@ function CopyButton({ value, label = 'Copier' }: { value: string; label?: string
   );
 }
 
+// ---------- Miniatures photos incidents ----------
+
+/** Borne d'affichage, miroir de WashAgentController::INCIDENT_PHOTOS_LIMIT. */
+const INCIDENT_PHOTOS_LIMIT = 4;
+
+interface IncidentPhoto {
+  url: string;
+  caption?: string;
+  reported_at?: string;
+}
+
+/** Ne garde que les URLs absolues http(s), borne a INCIDENT_PHOTOS_LIMIT. */
+const asPhotos = (v: unknown): IncidentPhoto[] => {
+  if (!Array.isArray(v)) return [];
+  const out: IncidentPhoto[] = [];
+  for (const entry of v) {
+    if (out.length >= INCIDENT_PHOTOS_LIMIT) break;
+    const r = asRecord(entry);
+    const url = r.url;
+    if (typeof url !== 'string' || !(url.startsWith('http://') || url.startsWith('https://'))) continue;
+    out.push({
+      url,
+      ...(typeof r.caption === 'string' && r.caption !== '' ? { caption: r.caption } : {}),
+      ...(typeof r.reported_at === 'string' && r.reported_at !== '' ? { reported_at: r.reported_at } : {}),
+    });
+  }
+  return out;
+};
+
+/** Rangee de miniatures : lazy, alt FR, clic = nouvel onglet. Rien si vide. */
+function IncidentPhotoRow({ photos, label }: { photos: IncidentPhoto[]; label: string }) {
+  if (photos.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <p className="text-[11px] text-stone-500 dark:text-stone-400">Photos ({photos.length})</p>
+      <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1">
+        {photos.map((p, i) => (
+          <a
+            key={`${p.url}-${i}`}
+            href={p.url}
+            target="_blank"
+            rel="noreferrer"
+            title={p.caption ?? label}
+            aria-label={`Ouvrir la photo ${i + 1} de ${label} dans un nouvel onglet`}
+            className="shrink-0 overflow-hidden rounded-lg border border-line transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
+          >
+            <img
+              src={p.url}
+              alt={`Photo ${i + 1} de ${p.caption ?? label}`}
+              loading="lazy"
+              className="h-16 w-16 object-cover"
+            />
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // ---------- Cartes ----------
 
 function IncidentPickerCard({
@@ -378,6 +437,7 @@ function IncidentPickerCard({
                   {isPicked && <Icon name="check" className="ml-auto mt-1 h-4 w-4" />}
                 </span>
               </button>
+              <IncidentPhotoRow photos={asPhotos(c.photos)} label={fmtText(c.title)} />
             </li>
           );
         })}
@@ -452,6 +512,7 @@ function IncidentCard({
       <p className="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400">
         {fmtText(data.school_name)} · {fmtText(data.district)}
       </p>
+      <IncidentPhotoRow photos={asPhotos(data.photos)} label={title} />
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat label="Élèves affectés" value={fmtInt(data.affected_students)} />
         <Stat label="Signalé le" value={fmtDate(data.reported_at)} mono={false} />

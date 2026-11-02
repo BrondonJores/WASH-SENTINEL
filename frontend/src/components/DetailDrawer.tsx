@@ -37,6 +37,12 @@ const CATEGORY_LABEL: Record<string, string> = {
   sewage_drainage: 'Évacuation',
 };
 
+/** Report sérialisé : le backend ajoute photo_url absolue (null si vide/manquante). */
+type ReportWithPhotoUrl = Report & { photo_url?: string | null };
+
+/** Borne d'affichage, miroir de WashAgentController::INCIDENT_PHOTOS_LIMIT. */
+const INCIDENT_PHOTOS_LIMIT = 4;
+
 function Stat({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
   return (
     <div>
@@ -82,6 +88,10 @@ function IncidentView({
   const district = incident.school?.district;
   const reportsCount = incident.reports_count ?? incident.reports?.length ?? 0;
   const logs = incident.maintenance_logs ?? [];
+  const photos = ((incident.reports ?? []) as ReportWithPhotoUrl[])
+    .map((r) => (typeof r.photo_url === 'string' && r.photo_url !== '' ? r.photo_url : null))
+    .filter((u): u is string => u !== null)
+    .slice(0, INCIDENT_PHOTOS_LIMIT);
   return (
     <div>
       <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-teal-700 dark:text-teal-300">
@@ -111,6 +121,34 @@ function IncidentView({
         </span>
         <Icon name="arrow-right" className="h-4 w-4 shrink-0 text-stone-400" />
       </button>
+
+      {photos.length > 0 && (
+        <div className="mt-3">
+          <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
+            Photos ({photos.length})
+          </p>
+          <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1">
+            {photos.map((url, i) => (
+              <a
+                key={`${url}-${i}`}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                title={incident.title}
+                aria-label={`Ouvrir la photo ${i + 1} de ${incident.title} dans un nouvel onglet`}
+                className="shrink-0 overflow-hidden rounded-lg border border-line transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
+              >
+                <img
+                  src={url}
+                  alt={`Photo ${i + 1} de ${incident.title}`}
+                  loading="lazy"
+                  className="h-16 w-16 object-cover"
+                />
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <Stat label="Élèves affectés" value={fmtInt(incident.affected_students)} />

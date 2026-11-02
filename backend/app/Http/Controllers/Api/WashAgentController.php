@@ -59,6 +59,12 @@ class WashAgentController extends Controller
 
     public const OPEN_INCIDENT_LIMIT = 50;
 
+    /** Miniatures max par incident (contexte converse + cartes). */
+    public const INCIDENT_PHOTOS_LIMIT = 4;
+
+    /** Légende photo quand le titre incident est vide. */
+    public const INCIDENT_PHOTO_CAPTION_FALLBACK = 'Photo du signalement';
+
     public function copilotChat(Request $request, AiEngineClient $ai)
     {
         $validated = $request->validate([
@@ -264,6 +270,12 @@ class WashAgentController extends Controller
 
             return response()->json($this->degradedGuidance());
         }
+
+        // Le moteur ne recopie pas (encore) les photos du contexte vers ses
+        // cartes incident_detail/incident_picker (champs filtrés côté Python) :
+        // Laravel réinjecte ici les miniatures faisant foi (URLs absolues
+        // vérifiées sur disque), pour que le chat les affiche sans attendre.
+        $response = $this->enrichIncidentCardPhotos($response);
 
         $response = $this->persistProposals($user, $response, $proposals);
 
@@ -527,7 +539,10 @@ class WashAgentController extends Controller
 
     protected function openIncidentSnapshots(?string $district): array
     {
-        return Incident::with('school:id,name,district')
+        return Incident::with([
+            'school:id,name,district',
+            'reports' => fn ($q) => $q->whereNotNull('photo_path')->orderBy('id'),
+        ])
             ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
             ->open()->latest()->take(self::OPEN_INCIDENT_LIMIT)->get()
             ->map(fn (Incident $i) => [
@@ -545,6 +560,101 @@ class WashAgentController extends Controller
                 'affected_students' => (int) $i->affected_students,
                 'summary' => $i->ai_summary ?: $i->title,
                 'reported_at' => $i->created_at->toIso8601String(),
+                'photos' => $this->incidentPhotos($i),
             ])->all();
+    }
+
+    /**
+     * Miniatures d'un incident depuis ses signalements avec photo.
+     *
+     * Chaque entrée : url absolue http(s) ouvrable au navigateur, caption
+     * (titre incident, repli 'Photo du signalement'), reported_at ISO8601
+     * du signalement. Capé à INCIDENT_PHOTOS_LIMIT, fichiers manquants
+     * exclus silencieusement (Report::photo_url -> null), [] sans photo.
+     */
+    protected function incidentPhotos(Incident $incident): array
+    {
+        $caption = is_string($incident->title) && $incident->title !== ''
+            ? $incident->title
+            : self::INCIDENT_PHOTO_CAPTION_FALLBACK;
+        $photos = [];
+        foreach ($incident->reports as $report) {
+            if (count($photos) >= self::INCIDENT_PHOTOS_LIMIT) {
+                break;
+            }
+            $url = $report->photo_url;
+            if (!is_string($url) || $url === '') {
+                continue;
+            }
+            $photos[] = [
+                'url' => $url,
+                'caption' => $caption,
+                'reported_at' => $report->created_at?->toIso8601String(),
+            ];
+        }
+
+        return $photos;
+    }
+
+    /**
+     * Réinjecte les photos dans les cartes incident_detail / incident_picker.
+     *
+     * Le moteur construit ces cartes depuis des listes de champs fermées
+     * (agent_tools.py : tool_explain_incident, _candidate_card) et ne fait
+     * donc pas transiter les photos du contexte : on complète ici chaque
+     * carte/candidat identifiable par id, [] quand l'incident est inconnu
+     * ou sans photo. Zéro requête sans carte incidente.
+     */
+    protected function enrichIncidentCardPhotos(array $response): array
+    {
+        if (empty($response['cards']) || !is_array($response['cards'])) {
+            return $response;
+        }
+        $ids = [];
+        foreach ($response['cards'] as $card) {
+            if (!is_array($card)) {
+                continue;
+            }
+            $type = $card['type'] ?? '';
+            if ($type === 'incident_detail' && isset($card['data']['id']) && is_numeric($card['data']['id'])) {
+                $ids[] = (int) $card['data']['id'];
+            } elseif ($type === 'incident_picker' && is_array($card['data']['candidates'] ?? null)) {
+                foreach ($card['data']['candidates'] as $candidate) {
+                    if (is_array($candidate) && isset($candidate['id']) && is_numeric($candidate['id'])) {
+                        $ids[] = (int) $candidate['id'];
+                    }
+                }
+            }
+        }
+        $ids = array_values(array_unique($ids));
+        $byId = [];
+        if ($ids !== []) {
+            $incidents = Incident::with([
+                'reports' => fn ($q) => $q->whereNotNull('photo_path')->orderBy('id'),
+            ])->whereIn('id', $ids)->get()->keyBy('id');
+            foreach ($incidents as $id => $incident) {
+                $byId[$id] = $this->incidentPhotos($incident);
+            }
+        }
+        foreach ($response['cards'] as $i => $card) {
+            if (!is_array($card)) {
+                continue;
+            }
+            $type = $card['type'] ?? '';
+            if ($type === 'incident_detail') {
+                $id = isset($card['data']['id']) && is_numeric($card['data']['id']) ? (int) $card['data']['id'] : null;
+                $response['cards'][$i]['data']['photos'] = $id !== null ? ($byId[$id] ?? []) : ($card['data']['photos'] ?? []);
+            } elseif ($type === 'incident_picker' && is_array($card['data']['candidates'] ?? null)) {
+                foreach ($card['data']['candidates'] as $j => $candidate) {
+                    if (!is_array($candidate)) {
+                        continue;
+                    }
+                    $id = isset($candidate['id']) && is_numeric($candidate['id']) ? (int) $candidate['id'] : null;
+                    $response['cards'][$i]['data']['candidates'][$j]['photos'] = $id !== null ? ($byId[$id] ?? []) : ($candidate['photos'] ?? []);
+                }
+            }
+        }
+
+        return $response;
     }
 }
