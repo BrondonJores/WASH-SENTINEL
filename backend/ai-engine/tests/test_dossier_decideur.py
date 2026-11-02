@@ -281,15 +281,14 @@ class RunDossierTest(unittest.IsolatedAsyncioTestCase):
 
 
 class DossierCardContractTest(unittest.TestCase):
-    def test_types_reserved_until_frontend_wired(self) -> None:
+    def test_types_emitted_now_wired(self) -> None:
         from app.schemas import FRONTEND_RESERVED, CardType
         literal = set(get_args(CardType))
         self.assertIn("poster", literal)
         self.assertIn("dossier_report", literal)
-        # Transitoire : cases frontend (autre agent) + câblage loop (parent)
-        # non livrés -> réservés, donc test_card_contracts reste vert.
-        self.assertIn("poster", set(FRONTEND_RESERVED))
-        self.assertIn("dossier_report", set(FRONTEND_RESERVED))
+        # Câblage livré (cases frontend + branche loop) : émis, plus réservés.
+        self.assertNotIn("poster", set(FRONTEND_RESERVED))
+        self.assertNotIn("dossier_report", set(FRONTEND_RESERVED))
 
     def test_module_not_auto_discovered(self) -> None:
         from app.agent_tools import PLUGIN_CARDS, TOOL_EXECUTORS
@@ -315,6 +314,83 @@ class DossierCardContractTest(unittest.TestCase):
         assert report_card is not None
         DossierReportCardData.model_validate(report_card.data)
         self.assertIsNone(dossier_decideur.build_dossier_report_card({}))
+
+
+class _StubLoopLLM(_StubImageLLM):
+    """Stub boucle : generate_image scripté + chat compté (0 attendu)."""
+
+    def __init__(self, payload: bytes | Exception):
+        super().__init__(payload)
+        self.model = "stub"
+        self.chat_calls = 0
+
+    async def chat(self, messages, tools=None):
+        self.chat_calls += 1
+        return {"raw": {"role": "assistant", "content": "hors branche"},
+                "content": "hors branche", "tool_calls": []}
+
+    def format_tool_result(self, name, result, call_id=None):
+        return {"role": "tool",
+                "content": json.dumps(result, ensure_ascii=False)}
+
+
+def _loop_req(message: str):
+    from app.schemas import AgentChatRequest, AgentContext
+    return AgentChatRequest(
+        message=message,
+        context=AgentContext(
+            schools=[dict(s) for s in SCHOOLS],
+            incidents=[dict(i) for i in INCIDENTS],
+            maintenance_logs=[dict(l) for l in LOGS]),
+    )
+
+
+class DossierLoopBranchTest(unittest.IsolatedAsyncioTestCase):
+    async def test_dossier_school_bypasses_llm(self) -> None:
+        from app.agent_loop import AgentLoop
+        stub = _StubLoopLLM(_FAKE_PNG)
+        res = await AgentLoop(stub).chat(_loop_req("Prépare le dossier de Nkol"))
+        self.assertEqual(res.tools_executed, ["dossier_decideur"])
+        self.assertEqual([c.type for c in res.cards],
+                         ["poster", "dossier_report"])
+        self.assertEqual(stub.chat_calls, 0)
+        self.assertIn("Nkol", res.answer)
+        self.assertIn("6 sections", res.answer)
+
+    async def test_affiche_district(self) -> None:
+        from app.agent_loop import AgentLoop
+        stub = _StubLoopLLM(_FAKE_PNG)
+        res = await AgentLoop(stub).chat(
+            _loop_req("Génère une affiche pour le district Mvila"))
+        self.assertEqual(res.tools_executed, ["dossier_decideur"])
+        self.assertIn("poster", [c.type for c in res.cards])
+        self.assertIn("Mvila", res.answer)
+
+    async def test_image_failure_keeps_report(self) -> None:
+        from app.agent_loop import AgentLoop
+        stub = _StubLoopLLM(NotSupportedError("cloud uniquement"))
+        res = await AgentLoop(stub).chat(_loop_req("Prépare le dossier de Nkol"))
+        self.assertEqual(res.tools_executed, ["dossier_decideur"])
+        self.assertEqual([c.type for c in res.cards], ["dossier_report"])
+        self.assertIn("Affiche indisponible", res.answer)
+
+    async def test_no_place_falls_through(self) -> None:
+        from app.agent_loop import AgentLoop
+        stub = _StubLoopLLM(_FAKE_PNG)
+        res = await AgentLoop(stub).chat(_loop_req("Prépare un dossier"))
+        self.assertNotIn("dossier_decideur", res.tools_executed)
+
+    async def test_briefing_not_captured(self) -> None:
+        from app.agent_loop import AgentLoop
+        stub = _StubLoopLLM(_FAKE_PNG)
+        res = await AgentLoop(stub).chat(_loop_req("Prépare un briefing du district"))
+        self.assertNotIn("dossier_decideur", res.tools_executed)
+
+    async def test_bare_rapports_not_captured(self) -> None:
+        from app.agent_loop import AgentLoop
+        stub = _StubLoopLLM(_FAKE_PNG)
+        res = await AgentLoop(stub).chat(_loop_req("Donne-moi les rapports"))
+        self.assertNotIn("dossier_decideur", res.tools_executed)
 
 
 if __name__ == "__main__":

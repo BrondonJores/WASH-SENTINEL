@@ -2391,6 +2391,34 @@ def is_intervention_prep_request(message: str) -> bool:
     return _INTERVENTION_PREP_OBJ_RE.search(normed) is not None
 
 
+#: Dossier décideur (texte normalisé _norm, FR + EN) : demande explicite
+#: de dossier/affiche/rapport décideur. « rapport » seul est ambigu (liste
+#: de signalements, tendances) : il exige un cadrage décideur/complet.
+_DOSSIER_STRONG_RE = re.compile(
+    r"dossier|affiche|poster|deck|diaporama|presentation")
+_DOSSIER_REPORT_SCOPE_RE = re.compile(
+    r"decideur|complet|global|synthese|ecole|district|ville")
+_DOSSIER_EXCLUDE_RE = re.compile(
+    r"briefing|signal|panne|suivi|suivre|journal|avancement|tendance|incident")
+
+
+def is_dossier_request(message: str) -> bool:
+    """Demande explicite de dossier décideur ? (fonction pure).
+
+    « Prépare le dossier de Ngok », « génère une affiche », « rapport
+    décideur » -> True ; « prépare un briefing », « signale une panne »,
+    « donne les rapports » (liste) -> False.
+    """
+    normed = _norm(message or "")
+    if not normed.strip():
+        return False
+    if _DOSSIER_EXCLUDE_RE.search(normed):
+        return False
+    if _DOSSIER_STRONG_RE.search(normed):
+        return True
+    return "rapport" in normed and _DOSSIER_REPORT_SCOPE_RE.search(normed) is not None
+
+
 def _intervention_hint(message: str, context: dict[str, Any] | None) -> str:
     """Indice incident isolé du message (fonction pure)."""
     text = _norm(message or "")
@@ -2497,6 +2525,15 @@ class AgentLoop:
             exec_context = scope_context_to_window(context, time_window)
             period = {"window": time_window, "total": period_total,
                       "place": period_place}
+        # DOSSIER DÉCIDEUR : demande explicite + lieu résolu -> génération
+        # déterministe (rapport pur + affiche cloud), sans boucle LLM : les
+        # chiffres sont garantis issus du contexte, jamais inventés.
+        if (not photo_only and clarify_kind is None
+                and is_dossier_request(req.message)):
+            dossier = await self._run_dossier_branch(
+                req, context, scope_info, lang)
+            if dossier is not None:
+                return dossier
         # PRÉPARATION d'intervention à venir : dossier ciblé déterministe
         # (incident/date/budget/équipe + kit + verdict), sans boucle LLM.
         # Évite la carte large « Analyse école » sur une demande précise.
@@ -2660,6 +2697,61 @@ class AgentLoop:
         return AgentChatResponse(
             answer=answer.strip(),
             tools_executed=[name for name, _ in executed],
+            cards=cards,
+            model_used=self.llm.model,
+            follow_ups=follow_ups,
+        )
+
+    async def _run_dossier_branch(
+            self, req: AgentChatRequest, context: dict[str, Any],
+            scope_info: dict[str, Any] | None, lang: str) -> AgentChatResponse | None:
+        """Dossier décideur (rapport pur + affiche, sans boucle LLM).
+
+        Retourne None sans lieu résolu (école ou district) : le flux
+        normal demande alors « pour quelle école ? ».
+        """
+        from .tools.dossier_decideur import run_dossier
+        scope = scope_info or {}
+        school = scope.get("school") if scope.get("scope") == "school" else None
+        district = scope.get("district")
+        if school:
+            scope_type, scope_name = "school", school
+        elif district:
+            scope_type, scope_name = "district", district
+        else:
+            return None
+        scope_id = None
+        if school:
+            for row in context.get("schools", []) or []:
+                if isinstance(row, dict) and str(row.get("school_name") or "") == school:
+                    scope_id = row.get("school_id")
+                    break
+        run = await run_dossier(self.llm, scope_type, scope_name, context, scope_id)
+        cards = run.get("cards", [])
+        n_sections = len((run.get("report") or {}).get("sections", []))
+        has_poster = any(c.type == "poster" for c in cards)
+        if (lang or "fr") == "en":
+            answer = (f"Brief pack \u00ab {scope_name} \u00bb ready: report "
+                      f"({n_sections} sections)")
+            answer += " + poster." if has_poster else "."
+            if run.get("poster_error"):
+                answer += f" {run['poster_error']}"
+        else:
+            answer = (f"Dossier \u00ab {scope_name} \u00bb pr\u00eat : rapport "
+                      f"({n_sections} sections)")
+            answer += " + affiche." if has_poster else "."
+            if run.get("poster_error"):
+                answer += f" {run['poster_error']}"
+        follow_ups = _follow_ups(
+            req.message, [("dossier_decideur", {"cards": len(cards)})],
+            context, scope)
+        briefing_chip = ("Prepare a briefing" if (lang or "fr") == "en"
+                         else "Pr\u00e9parer un briefing")
+        if briefing_chip not in follow_ups:
+            follow_ups.append(briefing_chip)
+        return AgentChatResponse(
+            answer=answer,
+            tools_executed=["dossier_decideur"],
             cards=cards,
             model_used=self.llm.model,
             follow_ups=follow_ups,

@@ -474,13 +474,8 @@ CardType = Literal[
 
 # Membres de CardType acceptés mais jamais émis par le backend
 # (rendus frontend existants, conservés pour compatibilité).
-# TRANSITOIRE : "poster" et "dossier_report" restent ici tant que les cases
-# frontend (AgentCards.tsx, autre agent) et le câblage loop (parent) ne sont
-# pas livrés ; les builders backend sont prêts (dossier_decideur.py).
-# Retirer ces deux membres d'ici dès qu'ils seront émis + rendus.
 FRONTEND_RESERVED = frozenset({
     "report_confirmation", "action_result",
-    "poster", "dossier_report",
 })
 
 

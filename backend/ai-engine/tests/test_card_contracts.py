@@ -175,13 +175,13 @@ class CardContractTest(unittest.TestCase):
 
 
 def _emitted_card_types() -> set[str]:
-    """Tous les types émis : CARD_BUILDERS + codés en dur (loop, guidance)."""
+    """Tous les types émis : CARD_BUILDERS + codés en dur (loop, guidance, dossier)."""
     from app.agent_tools import PLUGIN_CARDS
     emitted: set[str] = set()
     for builders in PLUGIN_CARDS.values():
         emitted.update(builders.keys())
     app_dir = Path(__file__).resolve().parent.parent / "app"
-    for source in ("agent_loop.py", "guidance.py"):
+    for source in ("agent_loop.py", "guidance.py", "tools/dossier_decideur.py"):
         text = (app_dir / source).read_text(encoding="utf-8")
         emitted.update(re.findall(r'type="([a-z_]+)"', text))
     return emitted
