@@ -93,6 +93,33 @@ class WashWhatsAppService
         'follow up', 'follow-up', 'followup',
     ];
 
+    /** Étapes du suivi guidé (état cache wash.whatsapp.suivi.<tél>). */
+    protected const SUIVI_STEP_AWAITING_ID = 'awaiting_id';
+
+    protected const SUIVI_STEP_AWAITING_SCHOOL = 'awaiting_school';
+
+    protected const SUIVI_STEP_AWAITING_DATE = 'awaiting_date';
+
+    protected const SUIVI_STEP_AWAITING_CHOICE = 'awaiting_choice';
+
+    /** Propositions max dans la liste de choix (ton SMS). */
+    protected const SUIVI_MAX_PROPOSALS = 5;
+
+    /** Mots courants (sans accents) jamais traités comme fragment de code. */
+    protected const SUIVI_PARTIAL_STOPWORDS = [
+        'suivi', 'suivre', 'dossier', 'dossiers', 'signalement', 'signaler',
+        'statut', 'status', 'ecole', 'ecoles', 'college', 'lycee', 'school',
+        'bonjour', 'bonsoir', 'salut', 'merci',
+        'hier', 'aujourdhui', 'today', 'yesterday', 'demain',
+        'janvier', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet',
+        'aout', 'septembre', 'octobre', 'novembre', 'decembre',
+        'january', 'february', 'march', 'april', 'june', 'july', 'august',
+        'september', 'october', 'november', 'december',
+        'janv', 'fevr', 'avr', 'juil', 'sept', 'oct', 'nov', 'dec',
+        'jan', 'feb', 'mar', 'apr', 'jun', 'aug', 'sep',
+        'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche',
+    ];
+
     /**
      * Marqueurs EN génériques (signalement) : présents, SANS aucun marqueur FR
      * (SUIVI_FRENCH_MARKERS réutilisée en veto) → TOUTE la réponse en anglais.
@@ -245,6 +272,20 @@ class WashWhatsAppService
             }
         }
 
+        // SUIVI GUIDÉ en cours : lu AVANT l'intention suivi et AVANT le triage
+        // (un slot — ID, école, date, choix — n'est ni hors-sujet ni une panne).
+        // Retourne null si l'usager signale une NOUVELLE panne (interruption :
+        // l'état suivi est oublié, le triage normal reprend).
+        if (($channel === 'text' || $channel === 'voice') && $text) {
+            $suiviState = $this->suivi($from);
+            if ($suiviState) {
+                $suiviStep = $this->handleSuiviStep($from, $contact, (string) $text, $suiviState);
+                if ($suiviStep !== null) {
+                    return $suiviStep;
+                }
+            }
+        }
+
         // SUIVI : détecté AVANT le filtre hors-sujet et AVANT le triage, pour
         // texte ET vocal-transcrit. Ne crée JAMAIS d'incident ni de Report.
         // (La clarification en attente ci-dessus garde priorité : le suivi
@@ -260,13 +301,15 @@ class WashWhatsAppService
         // (bonjour, qui es-tu...), sinon hors-sujet guidé, sans incident.
         if ($channel === 'text' && !$this->looksLikeWashReport((string) $text)) {
             $this->forgetClarification($from);
+            $this->forgetSuivi($from);
             $this->reply($from, $this->offTopicReply((string) $text));
 
             return ['status' => 'off_topic', 'from' => $from];
         }
 
-        // Plus de clarification en attente à ce stade : message normal.
+        // Plus de clarification ni de suivi en attente à ce stade : message normal.
         $this->forgetClarification($from);
+        $this->forgetSuivi($from);
 
         $result = $this->triage->ingest($contact->school, $channel, $text, $audio, $photo, null, 'whatsapp');
         $incident = $result['incident'];
@@ -486,43 +529,54 @@ class WashWhatsAppService
     /**
      * Fiche statut SMS (≤ MAX_REPLY_LENGTH via reply()). Avec référence :
      * incident par reference_code (école du contact d'abord, sinon global).
-     * Sans référence : DERNIER incident de l'école du contact. Ne crée ni
-     * incident ni Report ; statut retourné 'suivi'.
+     * Sans référence : SUIVI GUIDÉ (demande d'ID → école/date → choix
+     * numérotés), état persisté par numéro. Ne crée ni incident ni Report ;
+     * statut retourné 'suivi'.
      */
     protected function handleSuivi(string $from, SchoolContact $contact, string $text, ?string $reference): array
     {
         $english = $this->isEnglishSuivi($text);
 
         if ($reference !== null) {
-            $incident = Incident::where('school_id', $contact->school_id)
-                ->whereRaw('UPPER(reference_code) = ?', [$reference])
-                ->first()
-                ?? Incident::whereRaw('UPPER(reference_code) = ?', [$reference])->first();
+            $incident = $this->findIncidentByReference($contact->school_id, $reference);
 
             if (!$incident) {
                 $this->reply($from, $this->suiviUnknownReferenceReply($reference, $english));
+                // L'usager peut renvoyer le bon code au message suivant.
+                $this->rememberSuivi($from, ['step' => self::SUIVI_STEP_AWAITING_ID, 'lang' => $english ? 'en' : 'fr']);
 
                 return ['status' => 'suivi', 'from' => $from, 'reference' => $reference];
             }
 
+            $this->forgetSuivi($from);
             $this->reply($from, $this->suiviStatusReply($incident, $english));
 
             return ['status' => 'suivi', 'from' => $from, 'incident_id' => $incident->id];
         }
 
-        $incident = Incident::where('school_id', $contact->school_id)->latest('id')->first();
-        if (!$incident) {
+        // École sans aucun incident : réponse guidée directe, rien à chercher.
+        if (!Incident::where('school_id', $contact->school_id)->exists()) {
             $this->reply($from, $this->suiviEmptyReply($english));
 
             return ['status' => 'suivi', 'from' => $from];
         }
 
-        $this->reply($from, $this->suiviStatusReply($incident, $english));
+        $this->rememberSuivi($from, ['step' => self::SUIVI_STEP_AWAITING_ID, 'lang' => $english ? 'en' : 'fr']);
+        $this->reply($from, $this->t('whatsapp.suivi.ask_id', $english));
 
-        return ['status' => 'suivi', 'from' => $from, 'incident_id' => $incident->id];
+        return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_ID];
     }
 
-    /** Fiche statut : référence + résumé court + statut humain + prochaine étape. */
+    /** Incident par référence exacte, école du contact d'abord, sinon global. */
+    protected function findIncidentByReference(int $schoolId, string $reference): ?Incident
+    {
+        return Incident::where('school_id', $schoolId)
+            ->whereRaw('UPPER(reference_code) = ?', [$reference])
+            ->first()
+            ?? Incident::whereRaw('UPPER(reference_code) = ?', [$reference])->first();
+    }
+
+    /** Fiche statut : référence + résumé + statut + urgence + école + date + prochaine étape. */
     protected function suiviStatusReply(Incident $incident, bool $english): string
     {
         $summary = rtrim(Str::limit((string) ($incident->ai_summary ?: $incident->title), 90), '.');
@@ -533,12 +587,20 @@ class WashWhatsAppService
                 : $this->frenchDay($incident->updated_at ?? now()),
         ]);
 
-        return $this->t('whatsapp.suivi.card', $english, [
+        $card = $this->t('whatsapp.suivi.card', $english, [
             'ref' => $incident->reference_code,
             'summary' => $summary,
             'human' => $this->statusHuman($incident->status, $english),
             'since' => $since,
             'next' => $this->statusNext($incident->status, $english),
+        ]);
+
+        return $card . $this->t('whatsapp.suivi.details', $english, [
+            'school' => (string) ($incident->school?->name ?? ''),
+            'date' => $english
+                ? $this->englishDay($incident->created_at ?? now())
+                : $this->frenchDay($incident->created_at ?? now()),
+            'urgency' => $this->urgencyLabel($incident->urgency, $english),
         ]);
     }
 
@@ -550,6 +612,673 @@ class WashWhatsAppService
     protected function suiviUnknownReferenceReply(string $reference, bool $english): string
     {
         return $this->t('whatsapp.suivi.unknown_reference', $english, ['ref' => $reference]);
+    }
+
+    // ------------------------------------------------------------------
+    // SUIVI GUIDÉ : ID → (école → date → choix numéroté) → fiche statut.
+    // Un message = un slot, état persisté en cache par numéro de téléphone.
+    // ------------------------------------------------------------------
+
+    protected function suiviKey(string $from): string
+    {
+        return 'wash.whatsapp.suivi.' . SchoolContact::normalizePhone($from);
+    }
+
+    protected function rememberSuivi(string $from, array $state): void
+    {
+        Cache::put($this->suiviKey($from), $state, (int) config('whatsapp.pending_ttl', self::DEFAULT_PENDING_TTL));
+    }
+
+    protected function suivi(string $from): ?array
+    {
+        $state = Cache::get($this->suiviKey($from));
+
+        return is_array($state) && isset($state['step']) ? $state : null;
+    }
+
+    protected function forgetSuivi(string $from): void
+    {
+        Cache::forget($this->suiviKey($from));
+    }
+
+    /**
+     * Suite du suivi guidé (un message usager = un slot).
+     * Retourne null pour laisser passer une NOUVELLE panne (interruption :
+     * l'état suivi est oublié, le triage normal reprend).
+     */
+    protected function handleSuiviStep(string $from, SchoolContact $contact, string $text, array $state): ?array
+    {
+        $english = ($state['lang'] ?? 'fr') === 'en';
+        $step = (string) ($state['step'] ?? '');
+
+        if ($this->isSuiviCancel($text)) {
+            $this->forgetSuivi($from);
+            $this->reply($from, $this->t('whatsapp.suivi.cancelled', $english));
+
+            return ['status' => 'suivi', 'from' => $from, 'step' => 'cancelled'];
+        }
+
+        if ($this->isSuiviRestart($text)) {
+            $this->rememberSuivi($from, ['step' => self::SUIVI_STEP_AWAITING_ID, 'lang' => $english ? 'en' : 'fr']);
+            $this->reply($from, $this->t('whatsapp.suivi.ask_id', $english));
+
+            return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_ID];
+        }
+
+        // Référence complète à tout moment : résolution directe.
+        if (preg_match(self::SUIVI_REFERENCE_PATTERN, $text, $m)) {
+            $incident = $this->findIncidentByReference($contact->school_id, strtoupper($m[0]));
+            if ($incident) {
+                return $this->resolveSuivi($from, $incident, $english);
+            }
+            // Code inconnu : on reste sur l'étape en cours.
+            $this->reply($from, $step === self::SUIVI_STEP_AWAITING_CHOICE
+                ? $this->suiviProposalReply($state, $english, true)
+                : $this->suiviUnknownReferenceReply(strtoupper($m[0]), $english));
+
+            return ['status' => 'suivi', 'from' => $from, 'step' => $step];
+        }
+
+        // Code partiel (« TEST01 ») : exploitation aux étapes ID et choix
+        // uniquement (jamais sur une réponse de date : « 2026 » y est une année).
+        $partial = ($step === self::SUIVI_STEP_AWAITING_ID || $step === self::SUIVI_STEP_AWAITING_CHOICE)
+            ? $this->matchSuiviPartial($contact->school_id, $text)
+            : null;
+        if ($partial !== null && count($partial) === 1) {
+            return $this->resolveSuivi($from, $partial[0], $english);
+        }
+
+        // Phrases « je ne sais pas » / « mon école » : valables seulement hors
+        // signalement de panne (un long texte avec « non »/« perdu » + fuite
+        // reste une NOUVELLE panne, pas un slot).
+        $slotPhrase = !$this->looksLikeWashReport($text) || mb_strlen(trim($text)) <= 20;
+
+        switch ($step) {
+            case self::SUIVI_STEP_AWAITING_ID:
+                // ID partiel ambigu : on propose la liste.
+                if ($partial !== null && count($partial) > 1) {
+                    return $this->proposeSuivi($from, $partial, $english, $state);
+                }
+                // « Je ne sais pas » → on cherche par école puis date.
+                if ($slotPhrase && $this->isSuiviUnknownId($text)) {
+                    $this->rememberSuivi($from, ['step' => self::SUIVI_STEP_AWAITING_SCHOOL, 'lang' => $english ? 'en' : 'fr']);
+                    $this->reply($from, $this->t('whatsapp.suivi.ask_school', $english));
+
+                    return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_SCHOOL];
+                }
+                // École donnée directement (« c'est l'école de Bonanjo ») → date.
+                $schools = $this->matchSuiviSchools($text);
+                if (count($schools) === 1) {
+                    return $this->askSuiviDate($from, $schools[0], $english);
+                }
+                if (count($schools) > 1) {
+                    return $this->askSuiviSchoolPrecision($from, $schools, $english);
+                }
+                // Date donnée directement (« hier ») → dossiers de l'école du contact.
+                $day = $this->parseSuiviDate($text);
+                if ($day !== null) {
+                    return $this->proposeSuiviForDay($from, $this->suiviDateState($contact, $english), $day, $english);
+                }
+                if ($this->interruptSuiviForNewReport($from, $text)) {
+                    return null;
+                }
+                $this->reply($from, $this->t('whatsapp.suivi.ask_id', $english));
+
+                return ['status' => 'suivi', 'from' => $from, 'step' => $step];
+
+            case self::SUIVI_STEP_AWAITING_SCHOOL:
+                // « Mon école » / « je ne sais pas » → école du contact.
+                if ($slotPhrase && ($this->isSuiviSameSchool($text) || $this->isSuiviUnknownId($text))) {
+                    return $this->askSuiviDate($from, $contact->school, $english);
+                }
+                $schools = $this->matchSuiviSchools($text);
+                if (count($schools) === 1) {
+                    return $this->askSuiviDate($from, $schools[0], $english);
+                }
+                if (count($schools) > 1) {
+                    return $this->askSuiviSchoolPrecision($from, $schools, $english);
+                }
+                // Date donnée sans école (« hier ») → école du contact.
+                $day = $this->parseSuiviDate($text);
+                if ($day !== null) {
+                    return $this->proposeSuiviForDay($from, $this->suiviDateState($contact, $english), $day, $english);
+                }
+                if ($this->interruptSuiviForNewReport($from, $text)) {
+                    return null;
+                }
+                $this->reply($from, $this->t('whatsapp.suivi.ask_school_retry', $english));
+
+                return ['status' => 'suivi', 'from' => $from, 'step' => $step];
+
+            case self::SUIVI_STEP_AWAITING_DATE:
+                $day = $this->parseSuiviDate($text);
+                if ($day !== null) {
+                    return $this->proposeSuiviForDay($from, $state, $day, $english);
+                }
+                if ($this->interruptSuiviForNewReport($from, $text)) {
+                    return null;
+                }
+                $this->reply($from, $this->t('whatsapp.suivi.ask_date_retry', $english));
+
+                return ['status' => 'suivi', 'from' => $from, 'step' => $step];
+
+            case self::SUIVI_STEP_AWAITING_CHOICE:
+                // « Aucun » : retour arrière (date si école connue, sinon école).
+                if (preg_match('/\baucun\b|\bnone\b/', $this->asciiLower($text))) {
+                    return $this->backSuiviAfterChoice($from, $state, $english);
+                }
+                $candidates = $this->refreshSuiviCandidates($from, $state);
+                $state['candidates'] = $candidates;
+                if ($candidates === []) {
+                    return $this->backSuiviAfterChoice($from, $state, $english);
+                }
+                // Numéro du choix (« 2 », « le 2 », « choix 2 »).
+                if (preg_match('/\b([1-9])\b/', $text, $m) && isset($candidates[(int) $m[1] - 1])) {
+                    $incident = Incident::find($candidates[(int) $m[1] - 1]);
+                    if ($incident) {
+                        return $this->resolveSuivi($from, $incident, $english);
+                    }
+                }
+                // Code partiel restreint aux propositions, sinon global unique.
+                if ($partial !== null && count($partial) >= 1) {
+                    $inList = array_values(array_filter($partial, fn (Incident $i) => in_array($i->id, $candidates, true)));
+                    if (count($inList) === 1) {
+                        return $this->resolveSuivi($from, $inList[0], $english);
+                    }
+                    if ($inList === [] && count($partial) === 1) {
+                        return $this->resolveSuivi($from, $partial[0], $english);
+                    }
+                }
+                if ($this->interruptSuiviForNewReport($from, $text)) {
+                    return null;
+                }
+                $this->reply($from, $this->suiviProposalReply($state, $english, true));
+
+                return ['status' => 'suivi', 'from' => $from, 'step' => $step];
+
+            default:
+                // État corrompu : on repart de la demande d'ID.
+                $this->rememberSuivi($from, ['step' => self::SUIVI_STEP_AWAITING_ID, 'lang' => $english ? 'en' : 'fr']);
+                $this->reply($from, $this->t('whatsapp.suivi.ask_id', $english));
+
+                return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_ID];
+        }
+    }
+
+    /** Nouvelle panne en cours de suivi : état oublié, triage normal (true). */
+    protected function interruptSuiviForNewReport(string $from, string $text): bool
+    {
+        if ($this->looksLikeWashReport($text)) {
+            $this->forgetSuivi($from);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /** Étape date avec l'école du contact (raccourcis « hier » sans école). */
+    protected function suiviDateState(SchoolContact $contact, bool $english): array
+    {
+        return [
+            'step' => self::SUIVI_STEP_AWAITING_DATE,
+            'lang' => $english ? 'en' : 'fr',
+            'school_id' => $contact->school_id,
+            'school_name' => $contact->school->name,
+        ];
+    }
+
+    protected function resolveSuivi(string $from, Incident $incident, bool $english): array
+    {
+        $this->forgetSuivi($from);
+        $this->reply($from, $this->suiviStatusReply($incident, $english));
+
+        return ['status' => 'suivi', 'from' => $from, 'incident_id' => $incident->id];
+    }
+
+    /**
+     * @param  School[]  $schools
+     */
+    protected function askSuiviSchoolPrecision(string $from, array $schools, bool $english): array
+    {
+        $this->rememberSuivi($from, ['step' => self::SUIVI_STEP_AWAITING_SCHOOL, 'lang' => $english ? 'en' : 'fr']);
+        $names = array_slice(array_map(fn (School $s) => (string) $s->name, $schools), 0, 3);
+        $this->reply($from, $this->t('whatsapp.suivi.ask_school_precision', $english, ['schools' => implode(', ', $names)]));
+
+        return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_SCHOOL];
+    }
+
+    /** Retour arrière : date si l'école est connue, sinon école. */
+    protected function backSuiviAfterChoice(string $from, array $state, bool $english): array
+    {
+        if (isset($state['school_id'])) {
+            $this->rememberSuivi($from, [
+                'step' => self::SUIVI_STEP_AWAITING_DATE,
+                'lang' => $english ? 'en' : 'fr',
+                'school_id' => $state['school_id'],
+            ]);
+            $this->reply($from, $this->t('whatsapp.suivi.ask_date', $english));
+
+            return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_DATE];
+        }
+        $this->rememberSuivi($from, ['step' => self::SUIVI_STEP_AWAITING_SCHOOL, 'lang' => $english ? 'en' : 'fr']);
+        $this->reply($from, $this->t('whatsapp.suivi.ask_school', $english));
+
+        return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_SCHOOL];
+    }
+
+    protected function askSuiviDate(string $from, School $school, bool $english): array
+    {
+        $this->rememberSuivi($from, [
+            'step' => self::SUIVI_STEP_AWAITING_DATE,
+            'lang' => $english ? 'en' : 'fr',
+            'school_id' => $school->id,
+            'school_name' => $school->name,
+        ]);
+        $this->reply($from, $this->t('whatsapp.suivi.ask_date', $english));
+
+        return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_DATE];
+    }
+
+    /** Dossiers de l'école au jour donné : proposition, ou autre date si aucun. */
+    protected function proposeSuiviForDay(string $from, array $state, Carbon $day, bool $english): array
+    {
+        $school = isset($state['school_id']) ? School::find($state['school_id']) : null;
+        if (!$school) {
+            // École perdue (supprimée ?) : on la redemande.
+            $this->rememberSuivi($from, ['step' => self::SUIVI_STEP_AWAITING_SCHOOL, 'lang' => $english ? 'en' : 'fr']);
+            $this->reply($from, $this->t('whatsapp.suivi.ask_school', $english));
+
+            return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_SCHOOL];
+        }
+
+        $found = Incident::where('school_id', $school->id)
+            ->whereDate('created_at', $day->toDateString())
+            ->latest('id')->take(self::SUIVI_MAX_PROPOSALS)->get();
+
+        if ($found->isEmpty()) {
+            $this->rememberSuivi($from, [
+                'step' => self::SUIVI_STEP_AWAITING_DATE,
+                'lang' => $english ? 'en' : 'fr',
+                'school_id' => $school->id,
+                'school_name' => $school->name,
+            ]);
+            $this->reply($from, $this->t('whatsapp.suivi.no_match', $english, [
+                'school' => $school->name,
+                'date' => $english ? $this->englishDay($day) : $this->frenchDay($day),
+            ]));
+
+            return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_DATE];
+        }
+
+        return $this->proposeSuivi($from, $found->all(), $english, $state, $school->name, $day);
+    }
+
+    /**
+     * @param  Incident[]  $incidents
+     */
+    protected function proposeSuivi(string $from, array $incidents, bool $english, array $state, ?string $schoolName = null, ?Carbon $day = null): array
+    {
+        $incidents = array_values($incidents);
+        $next = [
+            'step' => self::SUIVI_STEP_AWAITING_CHOICE,
+            'lang' => $english ? 'en' : 'fr',
+            'candidates' => array_map(fn (Incident $i) => $i->id, $incidents),
+        ];
+        if (isset($state['school_id'])) {
+            $next['school_id'] = $state['school_id'];
+        }
+        if ($schoolName !== null) {
+            $next['school_name'] = $schoolName;
+        }
+        if ($day !== null) {
+            $next['day'] = $day->toDateString();
+        }
+        $this->rememberSuivi($from, $next);
+        $this->reply($from, $this->suiviProposalReply($next, $english, false));
+
+        return ['status' => 'suivi', 'from' => $from, 'step' => self::SUIVI_STEP_AWAITING_CHOICE];
+    }
+
+    /** Ids des incidents proposés, dans l'ordre d'affichage. */
+    protected function suiviCandidates(array $state): array
+    {
+        $ids = $state['candidates'] ?? [];
+        if (!is_array($ids)) {
+            return [];
+        }
+
+        return array_map('intval', array_values(array_filter($ids, fn ($id) => is_int($id) || (is_string($id) && ctype_digit($id)))));
+    }
+
+    /**
+     * Candidats encore en base (incident supprimé entre-temps = retiré),
+     * état resynchronisé pour garder la numérotation affichée.
+     */
+    protected function refreshSuiviCandidates(string $from, array $state): array
+    {
+        $stored = $this->suiviCandidates($state);
+        if ($stored === []) {
+            return [];
+        }
+        $alive = Incident::whereIn('id', $stored)->pluck('id')->all();
+        $fresh = array_values(array_filter($stored, fn ($id) => in_array($id, $alive, true)));
+        if ($fresh !== $stored) {
+            $state['candidates'] = $fresh;
+            $this->rememberSuivi($from, $state);
+        }
+
+        return $fresh;
+    }
+
+    /**
+     * Liste numérotée « 1) WASH-… — résumé » + consigne de réponse.
+     * Tient en un SMS : les résumés sont raccourcis si besoin (jamais la consigne).
+     */
+    protected function suiviProposalReply(array $state, bool $english, bool $invalid): string
+    {
+        $candidates = $this->suiviCandidates($state);
+        $incidents = $candidates === []
+            ? collect()
+            : Incident::whereIn('id', $candidates)->get()->sortBy(fn (Incident $i) => array_search($i->id, $candidates, true))->values();
+        if ($incidents->isEmpty()) {
+            return $this->t('whatsapp.suivi.ask_date', $english);
+        }
+
+        if ($invalid) {
+            $head = $this->t('whatsapp.suivi.invalid_choice', $english);
+        } elseif (!isset($state['day'], $state['school_name'])) {
+            $head = $this->t('whatsapp.suivi.propose_intro_generic', $english);
+        } else {
+            $day = Carbon::parse($state['day']);
+            $head = $this->t('whatsapp.suivi.propose_intro', $english, [
+                'count' => $incidents->count(),
+                'school' => $state['school_name'],
+                'date' => $english ? $this->englishDay($day) : $this->frenchDay($day),
+            ]) . ' ' . $this->t('whatsapp.suivi.propose_hint', $english);
+        }
+
+        $summaryLen = 30;
+        do {
+            $lines = [];
+            foreach ($incidents as $num => $incident) {
+                $lines[] = ($num + 1) . ') ' . $incident->reference_code . ' — ' . Str::limit((string) ($incident->ai_summary ?: $incident->title), $summaryLen);
+            }
+            $body = $head . "\n" . implode("\n", $lines);
+            if (mb_strlen($body) <= self::MAX_REPLY_LENGTH || $summaryLen <= 12) {
+                break;
+            }
+            $summaryLen -= 6;
+        } while (true);
+
+        return $body;
+    }
+
+    /**
+     * Code partiel (ex. « TEST01 », « RCLD5U ») : incidents dont la référence
+     * contient le fragment (école du contact d'abord, sinon global).
+     * null = aucun fragment exploitable dans le texte.
+     *
+     * @return Incident[]|null
+     */
+    protected function matchSuiviPartial(int $schoolId, string $text): ?array
+    {
+        $tokens = preg_split('/[^A-Za-z0-9]+/', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $fragments = [];
+        foreach ($tokens as $token) {
+            $upper = mb_strtoupper($token);
+            if (strlen($upper) < 4) {
+                continue;
+            }
+            // Année ou jour (« 2026 », « 02 ») : jamais un fragment de code.
+            if (ctype_digit($upper) && strlen($upper) < 6) {
+                continue;
+            }
+            $ascii = $this->asciiLower($upper);
+            // Fragment « code » : avec chiffre, ou long mot non courant.
+            if (!preg_match('/\d/', $upper) && (strlen($upper) < 6 || in_array($ascii, self::SUIVI_PARTIAL_STOPWORDS, true))) {
+                continue;
+            }
+            if (in_array($ascii, self::SUIVI_PARTIAL_STOPWORDS, true)) {
+                continue;
+            }
+            $fragments[] = $upper;
+        }
+        $fragments = array_values(array_unique($fragments));
+        if ($fragments === []) {
+            return null;
+        }
+
+        foreach ($fragments as $fragment) {
+            $found = Incident::where('school_id', $schoolId)
+                ->whereRaw('UPPER(reference_code) LIKE ?', ['%' . $fragment . '%'])
+                ->latest('id')->take(self::SUIVI_MAX_PROPOSALS)->get()->all();
+            if ($found === []) {
+                $found = Incident::whereRaw('UPPER(reference_code) LIKE ?', ['%' . $fragment . '%'])
+                    ->latest('id')->take(self::SUIVI_MAX_PROPOSALS)->get()->all();
+            }
+            if ($found !== []) {
+                return $found;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Écoles dont le nom correspond au texte (« Bonanjo », « c'est l'école
+     * de Bonanjo »). Comparaison sans accents, dans les deux sens.
+     *
+     * @return School[]
+     */
+    protected function matchSuiviSchools(string $text): array
+    {
+        $needle = $this->suiviSchoolNeedle($text);
+        if (mb_strlen($needle) < 3 || in_array($needle, ['ecole', 'ecoles', 'college', 'lycee', 'school'], true)) {
+            return [];
+        }
+
+        $matches = [];
+        foreach (School::query()->orderBy('name')->get() as $school) {
+            $norm = $this->asciiLower((string) $school->name);
+            if (mb_strlen($norm) < 3) {
+                continue;
+            }
+            if (str_contains($norm, $needle) || str_contains($needle, $norm)) {
+                $matches[] = $school;
+                continue;
+            }
+            // Tous les mots du texte retrouvés dans le nom (« Bonanjo Douala »).
+            $words = preg_split('/\s+/', $needle, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            if (count($words) > 1) {
+                $all = true;
+                foreach ($words as $word) {
+                    if (mb_strlen($word) < 3 || !str_contains($norm, $word)) {
+                        $all = false;
+                        break;
+                    }
+                }
+                if ($all) {
+                    $matches[] = $school;
+                }
+            }
+        }
+
+        return $matches;
+    }
+
+    /** Nom d'école brut : préfixes déclaratifs retirés, sans accents. */
+    protected function suiviSchoolNeedle(string $text): string
+    {
+        $norm = $this->asciiLower($text);
+        $norm = (string) preg_replace('/^(c est|ces|cest|ceci est|il s agit de)\s+/', '', $norm);
+        $norm = (string) preg_replace('/^(l|la|le|les|une|mon|ma|notre)\s+/', '', $norm);
+        $norm = (string) preg_replace('/^(ecole|ecoles|college|lycee|school|groupe scolaire)\s+(de|du|des|d)?\s*/', '', $norm);
+        $norm = (string) preg_replace('/^(de|du|des|d)\s+/', '', $norm);
+        $norm = trim((string) preg_replace('/[^\p{L}\p{N}\s-]+/u', ' ', $norm));
+
+        return trim((string) preg_replace('/\s+/', ' ', $norm));
+    }
+
+    /** « Mon école », « ici », « la même »... : école du contact. */
+    protected function isSuiviSameSchool(string $text): bool
+    {
+        return preg_match('/\b(mon ecole|ma ecole|notre ecole|la meme|meme ecole|meme que|chez nous|ici|my school|same school|pareil)\b/', $this->asciiLower($text)) === 1;
+    }
+
+    /** « Je ne sais pas », « non », « oublié »... : ID inconnu. */
+    protected function isSuiviUnknownId(string $text): bool
+    {
+        return preg_match('/\b(non|no)\b|\b(ne|n) (sais|connais) pas\b|\bsais pas\b|\bconnais pas\b|aucune idee|no idea|dont know|do not know|oublie|perdu|pas de (numero|code)|je n ai pas/', $this->asciiLower($text)) === 1;
+    }
+
+    /** « Annuler », « stop »... : fin du suivi. */
+    protected function isSuiviCancel(string $text): bool
+    {
+        return preg_match('/\b(annuler|annule|stop|laisse tomber|abandonner|abandonne|cancel|arreter|arrete)\b/', $this->asciiLower($text)) === 1;
+    }
+
+    /** « Recommencer » : on repart de la demande d'ID. */
+    protected function isSuiviRestart(string $text): bool
+    {
+        return preg_match('/recommenc|restart|repartir|tout reprendre/', $this->asciiLower($text)) === 1;
+    }
+
+    /**
+     * Jour visé (« hier », « le 2 », « 02/11 », « 2 novembre »...), null sinon.
+     * « le N » seul = le plus récent jour N passé (aujourd'hui inclus).
+     */
+    protected function parseSuiviDate(string $text): ?Carbon
+    {
+        $norm = ' ' . $this->asciiLower($text) . ' ';
+        $today = now()->startOfDay();
+
+        if (str_contains($norm, 'avant hier') || str_contains($norm, 'avant-hier')) {
+            return $today->copy()->subDays(2);
+        }
+        if (preg_match('/\bhier\b/', $norm) || str_contains($norm, 'yesterday')) {
+            return $today->copy()->subDay();
+        }
+        // « aujourd'hui » : l'apostrophe est une espace après asciiLower().
+        if (str_contains(str_replace([' ', '-'], '', $norm), 'aujourdhui') || preg_match('/\btoday\b/', $norm)) {
+            return $today->copy();
+        }
+        if (preg_match('/il y a (\d{1,3}) jours?/', $norm, $m) || preg_match('/\b(\d{1,3}) jours?\b/', $norm, $m)) {
+            return $today->copy()->subDays(min((int) $m[1], 3650));
+        }
+        if (str_contains($norm, 'semaine derniere') || str_contains($norm, 'last week')) {
+            return $today->copy()->subWeek();
+        }
+        // JJ/MM(/AAAA), JJ-MM(-AAAA), JJ.MM(.AAAA).
+        if (preg_match('/\b(\d{1,2})[\/.\-](\d{1,2})(?:[\/.\-](\d{2,4}))?\b/', $norm, $m)) {
+            $day = (int) $m[1];
+            $month = (int) $m[2];
+            $year = isset($m[3]) && $m[3] !== '' ? (int) $m[3] : (int) $today->year;
+            if ($year < 100) {
+                $year += 2000;
+            }
+            $date = $this->safeSuiviDay($year, $month, $day);
+            if ($date === null) {
+                return null;
+            }
+            // Sans année et dans le futur : même jour l'an passé.
+            if ((!isset($m[3]) || $m[3] === '') && $date->gt($today)) {
+                $date->subYear();
+            }
+
+            return $date;
+        }
+        // « 2 novembre » / « le 2 nov » (+ année optionnelle).
+        if (preg_match('/\b(\d{1,2})\s*([a-z]+)(?:\s*(\d{4}))?\b/', $norm, $m) && isset($this->suiviMonths()[$m[2]])) {
+            $date = $this->safeSuiviDay(
+                isset($m[3]) && $m[3] !== '' ? (int) $m[3] : (int) $today->year,
+                $this->suiviMonths()[$m[2]],
+                (int) $m[1]
+            );
+            if ($date === null) {
+                return null;
+            }
+            if ((!isset($m[3]) || $m[3] === '') && $date->gt($today)) {
+                $date->subYear();
+            }
+
+            return $date;
+        }
+        // Ordre anglais « november 2 ».
+        if (preg_match('/\b([a-z]+)\s*(\d{1,2})\b/', $norm, $m) && isset($this->suiviMonths()[$m[1]])) {
+            $date = $this->safeSuiviDay((int) $today->year, $this->suiviMonths()[$m[1]], (int) $m[2]);
+            if ($date === null) {
+                return null;
+            }
+            if ($date->gt($today)) {
+                $date->subYear();
+            }
+
+            return $date;
+        }
+        // Jour seul (« le 2 », « 2 ») : pas sur une phrase de panne.
+        if ($this->looksLikeWashReport($text)
+            && !preg_match('/hier|aujourdhui|today|yesterday|semaine|\ble\b|\bjour\b|janv|fevr|mars|avr|mai|juin|juil|aout|sept|oct|nov|dec|\d[\/.\-]\d/', $norm)) {
+            return null;
+        }
+        if (preg_match('/\b(\d{1,2})\b/', $norm, $m)) {
+            $day = (int) $m[1];
+            if ($day >= 1 && $day <= 31) {
+                $date = $today->copy()->day(min($day, $today->daysInMonth));
+                if ($date->gt($today)) {
+                    $date->subMonthNoOverflow();
+                    $date->day(min($day, $date->daysInMonth));
+                }
+
+                return $date->startOfDay();
+            }
+        }
+
+        return null;
+    }
+
+    /** Mois FR/EN (clés sans accents) → numéro. */
+    protected function suiviMonths(): array
+    {
+        return [
+            'janvier' => 1, 'janv' => 1, 'jan' => 1, 'january' => 1,
+            'fevrier' => 2, 'fevr' => 2, 'fev' => 2, 'february' => 2, 'feb' => 2,
+            'mars' => 3, 'mar' => 3, 'march' => 3,
+            'avril' => 4, 'avr' => 4, 'april' => 4, 'apr' => 4,
+            'mai' => 5, 'may' => 5,
+            'juin' => 6, 'jun' => 6, 'june' => 6,
+            'juillet' => 7, 'juil' => 7, 'jul' => 7, 'july' => 7,
+            'aout' => 8, 'aug' => 8, 'august' => 8,
+            'septembre' => 9, 'sept' => 9, 'sep' => 9, 'september' => 9,
+            'octobre' => 10, 'oct' => 10, 'october' => 10,
+            'novembre' => 11, 'nov' => 11, 'november' => 11,
+            'decembre' => 12, 'dec' => 12, 'december' => 12,
+        ];
+    }
+
+    /** Jour calendaire sûr (null si inexistant : 30 février...). */
+    protected function safeSuiviDay(int $year, int $month, int $day): ?Carbon
+    {
+        if ($month < 1 || $month > 12 || $day < 1 || $day > 31) {
+            return null;
+        }
+        try {
+            $date = Carbon::create($year, $month, $day, 0, 0, 0)->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return ($date->year === $year && $date->month === $month && $date->day === $day) ? $date : null;
+    }
+
+    /** Minuscules sans accents (comparaisons robustes aux transcriptions vocales). */
+    protected function asciiLower(string $text): string
+    {
+        $lower = mb_strtolower(trim($text), 'UTF-8');
+        $lower = str_replace(['’', '‘', "'", '`'], ' ', $lower);
+        $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $lower);
+
+        return trim((string) ($ascii === false ? $lower : $ascii));
     }
 
     protected function staleClarificationNote(bool $english = false): string
