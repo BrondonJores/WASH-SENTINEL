@@ -490,6 +490,37 @@ class CloudWhisperProvider(BaseSTTProvider):
             return result
 
 
+class MetaTranscribeProvider(CloudWhisperProvider):
+    """Transcription cloud Meta Muse (muse-voice-transcribe-1.0).
+
+    Même contrat OpenAI-compatible (/audio/transcriptions) que
+    CloudWhisperProvider, avec les défauts Meta. Driver distinct pour la
+    transparence admin (logs/detection : on sait que c'est Meta qui a
+    transcrit, pas un cloud générique).
+    """
+
+    driver_name = "meta_transcribe"
+
+    META_BASE_URL = "https://api.meta.ai/v1"
+    META_MODEL = "muse-voice-transcribe-1.0"
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        timeout: float = 120.0,
+        prompt: str | None = None,
+    ):
+        super().__init__(
+            base_url=base_url or os.getenv("META_STT_BASE_URL", self.META_BASE_URL),
+            model=model or os.getenv("META_STT_MODEL", self.META_MODEL),
+            api_key=api_key or os.getenv("META_STT_API_KEY") or os.getenv("CLOUD_STT_API_KEY"),
+            timeout=timeout,
+            prompt=prompt,
+        )
+
+
 STT_REGISTRY: dict[str, type[BaseSTTProvider]] = {
     "whisper_cpp": WhisperCppProvider,
     "whisper": WhisperCppProvider,
@@ -497,9 +528,7 @@ STT_REGISTRY: dict[str, type[BaseSTTProvider]] = {
     "omnilingual": OmnilingualOnnxProvider,
     "cloud_whisper": CloudWhisperProvider,
     "cloud": CloudWhisperProvider,
-    # Meta Muse Transcribe : même contrat OpenAI-compatible
-    # (/audio/transcriptions), défauts Meta (cf. STT_PROVIDER_TYPES).
-    "meta_transcribe": CloudWhisperProvider,
+    "meta_transcribe": MetaTranscribeProvider,
 }
 
 
@@ -631,12 +660,14 @@ STT_PROVIDER_TYPES: list[dict[str, Any]] = [
     {
         "id": "meta_transcribe",
         "label": "Meta Muse Transcribe (cloud)",
-        "description": "Transcription cloud Meta (endpoint OpenAI-compatible) : modèle muse-voice-transcribe-1.0. Collez votre clé api.meta.ai. Couverture langues locales selon Meta, non vérifiée — testez depuis Réglages avec un vrai vocal.",
+        "description": "Transcription cloud Meta (endpoint OpenAI-compatible) : modèle "
+            + MetaTranscribeProvider.META_MODEL
+            + ". Collez votre clé api.meta.ai. Couverture langues locales selon Meta, non vérifiée — testez depuis Réglages avec un vrai vocal.",
         "api_key_required": True,
         "local_languages": False,
         "fields": [
-            {"name": "base_url", "label": "URL de base (/v1)", "type": "url", "default": "https://api.meta.ai/v1", "required": True},
-            {"name": "model", "label": "Modèle", "type": "text", "default": "muse-voice-transcribe-1.0", "required": True},
+            {"name": "base_url", "label": "URL de base (/v1)", "type": "url", "default": MetaTranscribeProvider.META_BASE_URL, "required": True},
+            {"name": "model", "label": "Modèle", "type": "text", "default": MetaTranscribeProvider.META_MODEL, "required": True},
             {"name": "timeout", "label": "Timeout (s)", "type": "number", "default": "120", "required": False},
             {"name": "prompt", "label": "Prompt initial (vide = prompt métier WASH auto FR/EN)", "type": "text", "default": "", "required": False},
         ],

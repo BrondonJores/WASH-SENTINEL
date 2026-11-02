@@ -19,6 +19,7 @@ from .stt_providers import (
     SUPPORTED_VOICE_LANGUAGES,
     WHISPER_LANG_MAP,
     BaseSTTProvider,
+    CloudWhisperProvider,
     OmnilingualOnnxProvider,
     WhisperCppProvider,
     default_stt,
@@ -368,7 +369,10 @@ class VoiceService:
                 # cloud...) : message guidé, sans détail technique.
                 raise guided_error(STT_UNAVAILABLE) from None
             transcript = (result.get("transcript", "") or "").strip()
-            detected: str | None = language
+            # Voie directe : la langue DÉTECTÉE par le moteur (cloud Meta :
+            # detected_language renvoyé) gagne sur la langue demandée. Un
+            # anglophone au micro avec langue=fr ne doit plus être affirmé fr.
+            detected: str | None = result.get("detected_language") or language
             driver = provider.driver_name
             effective = result.get("language_effective") or language
             detail: dict[str, Any] = {"mode": "direct"}
@@ -434,7 +438,26 @@ class VoiceService:
         Retourne (transcript, detected, driver, effective, detail). Moteurs
         indisponibles ignorés silencieusement ; si rien ne répond, repli sur
         le provider actif (comportement historique), sinon STT_UNAVAILABLE.
+
+        Profil cloud actif (Meta...) : honoré D'ABORD (l'admin l'a choisi
+        pour sa qualité), avec repli locaux si le cloud échoue ou rend vide.
         """
+        if isinstance(provider, CloudWhisperProvider):
+            try:
+                cloud_res = provider.transcribe(audio_bytes, filename, language)
+            except Exception:
+                cloud_res = None
+            cloud_text = ((cloud_res or {}).get("transcript") or "").strip()
+            if cloud_text:
+                cloud_detected = (cloud_res or {}).get("detected_language") or language
+                return (
+                    cloud_text,
+                    cloud_detected,
+                    provider.driver_name,
+                    (cloud_res or {}).get("language_effective") or language,
+                    {"mode": "cascade", "reason": "cloud-first",
+                     "cloud_detected": cloud_detected},
+                )
         whisper_res: dict[str, Any] | None = None
         local_res: dict[str, Any] | None = None
         whisper = _local_whisper_provider()

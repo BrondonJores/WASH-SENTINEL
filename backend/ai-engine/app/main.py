@@ -250,7 +250,7 @@ async def transcribe_audio(
     audio: UploadFile = File(...),
     language: str | None = Form(None),
 ) -> VoiceTranscriptionResponse:
-    """Transcrit une note vocale via le provider STT actif (Whisper, Omnilingual ou cloud).
+    """Transcrit une note vocale via le provider STT actif (Whisper, Omnilingual, Meta ou cloud).
 
     Précédence de langue : requête explicite > profil (header X-STT-Language) > fr.
     Plafond 12 Mo mesuré par chunks AVANT de tout charger (anti-DoS direct).

@@ -11,9 +11,11 @@ from unittest.mock import MagicMock, patch
 from app.stt_providers import (
     STT_PROVIDER_TYPES,
     CloudWhisperProvider,
+    MetaTranscribeProvider,
     stt_from_headers,
     stt_from_profile,
 )
+from app.voice_service import VoiceService
 
 META_BASE = "https://api.meta.ai/v1"
 META_MODEL = "muse-voice-transcribe-1.0"
@@ -50,9 +52,16 @@ class MetaTranscribeTest(unittest.TestCase):
             "driver": "meta_transcribe", "base_url": META_BASE,
             "model": META_MODEL, "api_key": "K",
         })
-        self.assertIsInstance(provider, CloudWhisperProvider)
+        self.assertIsInstance(provider, MetaTranscribeProvider)
+        self.assertEqual(provider.driver_name, "meta_transcribe")
         self.assertEqual(provider.base_url, META_BASE)
         self.assertEqual(provider.model, META_MODEL)
+
+    def test_meta_defaults_without_mapping(self) -> None:
+        provider = MetaTranscribeProvider(api_key="K")
+        self.assertEqual(provider.base_url, MetaTranscribeProvider.META_BASE_URL)
+        self.assertEqual(provider.model, MetaTranscribeProvider.META_MODEL)
+        self.assertEqual(provider.driver_name, "meta_transcribe")
 
     def test_headers_resolve_alias(self) -> None:
         provider = stt_from_headers({
@@ -96,6 +105,74 @@ class MetaTranscribeTest(unittest.TestCase):
         self.assertEqual(defaults["base_url"], META_BASE)
         self.assertEqual(defaults["model"], META_MODEL)
         self.assertIn("muse-voice-transcribe-1.0", entry["description"])
+
+
+class FakeMetaCloud(MetaTranscribeProvider):
+    """Faux cloud Meta : canned, aucun réseau (sous-classe pour isinstance)."""
+
+    def __init__(self, transcript="", detected=None, exc=None):
+        super().__init__(api_key="K")
+        self._transcript = transcript
+        self._detected = detected
+        self._exc = exc
+        self.calls = 0
+
+    def transcribe(self, audio_bytes, filename, language):
+        self.calls += 1
+        if self._exc is not None:
+            raise self._exc
+        res = {"transcript": self._transcript, "language": language,
+               "language_effective": "auto"}
+        if self._detected is not None:
+            res["detected_language"] = self._detected
+        return res
+
+
+def _transcribe(provider, language):
+    with patch("app.voice_service._probe_duration", return_value=None):
+        return VoiceService().transcribe(b"RIFFfake", "a.ogg", language, stt=provider)
+
+
+class MetaWiringTest(unittest.TestCase):
+    def test_direct_path_honors_detected_language(self) -> None:
+        res = _transcribe(FakeMetaCloud("water leak", detected="en"), "fr")
+        self.assertEqual(res.transcript, "water leak")
+        self.assertEqual(res.language_detected, "en")
+        self.assertEqual(res.driver, "meta_transcribe")
+
+    def test_direct_path_falls_back_to_requested_language(self) -> None:
+        res = _transcribe(FakeMetaCloud("fuite robinet"), "fr")
+        self.assertEqual(res.language_detected, "fr")
+
+    def test_cascade_tries_cloud_first(self) -> None:
+        cloud = FakeMetaCloud("plus d'eau", detected="fr")
+        with patch("app.voice_service._local_whisper_provider") as w, \
+                patch("app.voice_service._local_omni_provider") as o:
+            res = _transcribe(cloud, "dua_Latn")
+        self.assertEqual(res.transcript, "plus d'eau")
+        self.assertEqual(res.driver, "meta_transcribe")
+        self.assertEqual(res.detection.get("reason"), "cloud-first")
+        w.assert_not_called()
+        o.assert_not_called()
+
+    def test_cascade_falls_back_to_locals_when_cloud_fails(self) -> None:
+        class FakeOmni:
+            driver_name = "omnilingual_onnx"
+
+            def __init__(self, transcript=""):
+                self.transcript = transcript
+
+            def transcribe(self, audio_bytes, filename, language):
+                return {"transcript": self.transcript, "language": language,
+                        "language_effective": language}
+
+        cloud = FakeMetaCloud(exc=RuntimeError("réseau coupé (simulé)"))
+        omni = FakeOmni(transcript="transcript local")
+        with patch("app.voice_service._local_whisper_provider", return_value=None), \
+                patch("app.voice_service._local_omni_provider", return_value=omni):
+            res = _transcribe(cloud, "dua_Latn")
+        self.assertEqual(res.transcript, "transcript local")
+        self.assertNotEqual(res.detection.get("reason"), "cloud-first")
 
 
 if __name__ == "__main__":
