@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.stt_providers import parse_whisper_detection
+from app.stt_providers import parse_whisper_confidence, parse_whisper_detection
 from app.voice_detect import arbitrate, whisper_native_languages
 from app.voice_service import STT_DETECT_MIN_PROB, VoiceService
 
@@ -52,17 +52,21 @@ class FakeOmni:
 class FakeActive:
     driver_name = "stub_active"
 
-    def __init__(self, transcript="", exc=None):
+    def __init__(self, transcript="", exc=None, confidence=None):
         self.transcript = transcript
         self.exc = exc
+        self.confidence = confidence
         self.calls = 0
 
     def transcribe(self, audio_bytes, filename, language):
         self.calls += 1
         if self.exc is not None:
             raise self.exc
-        return {"transcript": self.transcript, "language": language,
-                "language_effective": language}
+        out = {"transcript": self.transcript, "language": language,
+               "language_effective": language}
+        if self.confidence is not None:
+            out["confidence"] = self.confidence
+        return out
 
 
 def _transcribe(language, active, whisper=None, omni=None):
@@ -162,6 +166,59 @@ class CascadeTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             _transcribe("bbj_Latn", FakeActive(exc=RuntimeError("down")))
         self.assertIn("STT_UNAVAILABLE", str(ctx.exception))
+
+
+class ParseWhisperConfidenceTest(unittest.TestCase):
+    def test_no_speech_shape(self) -> None:
+        payload = {"result": {"transcription": [
+            {"text": "a", "no_speech_prob": 0.9},
+            {"text": "b", "no_speech_prob": 0.7}]}}
+        self.assertAlmostEqual(parse_whisper_confidence(payload), 0.2)
+
+    def test_logprob_shape(self) -> None:
+        payload = {"segments": [{"text": "a", "avg_logprob": -0.1}]}
+        conf = parse_whisper_confidence(payload)
+        assert conf is not None
+        self.assertGreater(conf, 0.9)
+
+    def test_garbage_is_none(self) -> None:
+        self.assertIsNone(parse_whisper_confidence({}))
+        self.assertIsNone(parse_whisper_confidence({"transcription": []}))
+        self.assertIsNone(parse_whisper_confidence(None))
+
+
+class EscalationTest(unittest.TestCase):
+    def test_low_confidence_escalates_to_omni(self) -> None:
+        active = FakeActive("da cas bolilam", confidence=0.2)
+        whisper = FakeWhisper({"transcript": "", "detected_language": None,
+                               "detection_prob": None})
+        omni = FakeOmni("pou tshi lepom")
+        res = _transcribe("fr", active, whisper, omni)
+        self.assertEqual(res.transcript, "pou tshi lepom")
+        self.assertIsNone(res.language_detected)
+        self.assertEqual(res.detection.get("escalated_from"),
+                         "low-confidence-direct")
+
+    def test_high_confidence_no_escalation(self) -> None:
+        active = FakeActive("robinet cassé", confidence=0.95)
+        omni = FakeOmni("intrus")
+        res = _transcribe("fr", active, None, omni)
+        self.assertEqual(res.transcript, "robinet cassé")
+        self.assertEqual(omni.calls, 0)
+        self.assertEqual(res.detection.get("mode"), "direct")
+
+    def test_no_confidence_no_escalation(self) -> None:
+        active = FakeActive("robinet cassé")
+        omni = FakeOmni("intrus")
+        res = _transcribe("fr", active, None, omni)
+        self.assertEqual(res.transcript, "robinet cassé")
+        self.assertEqual(omni.calls, 0)
+
+    def test_escalation_empty_keeps_direct(self) -> None:
+        active = FakeActive("da cas", confidence=0.1)
+        res = _transcribe("fr", active, None, None)
+        self.assertEqual(res.transcript, "da cas")
+        self.assertEqual(res.detection.get("low_confidence"), 0.1)
 
 
 class GoldenFixtureTest(unittest.TestCase):

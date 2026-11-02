@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -67,6 +68,78 @@ LANGUAGE_AUTO_EFFECTIVE = "auto"
 _WHISPER_DETECTED_RE = re.compile(
     r"auto[-\s]?detected language:\s*([A-Za-z_]+)"
     r"(?:\s*\(p\s*=\s*([\d.]+))?")
+
+
+#: Cache du support JSON par binaire (sniffé via --help, jamais supposé).
+_WHISPER_JSON_FLAGS: dict[str, list[str]] = {}
+
+
+def whisper_json_flags(binary: str, timeout: float = 15.0) -> list[str]:
+    """Flags JSON du binaire whisper.cpp (sniffés, cache par chemin).
+
+    Les vieux binaires ne connaissent ni -oj ni -ojson : on n'ajoute le
+    flag que s'il apparaît dans --help (sinon la transcription casserait).
+    """
+    if binary in _WHISPER_JSON_FLAGS:
+        return _WHISPER_JSON_FLAGS[binary]
+    flags: list[str] = []
+    try:
+        res = subprocess.run(
+            [binary, "--help"], capture_output=True, text=True,
+            check=False, timeout=timeout)
+        help_text = f"{res.stdout}\n{res.stderr}"
+        if "-ojson" in help_text or "output-json" in help_text:
+            flags = ["-ojson"]
+        elif re.search(r"(?<!o)-oj\b", help_text):
+            flags = ["-oj"]
+    except Exception:
+        flags = []
+    _WHISPER_JSON_FLAGS[binary] = flags
+    return flags
+
+
+def parse_whisper_confidence(payload: Any) -> float | None:
+    """Confiance 0..1 depuis le JSON whisper.cpp (pur, best-effort).
+
+    Formes tolérées : {"result": {"transcription": [...]}} ou
+    {"transcription": [...]} ou {"segments": [...]}, probas "no_speech_prob"
+    (confiance = 1 - moyenne) ou "avg_logprob" (confiance = exp, bornée).
+    None si inexploitable (vieux binaire, JSON absent).
+    """
+    import math
+    segments: Any = None
+    if isinstance(payload, dict):
+        result = payload.get("result")
+        if isinstance(result, dict):
+            segments = result.get("transcription", result.get("segments"))
+        segments = segments if segments is not None else payload.get(
+            "transcription", payload.get("segments"))
+    if not isinstance(segments, list) or not segments:
+        return None
+    no_speech: list[float] = []
+    logprobs: list[float] = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        try:
+            if seg.get("no_speech_prob") is not None:
+                no_speech.append(float(seg["no_speech_prob"]))
+        except (TypeError, ValueError):
+            pass
+        try:
+            if seg.get("avg_logprob") is not None:
+                logprobs.append(float(seg["avg_logprob"]))
+        except (TypeError, ValueError):
+            pass
+    if no_speech:
+        return min(1.0, max(0.0, 1.0 - sum(no_speech) / len(no_speech)))
+    if logprobs:
+        mean_lp = sum(logprobs) / len(logprobs)
+        try:
+            return min(1.0, max(0.0, math.exp(mean_lp)))
+        except (OverflowError, ValueError):
+            return None
+    return None
 
 
 def parse_whisper_detection(stdout: str, stderr: str) -> tuple[str | None, float | None]:
@@ -204,6 +277,7 @@ class WhisperCppProvider(BaseSTTProvider):
             argv = [self.binary, "-m", self.model, "-f", wav_file,
                    "-l", effective,
                    "-otxt", "-of", out_base]
+            argv += whisper_json_flags(self.binary, self.timeout)
             if prompt_text:
                 # whisper.cpp : -p / --prompt = initial_prompt (noms propres WASH).
                 argv += ["--prompt", prompt_text]
@@ -216,10 +290,19 @@ class WhisperCppProvider(BaseSTTProvider):
             if os.path.isfile(txt_file):
                 with open(txt_file, encoding="utf-8") as tf:
                     transcript = tf.read().strip()
+            confidence: float | None = None
+            json_file = out_base + ".json"
+            if os.path.isfile(json_file):
+                try:
+                    with open(json_file, encoding="utf-8") as jf:
+                        confidence = parse_whisper_confidence(json.load(jf))
+                except (OSError, ValueError):
+                    confidence = None
             return {
                 "transcript": transcript or res.stdout.strip(),
                 "language": language,
                 "language_effective": effective,
+                "confidence": confidence,
             }
 
     def transcribe_auto(self, audio_bytes: bytes, filename: str) -> dict[str, Any]:

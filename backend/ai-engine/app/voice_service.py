@@ -107,6 +107,10 @@ NOISE_RMS_THRESHOLD = 0.15
 #: Proba minimale d'auto-détection Whisper pour voler la vedette au moteur
 #: local quand une langue locale est demandée (mélange FR/EN au micro).
 STT_DETECT_MIN_PROB = 0.60
+#: Confiance minimale de la passe Whisper directe (FR/EN demandés) : en
+#: dessous, la parole n'est probablement pas du FR/EN -> escalade vers le
+#: moteur local au lieu de livrer du charabia (cas : bbj parlé, fr demandé).
+STT_DIRECT_MIN_CONFIDENCE = 0.50
 
 #: Alias courants vers les codes canoniques (console, profils admin, saisies libres).
 VOICE_LANGUAGE_ALIASES: dict[str, str] = {
@@ -368,6 +372,33 @@ class VoiceService:
             driver = provider.driver_name
             effective = result.get("language_effective") or language
             detail: dict[str, Any] = {"mode": "direct"}
+            try:
+                confidence = result.get("confidence")
+                confidence = (float(confidence)
+                              if confidence is not None else None)
+            except (TypeError, ValueError):
+                confidence = None
+            if (confidence is not None
+                    and confidence < STT_DIRECT_MIN_CONFIDENCE):
+                # Français douteux (parole probablement non-FR/EN) :
+                # escalade vers la cascade locale si elle rend quelque chose.
+                try:
+                    esc = self._transcribe_local(
+                        audio_bytes, filename, language, provider)
+                except Exception:
+                    esc = None
+                if (esc is not None and esc[0]
+                        and esc[4].get("mode") != "fallback-direct"):
+                    transcript, detected, driver, effective, detail = esc
+                    if detail.get("reason") == "local-engine":
+                        # La langue demandée était suspecte : ne pas la
+                        # réaffirmer. Détection Whisper si dispo, sinon
+                        # inconnue (l'aval demandera au lieu d'inventer).
+                        detected = detail.get("whisper_detected") or None
+                        effective = detected or language
+                    detail["escalated_from"] = "low-confidence-direct"
+                else:
+                    detail["low_confidence"] = confidence
         else:
             # Langue locale demandée : cascade auto-détection (Whisper-auto
             # + moteur local, arbitrage pur). Le mélange FR/EN au micro est
