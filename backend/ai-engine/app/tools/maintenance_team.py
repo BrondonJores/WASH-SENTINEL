@@ -138,6 +138,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             assigned = 0
             affected = 0
             school_keys: set[str] = set()
+            school_best: dict[str, int] = {}
             for row in rows:
                 by_urgency[_urgency_of(row)] += 1
                 who = _assignee_of(row)
@@ -147,7 +148,12 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 affected += _int_of(row.get("affected_students", row.get("estimated_affected_students")))
                 sid = row.get("school_id")
                 sname = str(row.get("school_name") or "").strip().lower()
-                school_keys.add(f"id:{sid}" if sid is not None else f"n:{sname}")
+                skey = f"id:{sid}" if sid is not None else f"n:{sname}"
+                school_keys.add(skey)
+                school_best[skey] = max(
+                    school_best.get(skey, 0),
+                    _int_of(row.get("affected_students", row.get("estimated_affected_students"))),
+                )
             workload.append({
                 "district": district,
                 "open_incidents": len(rows),
@@ -157,6 +163,9 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 "unassigned": len(rows) - assigned,
                 "by_assignee": {k: by_assignee[k] for k in sorted(by_assignee, key=str.lower)},
                 "affected_students": affected,
+                # Sémantique unifiée : somme des max par école (sans
+                # double-compte ; même règle que summarize_district).
+                "affected_students_max": sum(school_best.values()),
             })
         workload.sort(key=lambda w: (-int(w["open_incidents"]), str(w["district"]).lower()))
 
@@ -176,6 +185,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                     "open_incidents": 0,
                     "max_urgency": "low",
                     "affected_students": 0,
+                    "affected_students_max": 0,
                     "incidents": [],
                 }
                 by_school[key] = entry
@@ -185,6 +195,11 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             entry["open_incidents"] = int(entry["open_incidents"]) + 1
             entry["affected_students"] = int(entry["affected_students"]) + _int_of(
                 row.get("affected_students", row.get("estimated_affected_students")))
+            # Sémantique unifiée : max par école (sans double-compte).
+            entry["affected_students_max"] = max(
+                int(entry["affected_students_max"]),
+                _int_of(row.get("affected_students", row.get("estimated_affected_students"))),
+            )
             incidents_list = entry["incidents"]
             assert isinstance(incidents_list, list)
             incidents_list.append({
@@ -215,6 +230,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             "open_incidents": e["open_incidents"],
             "max_urgency": e["max_urgency"],
             "affected_students": e["affected_students"],
+            "affected_students_max": e["affected_students_max"],
             "incidents": e["incidents"],
         } for e in tour]
 

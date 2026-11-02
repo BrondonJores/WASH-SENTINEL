@@ -172,6 +172,7 @@ def _execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                      and i.get("status") not in _OPEN_EXCLUDED]
         critical = sum(1 for i in open_incs if str(i.get("urgency") or "").lower() == "critical")
         affected = sum(_as_int(i.get("affected_students")) for i in open_incs)
+        affected_max = max((_as_int(i.get("affected_students")) for i in open_incs), default=0)
         school_logs = [l for l in logs if l.get("school_id") == sid]
         cost = round(sum(_as_float(l.get("cost_amount")) for l in school_logs), 2)
         days = sum(_as_int(l.get("days_without_service")) for l in school_logs)
@@ -181,6 +182,8 @@ def _execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             "open_incidents": len(open_incs),
             "critical_incidents": critical,
             "affected_students": affected,
+            # Sémantique unifiée : max par école (sans double-compte).
+            "affected_students_max": affected_max,
             "interventions": len(school_logs),
             "total_cost_XAF": cost,
             "days_without_service": days,

@@ -412,12 +412,20 @@ def _summarize_trends(obs: dict[str, Any]) -> str:
         str(figures.get("trend_direction", "")), "stable"
     )
     n = int(figures.get("total_incidents", 0) or 0)
-    return (
+    text = (
         f"À {obs.get('school_name', '?')} sur {obs.get('months', 3)} mois : "
         f"{n} {_plural(n, 'panne')}, "
         f"{_fmt_int(figures.get('total_cost', 0))} {figures.get('currency', 'XAF')} de réparations, "
-        f"tendance {trend}. Le graphique est dans la carte ci-dessous."
+        f"tendance {trend}."
     )
+    try:
+        disruption = int(figures.get("service_disruption_days", 0) or 0)
+        logged = int(figures.get("total_days_lost", 0) or 0)
+    except (TypeError, ValueError):
+        disruption, logged = 0, 0
+    if disruption > logged:
+        text += f" Privation réelle en cours depuis {disruption} jours."
+    return text + " Le graphique est dans la carte ci-dessous."
 
 
 def _summarize_ranking(obs: dict[str, Any]) -> str:

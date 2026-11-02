@@ -293,6 +293,16 @@ class WashAgentController extends Controller
             'recent_incidents' => $this->recentIncidentSnapshots($validated['district'] ?? null),
             'maintenance_logs' => $this->maintenanceLogSnapshots($validated['district'] ?? null),
         ];
+        // Map incident_id -> categorie pour les incidents liés aux journaux
+        // (même résolus/clos ou hors fenêtre recent) : le moteur ventile
+        // les coûts budget_compare sans bucket "unknown" parasite.
+        // Construite depuis les snapshots déjà chargés (zéro requête).
+        $context['incident_categories'] = [];
+        foreach ($context['maintenance_logs'] as $log) {
+            if (! empty($log['incident_id']) && ! empty($log['category'])) {
+                $context['incident_categories'][$log['incident_id']] = $log['category'];
+            }
+        }
 
         $guided = (bool) ($validated['guided'] ?? false);
 
@@ -481,13 +491,18 @@ class WashAgentController extends Controller
             ->map(fn (Incident $i) => [
                 'id' => $i->id,
                 'school_id' => $i->school_id,
+                // Catégorie incluse (tous statuts, même résolus/clos) : le
+                // moteur ventile les coûts budget_compare par catégorie même
+                // quand l'incident lié n'est plus dans les ouverts.
+                'category' => $i->category,
+                'status' => $i->status,
                 'reported_at' => $i->created_at->toIso8601String(),
             ])->all();
     }
 
     protected function maintenanceLogSnapshots(?string $district): array
     {
-        return MaintenanceLog::with(['school:id,name,district', 'incident:id,reference_code,title'])
+        return MaintenanceLog::with(['school:id,name,district', 'incident:id,reference_code,title,category'])
             ->when($district, fn ($q, $v) => $q->whereHas('school', fn ($s) => $s->where('district', $v)))
             ->where('created_at', '>=', now()->subDays(self::MAINTENANCE_LOG_WINDOW_DAYS))
             ->latest()->take(self::MAINTENANCE_LOG_LIMIT)->get()
@@ -497,6 +512,9 @@ class WashAgentController extends Controller
                 'incident_id' => $l->incident_id,
                 'incident_ref' => $l->incident?->reference_code,
                 'incident_title' => $l->incident?->title,
+                // Catégorie de l'incident lié (même résolu/clos) : repli de
+                // ventilation budget_compare quand l'incident est hors pool.
+                'category' => $l->incident?->category,
                 'school_name' => $l->school?->name,
                 'cost_amount' => (float) $l->cost_amount,
                 'currency' => $l->currency,

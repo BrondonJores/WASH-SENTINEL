@@ -114,11 +114,20 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         critical = sum(1 for i in open_incs
                        if str(i.get("urgency") or "").strip().lower() == "critical")
         affected = sum(_to_int(i.get("affected_students")) for i in open_incs)
+        # Sémantique unifiée : somme des max par école (sans double-compte).
+        school_best: dict[Any, int] = {}
+        for incident in open_incs:
+            sid = incident.get("school_id")
+            key = ("id", sid) if sid is not None else (
+                "nom", str(incident.get("school_name") or "").strip().lower())
+            school_best[key] = max(school_best.get(key, 0),
+                                   _to_int(incident.get("affected_students")))
 
         totals = {
             "incidents_open": len(open_incs),
             "schools": school_count,
             "affected_students": affected,
+            "affected_students_max": sum(school_best.values()),
             "critical": critical,
         }
 

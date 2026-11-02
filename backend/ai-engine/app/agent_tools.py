@@ -80,6 +80,54 @@ def _open_incidents(context: dict[str, Any]) -> list[dict[str, Any]]:
     return [i for i in context.get("incidents", []) if i.get("status") not in ("resolved", "closed")]
 
 
+# ---------------------------------------------------------------------------
+# SÉMANTIQUE UNIFIÉE « ÉLÈVES AFFECTÉS » (cohérence graphiques).
+# Constat réel : le dispatch (maintenance_team, tournée par école) affichait
+# la SOMME des affected_students des incidents ouverts de l'école (ex.
+# Bonanjo « 5 incidents · 600 élèves ») tandis que la synthèse citait UN
+# incident (450 élèves). La somme double-compte les mêmes élèves quand
+# plusieurs pannes touchent une école.
+# Règle unifiée : par école = MAX des incidents ouverts (proxy « élèves
+# distincts exposés », sans double-compte) ; territoire/district = SOMME des
+# max par école (jamais somme des incidents).
+# Compat : les clés legacy (affected_students, total_affected_students)
+# gardent la somme historique ; les clés *_max portent la valeur unifiée.
+# Affiché où : dispatch/tournée, synthèse district, classement, carte,
+# comparaison, observatoire, analyse école et briefings exposent les deux
+# (voir chaque outil) ; le frontend lit aujourd'hui les clés legacy.
+# ---------------------------------------------------------------------------
+
+def _affected_int(value: Any) -> int:
+    """Élèves d'un incident : entier >= 0, 0 si absent/invalide."""
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _affected_max(rows: list[dict[str, Any]]) -> int:
+    """Max des élèves sur des incidents (0 si aucun) : proxy sans double-compte."""
+    return max((_affected_int(r.get("affected_students")) for r in rows), default=0)
+
+
+def _school_key(row: dict[str, Any]) -> Any:
+    """Clé de regroupement école : id exact, sinon nom replié."""
+    sid = row.get("school_id")
+    if sid is not None:
+        return ("id", sid)
+    return ("nom", fold(row.get("school_name", "")))
+
+
+def _affected_unified_total(open_incs: list[dict[str, Any]]) -> int:
+    """Somme des max par école (règle unifiée, sans double-compte)."""
+    best: dict[Any, int] = {}
+    for incident in open_incs:
+        key = _school_key(incident)
+        best[key] = max(best.get(key, 0),
+                        _affected_int(incident.get("affected_students")))
+    return sum(best.values())
+
+
 FRENCH_MONTHS = ["", "janvier", "février", "mars", "avril", "mai", "juin",
                  "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
 
@@ -146,12 +194,16 @@ def _float_cost(value: Any) -> float:
 def build_calendar_heatmap(pool: list[dict[str, Any]] | None,
                            schools: list[dict[str, Any]] | None = None,
                            now: datetime | None = None,
-                           days: int = HEATMAP_WINDOW_DAYS) -> dict[str, Any]:
+                           days: int = HEATMAP_WINDOW_DAYS,
+                           scope: str | None = None) -> dict[str, Any]:
     """Calendrier des pannes sur les `days` derniers jours (déterministe, pur).
 
     Journées civiles Afrique/Douala (UTC+1, sans heure d'été) ; repli UTC
     documenté dans la clé "timezone" si la base tz est indisponible.
     Chaque jour est présent même sans panne (pannes=0, liste vide).
+    Unité : incidents signalés uniques (tous statuts, pool dédupliqué
+    incidents+recent_incidents) ; `scope` nomme le périmètre filtré en
+    amont (école ou district) quand l'appelant le connaît.
     """
     tz = _DOUALA_TZ
     moment = now or datetime.now(timezone.utc)
@@ -182,7 +234,7 @@ def build_calendar_heatmap(pool: list[dict[str, Any]] | None,
         for day, cell in sorted(buckets.items())
     ]
     total = sum(cell["pannes"] for cell in buckets.values())
-    return {
+    payload: dict[str, Any] = {
         "timezone": _DOUALA_TZ_NAME,
         "window_days": days,
         "start": start.isoformat(),
@@ -190,7 +242,11 @@ def build_calendar_heatmap(pool: list[dict[str, Any]] | None,
         "days": day_rows,
         "total_pannes": total,
         "total_incidents": total,
+        "unit": "incidents signalés (uniques, tous statuts)",
     }
+    if scope:
+        payload["scope"] = scope
+    return payload
 
 
 TIMELINE_STEPS: tuple[tuple[str, str, frozenset[str]], ...] = (
@@ -234,9 +290,12 @@ def build_budget_compare(context: dict[str, Any], district: Any = None,
     """Comparaison budgétaire : top écoles par cumul réparations + parts WASH.
 
     Cumuls = somme brute des cost_amount (XAF supposé) de maintenance_logs,
-    sans filtre de date. Catégorie d'un coût = catégorie de l'incident lié
-    (incident_id → incidents/recent_incidents, repli champ category du log),
-    sinon bucket "unknown". nb_pannes = incidents + recent_incidents dédupliqués.
+    sans filtre de date. Catégorie d'un coût, par priorité : map
+    incident_categories du contexte (Laravel : incidents liés aux logs, même
+    résolus/clos ou hors fenêtre — comble les trous du pool), puis incident
+    lié (incident_id → incidents/recent_incidents dédupliqués), puis champ
+    category du log, sinon bucket "unknown". nb_pannes = incidents +
+    recent_incidents dédupliqués.
     """
     dlow = fold(district or "")
     schools = [s for s in context.get("schools", [])
@@ -251,6 +310,21 @@ def build_budget_compare(context: dict[str, Any], district: Any = None,
     for incident in pool:
         if incident.get("id") is not None and incident.get("category"):
             cat_by_id[incident["id"]] = str(incident["category"])
+    # Map Laravel incident_id -> categorie (incidents liés aux logs, même
+    # résolus/clos) : comble le pool quand celui-ci ne porte pas la
+    # catégorie (recent_incidents minimal) ou ne contient pas l'incident.
+    # Clés JSON = chaînes : on stocke les deux formes (int + brute).
+    raw_map = context.get("incident_categories")
+    if isinstance(raw_map, dict):
+        for raw_key, category in raw_map.items():
+            if not category:
+                continue
+            text = str(category)
+            cat_by_id[raw_key] = text
+            try:
+                cat_by_id[int(str(raw_key))] = text
+            except (TypeError, ValueError):
+                pass
     rows: dict[Any, dict[str, Any]] = {}
     for school in schools:
         sid = school.get("school_id")
@@ -332,6 +406,8 @@ def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[s
              "category": i.get("category"), "affected_students": i.get("affected_students", 0)}
             for i in open_incs
         ],
+        # Sémantique unifiée : max par école (sans double-compte).
+        "affected_students_max": _affected_max(open_incs),
         "recommendation": analysis.recommendation,
         "repair_ratio_percent": analysis.repair_to_replacement_ratio_percent,
         "annualized_failure_rate": analysis.annualized_failure_rate,
@@ -363,6 +439,8 @@ def tool_rank_schools_by_need(args: dict[str, Any], context: dict[str, Any]) -> 
             "need_score": round(score, 1),
             "open_incidents": len(open_incs),
             "affected_students": affected,
+            # Sémantique unifiée : max par école (sans double-compte).
+            "affected_students_max": _affected_max(open_incs),
             "oldest_days": oldest_days,
             "top_urgency": max((str(i.get("urgency", "low")) for i in open_incs),
                                key=lambda u: weights.get(u, 0.0)),
@@ -382,7 +460,12 @@ def tool_rank_schools_by_need(args: dict[str, Any], context: dict[str, Any]) -> 
 
 
 def tool_summarize_district(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    """Synthèse chiffrée : urgences, catégories, élèves affectés."""
+    """Synthèse chiffrée : urgences, catégories, élèves affectés.
+
+    total_affected_students = somme historique (double-compte à l'école) ;
+    total_affected_students_max = somme des max par école (règle unifiée,
+    même valeur que le dispatch maintenance_team par école).
+    """
     open_incs = _open_incidents(context)
     by_urgency: dict[str, int] = {}
     by_category: dict[str, int] = {}
@@ -407,6 +490,8 @@ def tool_summarize_district(args: dict[str, Any], context: dict[str, Any]) -> di
         "by_urgency": by_urgency,
         "by_category": by_category,
         "total_affected_students": sum(int(i.get("affected_students", 0) or 0) for i in open_incs),
+        # Sémantique unifiée : somme des max par école (sans double-compte).
+        "total_affected_students_max": _affected_unified_total(open_incs),
         "schools_involved": sorted({str(i.get("school_name", "?")) for i in open_incs}),
         "insight": insight,
     }
@@ -787,6 +872,8 @@ def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[s
         "slides": slides,
         "total": len(slides),
         "generated_at": now.isoformat(),
+        # Sémantique unifiée : somme des max par école (sans double-compte).
+        "affected_students_max": _affected_unified_total(open_incs),
     }
 
 
@@ -824,6 +911,8 @@ def tool_territory_overview(args: dict[str, Any], context: dict[str, Any]) -> di
             "lng": lng,
             "open_incidents": len(open_incs),
             "affected_students": affected,
+            # Sémantique unifiée : max par école (sans double-compte).
+            "affected_students_max": _affected_max(open_incs),
             "top_urgency": top,
         })
     crit = sum(1 for s in points if s["top_urgency"] == "critical")
@@ -845,7 +934,16 @@ def tool_territory_overview(args: dict[str, Any], context: dict[str, Any]) -> di
 
 
 def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    """Tendances mensuelles d'une école : pannes, coûts de réparation, jours sans service."""
+    """Tendances mensuelles d'une école : pannes, coûts de réparation, jours sans service.
+
+    Unités (alignées) : « pannes » = incidents signalés uniques (pool
+    dédupliqué incidents+recent_incidents, tous statuts) sur les N mois
+    calendaires (tendances) / 90 derniers jours (heatmap) — les deux
+    périmètres couvrent la même école ou le même district. « Jours sans
+    service (consignés) » = somme des days_without_service des journaux ;
+    la privation réelle en cours (ancienneté max des incidents ouverts,
+    figures.service_disruption_days) est exposée à part, sans invention.
+    """
     district = str(args.get("district") or "").strip()
     dlow = fold(district)
     school = _resolve_school(context, args.get("school"))
@@ -857,14 +955,23 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     if school:
         school_id: Any = school["school_id"]
         school_name = school.get("school_name")
+        trend_sids = {school_id}
+        trend_schools = [school]
         logs = [l for l in context.get("maintenance_logs", []) if l.get("school_id") == school_id]
-        recent = [i for i in context.get("recent_incidents", []) if i.get("school_id") == school_id]
     else:
         # Mode district : agrégation de toutes les écoles du district.
         school_id = None
         school_name = f"District {district}"
+        trend_sids = set(district_sids)
+        trend_schools = [s for s in context.get("schools", [])
+                         if s.get("school_id") in district_sids]
         logs = [l for l in context.get("maintenance_logs", []) if l.get("school_id") in district_sids]
-        recent = [i for i in context.get("recent_incidents", []) if i.get("school_id") in district_sids]
+    # Pool unique dédupliqué (ouverts d'abord : leurs champs riches —
+    # urgence, catégorie — gagnent sur les snapshots récents minimaux),
+    # filtré au périmètre de la tendance (école OU district).
+    trend_pool = [i for i in _dedup_incidents(context.get("incidents"),
+                                             context.get("recent_incidents"))
+                  if i.get("school_id") in trend_sids]
     now = datetime.now(timezone.utc)
 
     def month_key(value: Any) -> tuple[int, int] | None:
@@ -875,7 +982,7 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     labels, incident_counts, costs, days_lost = [], [], [], []
     for year, month in buckets:
         labels.append(f"{FRENCH_MONTHS[month]} {year}")
-        incident_counts.append(sum(1 for i in recent if month_key(i.get("reported_at")) == (year, month)))
+        incident_counts.append(sum(1 for i in trend_pool if month_key(i.get("reported_at")) == (year, month)))
         month_logs = [l for l in logs if month_key(l.get("repaired_at")) == (year, month)]
         costs.append(round(sum(float(l.get("cost_amount", 0) or 0) for l in month_logs), 2))
         days_lost.append(sum(int(l.get("days_without_service", 0) or 0) for l in month_logs))
@@ -883,6 +990,22 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     total_cost = round(sum(costs), 2)
     total_incidents = sum(incident_counts)
     total_days = sum(days_lost)
+    # Privation réelle en cours : ancienneté max des incidents OUVERTS du
+    # périmètre (depuis reported_at, donnée réelle — pas les journaux).
+    disruption_days = 0
+    disruption_since: Any = None
+    disruption_title: Any = None
+    for incident in trend_pool:
+        if incident.get("status") in ("resolved", "closed"):
+            continue
+        dt = _parse_dt(incident.get("reported_at"))
+        if dt is None:
+            continue
+        age = max((now - dt).days, 0)
+        if age > disruption_days:
+            disruption_days = age
+            disruption_since = incident.get("reported_at")
+            disruption_title = incident.get("title") or incident.get("summary")
     avg_cost = round(total_cost / months, 2)
     previous = costs[:-1]
     avg_previous = sum(previous) / len(previous) if previous else 0.0
@@ -900,6 +1023,11 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         insight = f"{share} % des coûts concentrés en {labels[peak].lower()}."
     else:
         insight = "Aucun coût de réparation sur la période."
+    if disruption_days > total_days:
+        what = f"« {disruption_title} »" if disruption_title else "La panne en cours"
+        jour_cons = f"{total_days} {_plural(total_days, 'jour consigné', 'jours consignés')}"
+        insight += (f" Privation réelle : {what} dure depuis {disruption_days} jours "
+                    f"({jour_cons} au journal).")
 
     # --- Enrichissement graphes (défensif, optionnel à la lecture) : portée
     # district si un district est passé, sinon échelle du contexte entier. ---
@@ -926,8 +1054,12 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
 
     scope_logs = [l for l in context.get("maintenance_logs", [])
                   if l.get("school_id") in scope_sids and _in_window(l.get("repaired_at"))]
-    scope_recent = [i for i in context.get("recent_incidents", [])
-                    if i.get("school_id") in scope_sids]
+    # Même pool unique qu'au-dessus, au périmètre d'enrichissement
+    # (district si passé, sinon contexte entier) : les onglets Écoles /
+    # Urgences / totaux comptent les mêmes incidents uniques que la courbe.
+    scope_pool = [i for i in _dedup_incidents(context.get("incidents"),
+                                             context.get("recent_incidents"))
+                  if i.get("school_id") in scope_sids]
     per_rows: dict[Any, dict[str, Any]] = {}
     for scope_school in scope_schools:
         sid = scope_school.get("school_id")
@@ -936,32 +1068,46 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
             "school_name": scope_school.get("school_name"),
             "nom": scope_school.get("school_name"),
             "cost": 0.0, "cout": 0.0, "incidents": 0, "pannes": 0,
+            "disruption_days": 0,
         }
     for log in scope_logs:
         row = per_rows.get(log.get("school_id"))
         if row is not None:
             row["cost"] = round(row["cost"] + _safe_cost(log.get("cost_amount")), 2)
             row["cout"] = row["cost"]
-    windowed_recent = [i for i in scope_recent if _in_window(i.get("reported_at"))]
-    for incident in windowed_recent:
+    windowed_scope = [i for i in scope_pool if _in_window(i.get("reported_at"))]
+    for incident in windowed_scope:
         row = per_rows.get(incident.get("school_id"))
         if row is not None:
             row["incidents"] += 1
             row["pannes"] += 1
+    # Privation réelle par école (ancienneté max des incidents ouverts).
+    for incident in scope_pool:
+        if incident.get("status") in ("resolved", "closed"):
+            continue
+        row = per_rows.get(incident.get("school_id"))
+        if row is None:
+            continue
+        dt = _parse_dt(incident.get("reported_at"))
+        if dt is None:
+            continue
+        row["disruption_days"] = max(row["disruption_days"], max((now - dt).days, 0))
     per_school = sorted(per_rows.values(), key=lambda r: r["cost"], reverse=True)[:TRENDS_PER_SCHOOL_TOP]
     urgency_fr = {"critical": "critique", "high": "haute",
                   "medium": "moyenne", "low": "basse"}
     by_urgency = {"critique": 0, "haute": 0, "moyenne": 0, "basse": 0}
-    for incident in scope_recent:
+    for incident in windowed_scope:
         fr = urgency_fr.get(str(incident.get("urgency", "")).lower())
         if fr:
             by_urgency[fr] += 1
     scope_cost = round(sum(_safe_cost(l.get("cost_amount")) for l in scope_logs), 2)
     scope_days = sum(_safe_days(l.get("days_without_service")) for l in scope_logs)
+    scope_disruption = max((r["disruption_days"] for r in per_rows.values()), default=0)
     totals = {
         "cost": scope_cost, "cout": scope_cost,
-        "incidents": len(windowed_recent), "pannes": len(windowed_recent),
+        "incidents": len(windowed_scope), "pannes": len(windowed_scope),
         "days": scope_days, "jours": scope_days,
+        "disruption_days": scope_disruption,
     }
     return {
         "school_id": school_id,
@@ -971,14 +1117,17 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         "labels": labels,
         "datasets": [
             {"label": f"Coût réparations ({currency})", "data": costs, "kind": "bar"},
-            {"label": "Pannes signalées", "data": incident_counts, "kind": "line"},
-            {"label": "Jours sans service", "data": days_lost, "kind": "line"},
+            {"label": "Pannes signalées (incidents)", "data": incident_counts, "kind": "line"},
+            {"label": "Jours sans service (consignés)", "data": days_lost, "kind": "line"},
         ],
         "figures": {
             "total_cost": total_cost,
             "currency": currency,
             "total_incidents": total_incidents,
             "total_days_lost": total_days,
+            "days_without_service_logged": total_days,
+            "service_disruption_days": disruption_days,
+            "service_disruption_since": disruption_since,
             "avg_cost_per_month": avg_cost,
             "trend_direction": trend,
         },
@@ -987,10 +1136,7 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         "by_urgency": by_urgency,
         "totals": totals,
         "calendar_heatmap": build_calendar_heatmap(
-            [i for i in _dedup_incidents(context.get("incidents"),
-                                         context.get("recent_incidents"))
-             if i.get("school_id") in scope_sids],
-            scope_schools),
+            trend_pool, trend_schools, scope=school_name),
         "budget_compare": build_budget_compare(context, district or None),
     }
 
