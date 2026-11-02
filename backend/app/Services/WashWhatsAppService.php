@@ -145,6 +145,7 @@ class WashWhatsAppService
         protected WhatsAppClient $client,
         protected IncidentTriage $triage,
         protected ?AiEngineClient $ai = null,
+        protected WashPhrasebook $phrasebook = new WashPhrasebook,
     ) {}
 
     public function verifySignature(string $rawBody, ?string $signature): bool
@@ -220,6 +221,7 @@ class WashWhatsAppService
         $channel = 'text';
         $voiceDetected = null;
         $langChoiceFreshEn = false;
+        $voiceNativeLang = null;
 
         if (($message['type'] ?? '') === 'audio' && ($message['media_id'] ?? null)) {
             $download = $this->downloadMediaChecked($message['media_id']);
@@ -249,6 +251,11 @@ class WashWhatsAppService
             if ($detected === self::LANG_FR || $detected === self::LANG_EN) {
                 $voiceDetected = $detected;
                 $this->rememberLang($from, $detected === self::LANG_EN);
+            } elseif ($this->phrasebook->isNativeLang($detected)) {
+                // Vocal en langue locale (bbj/dua...) : mémoire FR/EN
+                // INTOUCHÉE (jamais de bascule), mais la réponse pourra
+                // préfixer la phrase native VALIDÉE (phrasebook humain).
+                $voiceNativeLang = $detected;
             }
         } elseif (($message['type'] ?? '') === 'image' && ($message['media_id'] ?? null)) {
             $download = $this->downloadMediaChecked($message['media_id']);
@@ -397,7 +404,7 @@ class WashWhatsAppService
 
         // Flow vocal : récap texte + boutons Oui/Non + note vocale TTS.
         if ($channel === 'voice' && (bool) config('whatsapp.voice_confirmation', true)) {
-            $this->reply($from, $staleNote . $this->createdReply($incident, $english));
+            $this->reply($from, $staleNote . $this->createdReply($incident, $english, $voiceNativeLang));
             $this->rememberPending($from, $incident, $english);
             $this->sendConfirmationButtons($from, $english);
             $this->sendVoiceConfirmation($from, $incident, $english);
@@ -410,7 +417,7 @@ class WashWhatsAppService
             ];
         }
 
-        $this->reply($from, $staleNote . $this->createdReply($incident, $english));
+        $this->reply($from, $staleNote . $this->createdReply($incident, $english, $voiceNativeLang));
 
         return [
             'status' => 'triaged',
@@ -1900,15 +1907,24 @@ class WashWhatsAppService
         return $this->t('whatsapp.off_topic', $english);
     }
 
-    protected function createdReply(Incident $incident, bool $english = false): string
+    protected function createdReply(Incident $incident, bool $english = false, ?string $nativeLang = null): string
     {
         $summary = Str::limit((string) ($incident->ai_summary ?: $incident->title), 140);
 
-        return $this->t('whatsapp.created', $english, [
+        $base = $this->t('whatsapp.created', $english, [
             'ref' => $incident->reference_code,
             'summary' => $summary,
             'urgency' => $this->urgencyLabel($incident->urgency, $english),
         ]);
+
+        // Vocal natif + phrase VALIDÉE par un locuteur : l'usager reçoit
+        // SA langue d'abord, puis le FR/EN standard (bilingue, sans risque).
+        // Rien de validé → FR/EN seul (comportement inchangé).
+        $native = is_string($nativeLang)
+            ? $this->phrasebook->render($nativeLang, 'thanks_case', ['ref' => $incident->reference_code])
+            : null;
+
+        return $native !== null ? $native."\n\n".$base : $base;
     }
 
     protected function duplicateReply(Incident $incident, bool $english = false): string
