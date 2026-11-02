@@ -87,18 +87,8 @@ class WashWhatsAppService
         'follow up', 'follow-up', 'followup',
     ];
 
-    /** Marqueurs FR : présents → fiche en français (prioritaire sur l'anglais). */
-    protected const SUIVI_FRENCH_MARKERS = [
-        'suivi', 'suivre', 'statut', 'où en est', 'ou en est',
-        'mon signalement', 'mes signalements', 'mon dossier',
-        'avancé', 'avance', 'réparé', 'reparé', 'répare', 'repare',
-    ];
-
-    /** Marqueurs uniquement-EN : présents (sans marqueur FR) → fiche en anglais. */
-    protected const SUIVI_ENGLISH_MARKERS = [
-        'where is', 'my report', 'track', 'tracking',
-        'follow up', 'follow-up', 'followup',
-    ];
+    // Marqueurs de langue (suivi + signalement) : pilotés par données,
+    // voir config/wash_languages.php — aucune liste de mots en dur ici.
 
     /** Étapes du suivi guidé (état cache wash.whatsapp.suivi.<tél>). */
     protected const SUIVI_STEP_AWAITING_ID = 'awaiting_id';
@@ -127,42 +117,12 @@ class WashWhatsAppService
         'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche',
     ];
 
-    /**
-     * Marqueurs FR du flux signalement (veto EN) : marqueurs suivi +
-     * salutations + mots eau/hygiène FR courants. Un message mélangé FR/EN
-     * reste servi en français (langue par défaut). Appariés par frontières
-     * de mot (containsMarker) : 'bloc' ≠ 'block', 'casse' ≠ 'carcasse'.
-     */
-    protected const REPLY_FRENCH_MARKERS = [
-        'suivi', 'suivre', 'statut', 'où en est', 'ou en est',
-        'mon signalement', 'mes signalements', 'mon dossier',
-        'avancé', 'avance', 'réparé', 'reparé', 'répare', 'repare',
-        'bonjour', 'bonsoir', 'salut', 'merci',
-        'eau', 'robinet', 'fuite', 'fuites', 'fuit', 'pompe', 'forage',
-        'puits', 'toilette', 'toilettes', 'latrine', 'latrines', 'douche',
-        'savon', 'hygiène', 'hygiene', 'égout', 'egout',
-        'bouché', 'bouchée', 'bouchés', 'bouchées',
-        'cassé', 'cassée', 'cassés', 'casse', 'panne',
-        'réparation', 'reparation', 'bloc', 'coule', 'coulent',
-        'goutte', 'gouttes', 'marche',
-    ];
+    /** Issues de détection d'un texte : FR, EN ou INCERTAIN (aucun marqueur net). */
+    protected const LANG_FR = 'fr';
 
-    /**
-     * Marqueurs EN génériques (signalement) : présents, SANS aucun marqueur FR
-     * (REPLY_FRENCH_MARKERS en veto) → TOUTE la réponse en anglais.
-     * Même pattern que le suivi, généralisé au flux de création. 'fr' par défaut.
-     * Appariés par frontières de mot (containsMarker) : 'toilet' ≠ 'toilettes'.
-     */
-    protected const REPLY_ENGLISH_MARKERS = [
-        'hello', 'good morning', 'good afternoon', 'good evening',
-        'this is', 'thank', 'thanks', 'please', 'sorry',
-        'school', 'pupil', 'pupils', 'student', 'students', 'teacher',
-        'water', 'tap', 'taps', 'leak', 'leaks', 'leaking', 'leakage',
-        'toilet', 'toilets', 'pipe', 'pipes', 'pump', 'borehole',
-        'soap', 'drink', 'drinking', 'flush', 'tank',
-        'block', 'blocks', 'broken', 'dirty', 'smell', 'shortage',
-        'hygiene', 'sanitation', 'sewage',
-    ];
+    protected const LANG_EN = 'en';
+
+    protected const LANG_UNCERTAIN = 'uncertain';
 
     /** Indices eau/hygiène : un texte sans aucun est traité comme hors-sujet. */
     protected const WASH_KEYWORDS = [
@@ -539,26 +499,13 @@ class WashWhatsAppService
     }
 
     /**
-     * True si la réponse au signalement doit être en anglais : au moins un
-     * marqueur EN générique, et AUCUN marqueur FR (veto élargi : suivi +
-     * salutations + mots eau/hygiène, le mélange FR/EN reste en français).
-     * 'fr' par défaut. Ne dépend jamais de language_effective STT.
+     * True si la réponse au signalement doit être en anglais : au moins
+     * min_markers marqueurs EN génériques, et PAS de veto FR (mélange FR/EN
+     * → français, langue par défaut). Ne dépend jamais de language_effective STT.
      */
     protected function isEnglishReply(string $text): bool
     {
-        $lower = mb_strtolower($text);
-        foreach (self::REPLY_FRENCH_MARKERS as $marker) {
-            if ($this->containsMarker($lower, $marker)) {
-                return false;
-            }
-        }
-        foreach (self::REPLY_ENGLISH_MARKERS as $marker) {
-            if ($this->containsMarker($lower, $marker)) {
-                return true;
-            }
-        }
-
-        return false;
+        return $this->detectFluxLang('reply', $text) === self::LANG_EN;
     }
 
     /** Marqueur borné par des frontières de mot (unicode) : 'tap' ≠ 'taper'. */
@@ -570,19 +517,101 @@ class WashWhatsAppService
     /** True si le message de suivi est en anglais (marqueurs EN, aucun FR). */
     protected function isEnglishSuivi(string $text): bool
     {
-        $lower = mb_strtolower($text);
-        foreach (self::SUIVI_FRENCH_MARKERS as $marker) {
-            if (str_contains($lower, $marker)) {
-                return false;
-            }
+        return $this->detectFluxLang('suivi', $text) === self::LANG_EN;
+    }
+
+    /**
+     * Détection d'un texte : 'fr', 'en' ou 'uncertain' (aucun marqueur net).
+     * EN si marqueurs anglais (reply OU suivi, veto FR respecté) ; FR si
+     * marqueur FR explicite ; sinon INCERTAIN — jamais de bascule au hasard
+     * (l'appelant garde alors la langue mémorisée, ou demande si aucune).
+     */
+    protected function detectTextLang(string $text): string
+    {
+        if ($this->isEnglishReply($text) || $this->isEnglishSuivi($text)) {
+            return self::LANG_EN;
         }
-        foreach (self::SUIVI_ENGLISH_MARKERS as $marker) {
-            if (str_contains($lower, $marker)) {
-                return true;
+        if ($this->countFluxMarkers('reply', 'fr', $text) >= $this->langMinMarkers()) {
+            return self::LANG_FR;
+        }
+
+        return self::LANG_UNCERTAIN;
+    }
+
+    /**
+     * Détection d'un flux ('reply' ou 'suivi') : 'fr', 'en' ou 'uncertain'.
+     * Les deux langues au seuil → le veto tranche (config wash_languages.veto).
+     */
+    protected function detectFluxLang(string $flux, string $text): string
+    {
+        $min = $this->langMinMarkers();
+        $french = $this->countFluxMarkers($flux, 'fr', $text) >= $min;
+        $english = $this->countFluxMarkers($flux, 'en', $text) >= $min;
+        if ($french && $english) {
+            return $this->langVeto();
+        }
+        if ($english) {
+            return self::LANG_EN;
+        }
+        if ($french) {
+            return self::LANG_FR;
+        }
+
+        return self::LANG_UNCERTAIN;
+    }
+
+    /** Nb de marqueurs DISTINCTS d'un flux/langue présents dans le texte. */
+    protected function countFluxMarkers(string $flux, string $lang, string $text): int
+    {
+        $markers = $this->langMarkers($flux, $lang);
+        if ($text === '' || $markers === []) {
+            return 0;
+        }
+        $mode = $this->langMatchMode($flux);
+        $lower = mb_strtolower($text);
+        $count = 0;
+        foreach ($markers as $marker) {
+            $found = $mode === 'contains'
+                ? str_contains($lower, mb_strtolower($marker))
+                : $this->containsMarker($lower, $marker);
+            if ($found) {
+                $count++;
             }
         }
 
-        return false;
+        return $count;
+    }
+
+    /** Marqueurs d'un flux/langue, lus depuis config/wash_languages.php. */
+    protected function langMarkers(string $flux, string $lang): array
+    {
+        $key = $lang === self::LANG_EN ? 'english_markers' : 'french_markers';
+        $markers = config("wash_languages.{$flux}.{$key}", []);
+
+        return is_array($markers) ? array_values(array_filter($markers, 'is_string')) : [];
+    }
+
+    /**
+     * Mode d'appariement d'un flux : 'word' (frontières de mot, signalement :
+     * 'bloc' ≠ 'block') ou 'contains' (sous-chaîne, suivi historique).
+     */
+    protected function langMatchMode(string $flux): string
+    {
+        return config("wash_languages.{$flux}.match") === 'contains' ? 'contains' : 'word';
+    }
+
+    /** Nb min de marqueurs distincts pour trancher (seuil piloté par données). */
+    protected function langMinMarkers(): int
+    {
+        $min = (int) config('wash_languages.min_markers', 1);
+
+        return $min > 0 ? $min : 1;
+    }
+
+    /** Veto : gagnant quand les deux langues ont des marqueurs ('fr' historique). */
+    protected function langVeto(): string
+    {
+        return config('wash_languages.veto') === self::LANG_EN ? self::LANG_EN : self::LANG_FR;
     }
 
     /**
@@ -1585,28 +1614,35 @@ class WashWhatsAppService
      * Mémorise la langue d'un texte usager : EN si marqueurs anglais, FR si
      * marqueurs français, sinon on garde la langue mémorisée (un slot neutre
      * — « 2 », « NON », nom d'école — n'écrase pas une conversation EN).
+     * Texte INCERTAIN : aucune bascule, la mémoire est inchangée.
      */
     protected function rememberLangFromText(string $from, string $text): void
     {
-        if ($this->isEnglishReply($text) || $this->isEnglishSuivi($text)) {
-            $this->rememberLang($from, true);
-
+        $lang = $this->detectTextLang($text);
+        if ($lang === self::LANG_UNCERTAIN) {
             return;
         }
-        $lower = mb_strtolower($text);
-        foreach (self::REPLY_FRENCH_MARKERS as $marker) {
-            if ($this->containsMarker($lower, $marker)) {
-                $this->rememberLang($from, false);
-
-                return;
-            }
-        }
+        $this->rememberLang($from, $lang === self::LANG_EN);
     }
 
     /** True si la conversation mémorisée est en anglais ('fr' par défaut). */
     protected function conversationEnglish(string $from): bool
     {
-        return $from !== '' && Cache::get($this->langKey($from)) === 'en';
+        return $this->rememberedLang($from) === self::LANG_EN;
+    }
+
+    /**
+     * Langue mémorisée ('fr' ou 'en'), ou null si AUCUNE (à la différence de
+     * conversationEnglish, aucun défaut ici : null veut dire « jamais vue »).
+     */
+    protected function rememberedLang(string $from): ?string
+    {
+        if ($from === '') {
+            return null;
+        }
+        $lang = Cache::get($this->langKey($from));
+
+        return $lang === self::LANG_EN || $lang === self::LANG_FR ? $lang : null;
     }
 
     /**
@@ -1618,19 +1654,63 @@ class WashWhatsAppService
     {
         $text = $message['text'] ?? null;
         if (is_string($text) && trim($text) !== '') {
-            if ($this->isEnglishReply($text) || $this->isEnglishSuivi($text)) {
-                return true;
-            }
-            $lower = mb_strtolower($text);
-            foreach (self::REPLY_FRENCH_MARKERS as $marker) {
-                if ($this->containsMarker($lower, $marker)) {
-                    return false;
-                }
+            $lang = $this->detectTextLang($text);
+            if ($lang !== self::LANG_UNCERTAIN) {
+                return $lang === self::LANG_EN;
             }
         }
         $from = $message['from'] ?? '';
 
         return $this->conversationEnglish(is_string($from) ? $from : '');
+    }
+
+    /**
+     * True si le texte est INCERTAIN et qu'AUCUNE langue n'est mémorisée :
+     * c'est le seul cas où il faut demander poliment (langChoiceReply),
+     * partout ailleurs on garde la langue mémorisée ou le défaut FR.
+     */
+    protected function needsLangChoice(string $from, string $text): bool
+    {
+        return $this->rememberedLang($from) === null
+            && $this->detectTextLang($text) === self::LANG_UNCERTAIN;
+    }
+
+    /**
+     * Demande polie de langue (FR simple + EN), texte piloté par données
+     * (config wash_languages.ask ; repli justifié si config absente).
+     */
+    protected function langChoiceReply(): string
+    {
+        $ask = config('wash_languages.ask', '');
+        if (!is_string($ask) || trim($ask) === '') {
+            // Repli de survie (config absente) : même phrase qu'en config.
+            $ask = 'En quelle langue préférez-vous continuer ? Répondez FR ou EN.';
+        }
+
+        return $ask;
+    }
+
+    /**
+     * Choix de langue explicite (réponse FR/EN au guidage, insensible à la
+     * casse et aux espaces) : persisté, retourne true. Texte libre → false,
+     * rien n'est mémorisé. Codes stables (config wash_languages.codes).
+     */
+    protected function rememberLangChoice(string $from, string $text): bool
+    {
+        $codes = config('wash_languages.codes', [self::LANG_FR, self::LANG_EN]);
+        if (!is_array($codes) || $codes === []) {
+            $codes = [self::LANG_FR, self::LANG_EN];
+        }
+        $answer = mb_strtolower(trim($text));
+        foreach ($codes as $code) {
+            if (is_string($code) && $answer === mb_strtolower($code)) {
+                $this->rememberLang($from, mb_strtolower($code) === self::LANG_EN);
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Tronque un texte entrant démesuré (notes copiées-collées, tests). */
