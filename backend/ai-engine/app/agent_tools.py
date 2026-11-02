@@ -1424,7 +1424,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "analyze_school",
-            "description": "Analyse complète d'une école (nom approximatif accepté) : pannes ouvertes, coûts de maintenance et arbitrage réparer-remplacer.",
+            "description": "Analyse complète d'une école (nom approximatif accepté) : pannes ouvertes, coûts de maintenance et arbitrage réparer-remplacer. Ne JAMAIS utiliser pour PLANIFIER une intervention à venir (voir prepare_intervention).",
             "short_description": "Analyse une école : pannes ouvertes, coûts, arbitrage réparer-remplacer.",
             "parameters": {
                 "type": "object",

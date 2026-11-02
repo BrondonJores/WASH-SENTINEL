@@ -2310,6 +2310,105 @@ function ChantierDossierCard({ title, data, onAsk }: { title: string; data: Reco
   );
 }
 
+const INTERVENTION_LABELS: Record<string, string> = {
+  incident_label: 'Incident',
+  school_name: 'École',
+  date_label: 'Date prévue',
+  budget_xaf: 'Budget (XAF)',
+  team: 'Équipe',
+};
+
+function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+  const fields = asRecord(data.fields);
+  const strList = (v: unknown): string[] => asArray<unknown>(v).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
+  const missingLabels = strList(data.missing_labels);
+  const questions = strList(data.questions);
+  const ready = data.ready === true || data.complete === true;
+  const insight = fmtOpt(data.insight) ?? '';
+  const budgetVerdict = fmtOpt(data.budget_verdict);
+  const verdict = asRecord(data.verdict);
+  const kit = asRecord(data.repair_kit);
+  const teamChoices = strList(data.team_choices);
+  const spares = strList(kit.spare_parts_needed);
+  const tools = strList(kit.required_tools);
+  const safety = strList(kit.immediate_safety_measures);
+  const duration = fmtOpt(kit.estimated_intervention_time);
+  const entries = Object.entries(INTERVENTION_LABELS)
+    .map(([k, label]) => ({ label, value: fields[k] }))
+    .filter((e) => e.value !== undefined && e.value !== null && e.value !== '');
+  if (entries.length === 0 && questions.length === 0) return null;
+  const reco = fmtOpt(verdict.recommendation_label) ?? fmtOpt(verdict.recommendation);
+  return (
+    <CardShell
+      title={title}
+      meta={ready ? 'Dossier prêt' : 'En préparation'}
+      listenText={speak(insight, budgetVerdict, reco)}
+    >
+      <InsightLine text={insight} />
+      <dl className="space-y-1.5">
+        {entries.map((e) => (
+          <div key={e.label} className="flex items-baseline justify-between gap-3 text-sm">
+            <dt className="shrink-0 text-[11px] font-semibold text-stone-500 dark:text-stone-400">{e.label}</dt>
+            <dd className="text-right font-medium leading-snug">
+              {typeof e.value === 'number' ? `${fmtInt(e.value)}${e.label.includes('XAF') ? ' XAF' : ''}` : String(e.value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {reco !== undefined && reco !== '' && (
+        <p className="mt-2.5 rounded-lg bg-teal-700/[0.07] p-2.5 text-sm font-medium leading-relaxed dark:bg-teal-300/10">› {reco}</p>
+      )}
+      {budgetVerdict !== undefined && (
+        <p className="mt-2 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{budgetVerdict}</p>
+      )}
+      {(spares.length > 0 || tools.length > 0) && (
+        <div className="mt-2.5 rounded-lg border border-line p-2.5">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400">Kit réparation{duration !== undefined ? ` · ${duration}` : ''}</p>
+          {spares.length > 0 && <p className="mt-1 text-[13px] leading-relaxed"><span className="font-semibold">Pièces : </span>{spares.join(', ')}</p>}
+          {tools.length > 0 && <p className="mt-0.5 text-[13px] leading-relaxed"><span className="font-semibold">Outils : </span>{tools.join(', ')}</p>}
+          {safety.length > 0 && <p className="mt-0.5 text-[13px] leading-relaxed"><span className="font-semibold">Sécurité : </span>{safety.join(', ')}</p>}
+        </div>
+      )}
+      {missingLabels.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap gap-1">
+          {missingLabels.map((m) => (
+            <span key={m} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">manque : {m}</span>
+          ))}
+        </div>
+      )}
+      {teamChoices.length > 0 && onAsk !== undefined && (
+        <div className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          {teamChoices.slice(0, 4).map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => onAsk(`Confier à ${c}`)}
+              className="rounded-lg border border-line bg-card px-3 py-2 text-left text-sm transition-[border-color] hover:border-accent"
+            >
+              Confier à {c}
+            </button>
+          ))}
+        </div>
+      )}
+      {questions.length > 0 && onAsk !== undefined && (
+        <div className="mt-3 space-y-1.5">
+          {questions.map((q) => (
+            <button
+              key={q}
+              type="button"
+              onClick={() => onAsk(q)}
+              className="block w-full rounded-lg border border-line bg-card px-3 py-2 text-left text-sm transition-[border-color] hover:border-accent"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+      <FollowUps onAsk={onAsk} items={['Voir les tendances ?', 'Préparer un briefing ?']} />
+    </CardShell>
+  );
+}
+
 function SaisieAssisteeCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
   const question = fmtOpt(data.question) ?? '';
   const options = asArray<unknown>(data.options).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
@@ -2679,6 +2778,8 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
       return <PosterCard title={card.title} data={data} onAsk={onAsk} />;
     case 'dossier_report':
       return <DossierView title={card.title} data={data} onAsk={onAsk} />;
+    case 'intervention_prep':
+      return <InterventionPrepCard title={card.title} data={data} onAsk={onAsk} />;
     default:
       return <GenericCard card={card} />;
   }

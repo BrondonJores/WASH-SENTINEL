@@ -60,6 +60,7 @@ from .schemas import (
     AgentChatRequest,
     AgentChatResponse,
     ImageAnalysisResponse,
+    RepairPlanRequest,
 )
 from .tool_consts import TIME_WINDOW_LAST_7D_DAYS, TIME_WINDOW_LAST_30D_DAYS
 
@@ -1861,6 +1862,65 @@ _STARTER_RE = re.compile(
     r"\b(bonjour|salut|coucou|hello|bonsoir|aide|aider|help|démarrer|commencer|"
     r"que (peux|sais)-tu|tu sais faire)\b", re.IGNORECASE)
 
+def _intervention_answer(obs: dict[str, Any], lang: str) -> str:
+    """Réponse de préparation d'intervention (fonction pure, FR/EN)."""
+    fields = obs.get("fields") or {}
+    label = fields.get("incident_label") or ("l'intervention" if lang != "en"
+                                             else "the intervention")
+    budget = fields.get("budget_xaf")
+    try:
+        budget_txt = f"{int(float(budget)):,}".replace(",", " ") if budget is not None else None
+    except (TypeError, ValueError):
+        budget_txt = None
+    if lang == "en":
+        head = f"Intervention \u00ab {label} \u00bb"
+        if fields.get("school_name"):
+            head += f" at {fields['school_name']}"
+        if fields.get("date_label"):
+            head += f", scheduled {fields['date_label']}"
+        if budget_txt:
+            head += f", budget {budget_txt} XAF"
+        if fields.get("team"):
+            head += f", team {fields['team']}"
+        parts = [head + "."]
+    else:
+        head = f"Intervention \u00ab {label} \u00bb"
+        if fields.get("school_name"):
+            head += f" \u00e0 {fields['school_name']}"
+        if fields.get("date_label"):
+            head += f", pr\u00e9vue le {fields['date_label']}"
+        if budget_txt:
+            head += f", budget {budget_txt} XAF"
+        if fields.get("team"):
+            head += f", \u00e9quipe {fields['team']}"
+        parts = [head + "."]
+    verdict = obs.get("verdict") or {}
+    if verdict.get("recommendation_label"):
+        ratio = (verdict.get("figures") or {}).get("repair_ratio_percent")
+        ratio_txt = f" (ratio {ratio} %)." if ratio else "."
+        if lang == "en":
+            parts.append(f"Parts verdict: {verdict['recommendation_label']}{ratio_txt}")
+        else:
+            parts.append(f"Verdict pi\u00e8ces : {verdict['recommendation_label']}{ratio_txt}")
+    if obs.get("budget_verdict"):
+        parts.append(str(obs["budget_verdict"]))
+    kit = obs.get("repair_kit") or {}
+    spares = [s for s in (kit.get("spare_parts_needed") or []) if s][:4]
+    if spares:
+        if lang == "en":
+            parts.append(f"Kit: {', '.join(spares)}"
+                         + (f" — estimated {kit.get('estimated_intervention_time')}."
+                            if kit.get("estimated_intervention_time") else "."))
+        else:
+            parts.append(f"Kit : {', '.join(spares)}"
+                         + (f" — dur\u00e9e estim\u00e9e {kit.get('estimated_intervention_time')}."
+                            if kit.get("estimated_intervention_time") else "."))
+    questions = [q for q in (obs.get("questions") or []) if q]
+    if questions:
+        parts.append(" ".join(questions))
+    return " ".join(parts)
+
+
 STARTER_CHIPS = ["Résumer mon district",
                  "Quelles écoles ont le plus besoin d'aide ?",
                  "Voir la carte du territoire"]
@@ -2276,6 +2336,78 @@ def _photo_card(photo: Any) -> AgentCard | None:
     return AgentCard(type="photo_analysis", title=title, data=obs)
 
 
+#: Préparation d'intervention à venir (texte normalisé _norm, FR + EN) :
+#: verbe de planification + objet réparation. Exclusions strictes :
+#: documents (briefing/dossier/rapport/affiche), nouvelle panne à signaler,
+#: avancement à consigner. Sans ces gardes, le modèle appelle analyze_school
+#: (carte large) au lieu du dossier ciblé.
+_INTERVENTION_PREP_VERB_RE = re.compile(
+    r"\b(prepar\w*|planifi\w*|organis\w*|schedul\w*|plan\w*)\b")
+_INTERVENTION_PREP_OBJ_RE = re.compile(
+    r"\b(intervention\w*|reparation\w*|repare\w*|mission\w*|depannage\w*"
+    r"|travaux\w*|repair\w*|fix\w*)\b")
+_INTERVENTION_PREP_EXCLUDE_RE = re.compile(
+    r"briefing|dossier|rapport|affiche|poster|deck|presentation|diaporama"
+    r"|nouvelle?\s+panne|nouveau\s+signalement|signaler|avancement|consign"
+    r"|journalis|suivi\s+de\s+chantier|suivi\s+du\s+chantier")
+
+#: Fragments retirés pour isoler l'indice incident (« réparer la pompe
+#: principale » -> « pompe principale »).
+_INTERVENTION_STRIP_RES = (
+    re.compile(r"\b(prepar\w*|planifi\w*|organis\w*|repare\w*|repair\w*"
+               r"|fix\w*|schedul\w*|plan\w*)\b"),
+    re.compile(r"\b(intervention\w*|reparation\w*|mission\w*|depannage\w*"
+               r"|travaux\w*|chantier\w*)\b"),
+    re.compile(r"\b(demain|lendemain|apres[\s\-]*demain|aujourd[\s\-]*hui)\b"),
+    re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b"),
+    re.compile(r"\d[\d\s\u00a0.,]*\s*(?:xaf|fcfa|francs?|k\b)"),
+    re.compile(r"budget(?:\s+de)?\s+\d[\d\s\u00a0.,]*"),
+    re.compile(r"\ble\s+\d{1,2}\b"),
+)
+_INTERVENTION_STOPWORDS = frozenset({
+    "pour", "avec", "une", "les", "des", "sur", "dans", "aux", "ces",
+    "ses", "mon", "ton", "son", "notre", "votre", "leur", "est", "sont",
+    "fait", "faire", "faut", "doit", "doivent", "peut",
+    "the", "for", "with", "our", "your",
+})
+
+
+def is_intervention_prep_request(message: str) -> bool:
+    """Demande de PLANIFICATION d'intervention future ? (fonction pure).
+
+    Verbe + objet réparation, hors documents / nouveau signalement /
+    consignation. « Prépare une intervention pour demain... » -> True ;
+    « Prépare un briefing », « signale une nouvelle panne » -> False.
+    """
+    normed = _norm(message or "")
+    if not normed.strip():
+        return False
+    if _INTERVENTION_PREP_EXCLUDE_RE.search(normed):
+        return False
+    # « Prépare ... » + objet : le verbe seul ne suffit pas (« prépare le
+    # dossier » est exclu plus haut, « prépare quoi ? » reste au modèle).
+    if not _INTERVENTION_PREP_VERB_RE.search(normed):
+        return False
+    return _INTERVENTION_PREP_OBJ_RE.search(normed) is not None
+
+
+def _intervention_hint(message: str, context: dict[str, Any] | None) -> str:
+    """Indice incident isolé du message (fonction pure)."""
+    text = _norm(message or "")
+    for pattern in _INTERVENTION_STRIP_RES:
+        text = pattern.sub(" ", text)
+    try:
+        schools, districts = known_places(context or {})
+    except (AttributeError, TypeError, ValueError):
+        schools, districts = [], []
+    for place in (*schools, *districts):
+        if place and len(place) >= 3:
+            text = text.replace(_norm(place), " ")
+    tokens = [t for t in re.findall(r"[a-z0-9]+", text)
+              if len(t) >= 3 and t not in _INTERVENTION_STOPWORDS]
+    return " ".join(tokens)
+
+
 class AgentLoop:
     """Boucle agentique réelle : le LLM choisit ses outils, Python les exécute."""
 
@@ -2365,6 +2497,15 @@ class AgentLoop:
             exec_context = scope_context_to_window(context, time_window)
             period = {"window": time_window, "total": period_total,
                       "place": period_place}
+        # PRÉPARATION d'intervention à venir : dossier ciblé déterministe
+        # (incident/date/budget/équipe + kit + verdict), sans boucle LLM.
+        # Évite la carte large « Analyse école » sur une demande précise.
+        if (not photo_only and clarify_kind is None
+                and is_intervention_prep_request(req.message)):
+            prepared = await self._run_intervention_prep(
+                req, context, scope_info, lang, today)
+            if prepared is not None:
+                return prepared
         intent = route_intent(req.message)
         active_tools = compact_tools(tools_for_intent(intent, scope_info), self.llm.model)
         messages: list[dict[str, Any]] = [
@@ -2523,6 +2664,113 @@ class AgentLoop:
             model_used=self.llm.model,
             follow_ups=follow_ups,
         )
+
+    async def _run_intervention_prep(
+            self, req: AgentChatRequest, context: dict[str, Any],
+            scope_info: dict[str, Any] | None, lang: str,
+            today: Any = None) -> AgentChatResponse | None:
+        """Dossier de préparation d'intervention (déterministe, sans LLM).
+
+        Retourne None quand le dossier est inexploitable (ni école ni
+        incident) : le flux normal (modèle + outil) prend le relais et
+        demande le chaînon manquant.
+        """
+        from .tools.prepare_intervention import CARD_BUILDERS
+        from .tools.prepare_intervention import execute as prep_execute
+        scope = scope_info or {}
+        school = scope.get("school") if scope.get("scope") == "school" else None
+        if today is None:
+            today_iso = None
+        elif isinstance(today, str):
+            today_iso = today[:10]
+        elif isinstance(today, datetime):
+            today_iso = today.date().isoformat()
+        elif isinstance(today, date):
+            today_iso = today.isoformat()
+        else:
+            today_iso = None
+        obs = prep_execute({
+            "incident": _intervention_hint(req.message, context),
+            "date_text": req.message,
+            "budget": req.message,
+            "school": school or "",
+            "today": today_iso,
+        }, context)
+        if not isinstance(obs, dict) or obs.get("error"):
+            return None
+        fields = obs.get("fields") or {}
+        if fields.get("incident_id") is None and not school:
+            # Ni école nommée ni incident unique : laisser le modèle demander.
+            if not obs.get("candidates"):
+                return None
+        incident = None
+        for row in context.get("incidents", []) or []:
+            if isinstance(row, dict) and row.get("id") == fields.get("incident_id"):
+                incident = row
+                break
+        if incident is not None:
+            obs["repair_kit"] = await self._repair_kit_for(
+                incident, fields.get("school_name"))
+        cards: list[AgentCard] = []
+        if obs.get("candidates"):
+            cards.append(AgentCard(
+                type="incident_picker",
+                title="Quel incident réparer ?",
+                data={"candidates": obs["candidates"][:5],
+                      "hint": obs.get("hint_unmatched"),
+                      "action": "prepare_intervention"},
+            ))
+        builder = CARD_BUILDERS.get("intervention_prep")
+        card = builder(obs) if builder is not None else None
+        if card is not None:
+            cards.append(card)
+        follow_ups = _follow_ups(
+            req.message, [("prepare_intervention", obs)], context, scope)
+        for choice in (obs.get("team_choices") or [])[:3]:
+            chip = f"Confier à {choice}"
+            if chip not in follow_ups:
+                follow_ups.insert(0, chip)
+        return AgentChatResponse(
+            answer=_intervention_answer(obs, lang or "fr"),
+            tools_executed=["prepare_intervention"],
+            cards=cards,
+            model_used=self.llm.model,
+            follow_ups=follow_ups,
+        )
+
+    async def _repair_kit_for(self, incident: dict[str, Any],
+                              school_name: Any) -> dict[str, Any]:
+        """Kit réparation LLM, repli hors ligne garanti (jamais d'exception)."""
+        from .repair_advisor import (
+            DEFAULT_COST_TIER,
+            DEFAULT_INTERVENTION_TIME,
+            FALLBACK_REQUIRED_TOOLS,
+            FALLBACK_SAFETY_MEASURES,
+            FALLBACK_SPARE_PARTS,
+            RepairAdvisor,
+        )
+        try:
+            summary = str(incident.get("title") or "panne")
+            if school_name:
+                summary += f" — {school_name}"
+            plan = await RepairAdvisor(self.llm).generate_plan(
+                RepairPlanRequest(
+                    incident_summary=summary,
+                    infrastructure_type=str(incident.get("category") or "water_point"),
+                    issue_type=str(incident.get("issue_type") or "total_breakdown"),
+                    urgency_level=str(incident.get("urgency") or "medium")))
+            data = plan.model_dump()
+            data["kit_source"] = "llm"
+            return data
+        except Exception:
+            return {
+                "required_tools": list(FALLBACK_REQUIRED_TOOLS),
+                "spare_parts_needed": list(FALLBACK_SPARE_PARTS),
+                "estimated_intervention_time": DEFAULT_INTERVENTION_TIME,
+                "immediate_safety_measures": list(FALLBACK_SAFETY_MEASURES),
+                "estimated_cost_tier": DEFAULT_COST_TIER,
+                "kit_source": "fallback",
+            }
 
     def _execute_tool(self, name: str, arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         executor = TOOL_EXECUTORS.get(name)

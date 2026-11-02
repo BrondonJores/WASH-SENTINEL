@@ -450,6 +450,7 @@ CardType = Literal[
     "capabilities_list",
     "offline_queue",
     "copilot_answer",
+    "intervention_prep",
     # Codés en dur dans agent_loop._build_cards.
     "photo_analysis",
     "incident_timeline",
