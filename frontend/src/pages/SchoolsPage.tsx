@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, ApiError } from '../lib/api';
+import { api, API_URL, ApiError } from '../lib/api';
 import type { School } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
@@ -15,6 +15,16 @@ const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Err
 const toNum = (v: string): number | undefined => (v === '' ? undefined : Number(v));
 const errorCls = 'mt-1 text-xs font-medium text-danger';
 
+// Ligne du référentiel prix (GET /v1/wash/equipment-costs, câblé après coup).
+type CostRefRow = {
+  category: unknown;
+  min_xaf: unknown;
+  max_xaf: unknown;
+  source_name: unknown;
+};
+
+type CostRef = { median: number; sources: string };
+
 export default function SchoolsPage() {
   const { user } = useAuth();
   const admin = user?.roles.includes('wash_admin') ?? false;
@@ -26,6 +36,7 @@ export default function SchoolsPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [costRef, setCostRef] = useState<CostRef | null>(null);
 
   const [searchV, setSearchV] = useState('');
   const [search, setSearch] = useState('');
@@ -42,6 +53,7 @@ export default function SchoolsPage() {
   const [fStudents, setFStudents] = useState('');
   const [fTeachers, setFTeachers] = useState('');
   const [fPhone, setFPhone] = useState('');
+  const [fCost, setFCost] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -52,6 +64,7 @@ export default function SchoolsPage() {
   const studentsRef = useRef<HTMLInputElement>(null);
   const teachersRef = useRef<HTMLInputElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
+  const costRefEl = useRef<HTMLInputElement>(null);
 
   // Recherche live debounced (remplace le bouton).
   useEffect(() => {
@@ -70,6 +83,47 @@ export default function SchoolsPage() {
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
   }, [districtV]);
+
+  // Référentiel prix national : médiane des points d'eau + sources, en
+  // repli d'affichage quand une école n'a pas de coût renseigné. Échec
+  // silencieux (route câblée après cette étape) : coût fiche école seul.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetch(`${API_URL}/v1/wash/equipment-costs`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) return;
+        const body: unknown = await res.json();
+        if (!Array.isArray(body)) return;
+        const mids: number[] = [];
+        const names: string[] = [];
+        for (const r of body as CostRefRow[]) {
+          if (typeof r !== 'object' || r === null) continue;
+          if (r.category !== 'water_point') continue;
+          if (typeof r.min_xaf !== 'number' || typeof r.max_xaf !== 'number') continue;
+          if (r.min_xaf <= 0 || r.max_xaf <= 0) continue;
+          mids.push((r.min_xaf + r.max_xaf) / 2);
+          if (typeof r.source_name === 'string' && r.source_name !== '' && !names.includes(r.source_name)) {
+            names.push(r.source_name);
+          }
+        }
+        if (!alive || mids.length === 0) return;
+        mids.sort((a, b) => a - b);
+        const mid =
+          mids.length % 2 === 1
+            ? mids[(mids.length - 1) / 2]
+            : (mids[mids.length / 2 - 1] + mids[mids.length / 2]) / 2;
+        setCostRef({ median: mid, sources: names.join(' · ') });
+      } catch {
+        // Référentiel indisponible : affichage fiche école uniquement.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Raccourci « / » : focus sur la recherche.
   useEffect(() => {
@@ -149,6 +203,10 @@ export default function SchoolsPage() {
     if (fPhone.trim() !== '' && fPhone.trim().length < 6) {
       errors.phone = 'Numéro de téléphone trop court.';
     }
+    if (fCost.trim() !== '') {
+      const n = Number(fCost);
+      if (!Number.isFinite(n) || n < 0) errors.cost = 'Indiquez un montant positif en XAF (ou laissez vide).';
+    }
     return errors;
   };
 
@@ -160,6 +218,7 @@ export default function SchoolsPage() {
       ['students', studentsRef],
       ['teachers', teachersRef],
       ['phone', phoneRef],
+      ['cost', costRefEl],
     ];
     for (const [key, ref] of order) {
       if (errors[key]) {
@@ -187,6 +246,7 @@ export default function SchoolsPage() {
         student_count: toNum(fStudents.trim()),
         teacher_count: toNum(fTeachers.trim()),
         contact_phone: fPhone.trim() || undefined,
+        estimated_replacement_cost: toNum(fCost.trim()),
       });
       setMsg(res.message);
       setShowForm(false);
@@ -196,6 +256,7 @@ export default function SchoolsPage() {
       setFStudents('');
       setFTeachers('');
       setFPhone('');
+      setFCost('');
       setFieldErrors({});
       await load();
       setDetail({ kind: 'school', id: res.school.id });
@@ -204,6 +265,19 @@ export default function SchoolsPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Coût de remplacement + sa source : fiche école si renseigné, sinon
+  // médiane du référentiel national (jamais de prix codé en dur ici).
+  const costLine = (s: School): string => {
+    if (typeof s.estimated_replacement_cost === 'number') {
+      return `Neuf : ${fmtNum(s.estimated_replacement_cost)} XAF · Source : fiche école`;
+    }
+    if (costRef !== null) {
+      const src = costRef.sources.length > 64 ? `${costRef.sources.slice(0, 64)}…` : costRef.sources;
+      return `Neuf : ~${fmtNum(costRef.median)} XAF · Source : référentiel (${src})`;
+    }
+    return 'Neuf : non renseigné';
   };
 
   const errorList = Object.values(fieldErrors).filter((v) => v !== '');
@@ -319,6 +393,22 @@ export default function SchoolsPage() {
                 aria-invalid={fieldErrors.phone ? true : undefined}
               />
               {fieldErrors.phone && <p className={errorCls}>{fieldErrors.phone}</p>}
+            </Field>
+            <Field label="Coût neuf (XAF)">
+              <input
+                ref={costRefEl}
+                type="number"
+                min={0}
+                step={1000}
+                value={fCost}
+                onChange={(e) => {
+                  setFCost(e.target.value);
+                  setFieldErrors((p) => ({ ...p, cost: '' }));
+                }}
+                className={`${INPUT_CLS} ${fieldErrors.cost ? 'border-danger' : ''}`}
+                aria-invalid={fieldErrors.cost ? true : undefined}
+              />
+              {fieldErrors.cost && <p className={errorCls}>{fieldErrors.cost}</p>}
             </Field>
           </div>
           <div className="mt-3 flex gap-2">
@@ -444,6 +534,7 @@ export default function SchoolsPage() {
               <p className="mt-0.5 truncate text-xs text-ink-soft">
                 {s.district} · {fmtNum(s.student_count)} élèves · {s.reports_count ?? 0} signalement(s)
               </p>
+              <p className="mt-0.5 truncate text-xs text-ink-soft">{costLine(s)}</p>
             </button>
           );
         })}

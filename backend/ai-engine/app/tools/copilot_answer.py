@@ -100,6 +100,15 @@ BUDGET_REPLACE_MARGIN = 1.2
 BUDGET_MAINTAIN_FRACTION = 0.5
 BUDGET_MIN_ENVELOPE_XAF = 100000.0
 
+#: Catégorie du catalogue prix utilisée pour le coût de remplacement d'une
+#: école (son point d'eau). Repli : médiane toutes catégories confondues.
+CATALOGUE_REPLACEMENT_CATEGORY = "water_point"
+
+#: Origines possibles du coût de remplacement (figures["replacement_source"]).
+REPLACEMENT_SOURCE_ECOLE = "ecole"
+REPLACEMENT_SOURCE_REFERENTIEL = "referentiel"
+REPLACEMENT_SOURCE_DEFAUT = "defaut"
+
 
 def _norm(text: Any) -> str:
     """Minuscules sans accents (comparaisons floues déterministes)."""
@@ -175,6 +184,59 @@ def _recommend(incident_count: int, ratio: float, days: int) -> str:
     return "MAINTAIN"
 
 
+def _catalogue_median(
+    catalogue: Any, category: str | None,
+) -> tuple[float, list[str]]:
+    """Médiane des milieux de fourchette + noms de sources (déterministe).
+
+    Ne lit que le contexte (zéro réseau) : chaque ligne porte category,
+    min_xaf, max_xaf et source_name. category=None = toutes catégories.
+    """
+    midpoints: list[float] = []
+    sources: list[str] = []
+    if not isinstance(catalogue, list):
+        return 0.0, []
+    for row in catalogue:
+        if not isinstance(row, dict):
+            continue
+        if category is not None and row.get("category") != category:
+            continue
+        lo, hi = _as_float(row.get("min_xaf")), _as_float(row.get("max_xaf"))
+        if lo <= 0 or hi <= 0:
+            continue
+        midpoints.append((lo + hi) / 2.0)
+        name = str(row.get("source_name") or "").strip()
+        if name and name not in sources:
+            sources.append(name)
+    if not midpoints:
+        return 0.0, []
+    ordered = sorted(midpoints)
+    mid = len(ordered) // 2
+    median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+    return median, sources
+
+
+def _replacement_with_source(
+    school: dict[str, Any], context: dict[str, Any],
+) -> tuple[float, str, list[str]]:
+    """Coût de remplacement effectif + son origine (ecole/referentiel/defaut).
+
+    Coût école inchangé dès qu'il est renseigné (> 0). À 0, médiane du
+    catalogue (catégorie point d'eau, sinon toutes catégories) fournie par
+    le parent dans context["equipment_costs"] ; sans catalogue : défaut.
+    """
+    school_cost = _as_float(school.get("estimated_replacement_cost"))
+    if school_cost > 0:
+        return school_cost, REPLACEMENT_SOURCE_ECOLE, []
+    catalogue = context.get("equipment_costs", [])
+    median, sources = _catalogue_median(catalogue, CATALOGUE_REPLACEMENT_CATEGORY)
+    if median <= 0:
+        median, sources = _catalogue_median(catalogue, None)
+    if median > 0:
+        return median, REPLACEMENT_SOURCE_REFERENTIEL, sources
+    return 0.0, REPLACEMENT_SOURCE_DEFAUT, []
+
+
 def _open_count_for(context: dict[str, Any], school_id: Any) -> int:
     incidents = context.get("incidents", [])
     if not isinstance(incidents, list):
@@ -194,7 +256,7 @@ def _advise_school(
     count = _as_int(school.get("incident_count"))
     cost = _as_float(school.get("total_repair_cost"))
     days = _as_int(school.get("total_days_without_service"))
-    replacement = _as_float(school.get("estimated_replacement_cost"))
+    replacement, replacement_source, replacement_names = _replacement_with_source(school, context)
     ratio = round(cost / replacement * 100.0, 1) if replacement > 0 else 0.0
     opened = _open_count_for(context, school.get("school_id"))
     reco = _recommend(count, ratio, days)
@@ -223,6 +285,12 @@ def _advise_school(
             f"Le ratio dépenses / équipement neuf atteint {ratio} %. "
             f"Recommandation : {label}."
         )
+    if replacement_source == REPLACEMENT_SOURCE_REFERENTIEL:
+        cited = ", ".join(replacement_names[:2]) if replacement_names else "référentiel national"
+        insight += (
+            f" Coût d'un équipement neuf estimé via le référentiel national "
+            f"(médiane {_fmt_xaf(replacement)} XAF, sources : {cited})."
+        )
     return {
         "insight": insight,
         "recommendation": reco,
@@ -235,6 +303,7 @@ def _advise_school(
             "total_repair_cost": cost,
             "total_days_without_service": days,
             "estimated_replacement_cost": replacement,
+            "replacement_source": replacement_source,
             "repair_ratio_percent": ratio,
             "open_incidents": opened,
         },
