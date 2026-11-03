@@ -331,5 +331,111 @@ class PrepMissingPieceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("WASH-2026-LAT", refs)
 
 
+SLOT_TEAMS = [
+    {"name": "Équipe Wouri Nord", "district": "Wouri", "is_active": True},
+    {"name": "Équipe Wouri Sud", "district": "Wouri", "is_active": True},
+]
+
+SLOT_PREP_TURN = (
+    "Intervention « WASH-2026-PUMP — Pompe principale hors service » "
+    "à École Publique de Bonanjo, budget 100 000 XAF. "
+    "Pour quelle date prévoir l'intervention ? "
+    "Quelle équipe doit intervenir (Équipe Wouri Nord, Équipe Wouri Sud) ?"
+)
+
+
+def _req_teams(message, history):
+    return AgentChatRequest(
+        message=message,
+        context=AgentContext(schools=[dict(SCHOOL)],
+                             incidents=[dict(PUMP), dict(LATRINES)],
+                             teams=[dict(t) for t in SLOT_TEAMS]),
+        history=history,
+    )
+
+
+def _prep_history():
+    return [
+        {"role": "user", "content": "Prépare une intervention pour la pompe"},
+        {"role": "assistant", "content": SLOT_PREP_TURN},
+    ]
+
+
+class PrepSlotFollowupTest(unittest.IsolatedAsyncioTestCase):
+    """Suite de prépa (« Confier à… », « demain ») complète le dossier, sans LLM."""
+
+    def test_buried_reference_matches(self) -> None:
+        from app.tools.prepare_intervention import execute
+        obs = execute({"incident": "crypto WASH-2026-PUMP bonanjo",
+                       "date_text": "demain", "budget": "100000",
+                       "school": "", "today": "2026-11-03"}, CONTEXT)
+        self.assertEqual((obs.get("fields") or {}).get("incident_id"), 10)
+
+    def test_team_answer_rewritten(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        rewritten = resolve_prep_slot_followup(
+            "Confier à Équipe Wouri Nord", _prep_history(),
+            {**CONTEXT, "teams": SLOT_TEAMS})
+        self.assertIn("WASH-2026-PUMP", rewritten)
+        self.assertIn("Bonanjo", rewritten)
+        self.assertIn("100000", rewritten.replace(" ", ""))
+        self.assertIn("Wouri Nord", rewritten)
+
+    def test_date_answer_rewritten(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        rewritten = resolve_prep_slot_followup(
+            "demain", _prep_history(), {**CONTEXT, "teams": SLOT_TEAMS})
+        self.assertIn("WASH-2026-PUMP", rewritten)
+        self.assertIn("demain", rewritten)
+
+    def test_unrelated_message_unchanged(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        self.assertEqual(
+            resolve_prep_slot_followup(
+                "Quels sont les incidents ouverts ?", _prep_history(),
+                {**CONTEXT, "teams": SLOT_TEAMS}),
+            "Quels sont les incidents ouverts ?")
+
+    def test_other_school_unchanged(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        ctx = {"schools": [dict(SCHOOL),
+                           {"school_id": 2, "school_name": "École de Ngok",
+                            "district": "Mvila"}],
+               "incidents": [], "teams": SLOT_TEAMS}
+        self.assertEqual(
+            resolve_prep_slot_followup("Et pour Ngok ?", _prep_history(), ctx),
+            "Et pour Ngok ?")
+        # Même avec un slot équipe : autre école = changement de sujet.
+        self.assertEqual(
+            resolve_prep_slot_followup(
+                "Confier à Équipe Wouri Nord pour Ngok",
+                _prep_history(), ctx),
+            "Confier à Équipe Wouri Nord pour Ngok")
+
+    async def test_team_followup_completes_team_slot(self) -> None:
+        stub = PrepStubLLM()
+        res = await AgentLoop(stub).chat(
+            _req_teams("Confier à Équipe Wouri Nord", _prep_history()))
+        self.assertEqual(stub.chat_calls, 0)
+        self.assertIn("prepare_intervention", res.tools_executed)
+        self.assertNotIn("school_analysis", [c.type for c in res.cards])
+        prep = next(c for c in res.cards if c.type == "intervention_prep")
+        fields = prep.data.get("fields") or {}
+        self.assertEqual(fields.get("incident_id"), 10)
+        self.assertEqual(fields.get("team"), "Équipe Wouri Nord")
+        self.assertIn("Bonanjo", res.answer)
+
+    async def test_date_followup_completes_dossier(self) -> None:
+        from datetime import date as _date
+        stub = PrepStubLLM()
+        res = await AgentLoop(stub).chat(
+            _req_teams("demain", _prep_history()), today=_date(2026, 11, 3))
+        self.assertEqual(stub.chat_calls, 0)
+        prep = next(c for c in res.cards if c.type == "intervention_prep")
+        fields = prep.data.get("fields") or {}
+        self.assertEqual(fields.get("incident_id"), 10)
+        self.assertEqual(str(fields.get("date")), "2026-11-04")
+
+
 if __name__ == "__main__":
     unittest.main()

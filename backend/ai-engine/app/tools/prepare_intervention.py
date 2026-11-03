@@ -241,6 +241,13 @@ def _match_incidents(pool: list[dict[str, Any]], ref: Any) -> list[dict[str, Any
     for incident in pool:
         if str(incident.get("reference_code", "")).lower() == hint:
             return [incident]
+    # Référence noyée dans une phrase (« ... pour WASH-2026-PUMP à ... ») :
+    # l'égalité stricte ne suffit pas, on l'extrait avant le flou.
+    buried = re.search(r"wash-\d{4}-[a-z0-9]+", hint)
+    if buried:
+        for incident in pool:
+            if str(incident.get("reference_code", "")).lower() == buried.group(0):
+                return [incident]
     scored: list[tuple[int, dict[str, Any]]] = []
     tokens = [t for t in hint.split() if len(t) >= 3]
     for incident in pool:

@@ -1227,6 +1227,116 @@ def resolve_prep_followup(
     return f"{base} {place[1]}"
 
 
+def _last_assistant_turn(history: Any) -> str:
+    """Contenu du dernier tour assistant (ChatTurn ou dict), '' sinon."""
+    for turn in reversed(history or []):
+        if isinstance(turn, dict):
+            role, content = turn.get("role"), turn.get("content")
+        else:
+            role, content = getattr(turn, "role", None), getattr(turn, "content", None)
+        if role == "assistant" and content and str(content).strip():
+            return str(content)
+    return ""
+
+
+#: Questions de slots du dossier prépa (miroir normalisé de _SLOT_QUESTIONS
+#: de app/tools/prepare_intervention.py) : leur présence dans le dernier
+#: tour assistant prouve une prépa en cours d'interrogatoire.
+_PREP_QUESTION_MARKERS = (
+    "pour quelle date prevoir l intervention",
+    "quelle equipe doit intervenir",
+    "quel incident existant faut il reparer",
+)
+
+#: Budget déjà cadré dans le tour prépa (« budget 100 000 XAF »).
+_PREP_BUDGET_RE = re.compile(r"budget\s+(\d[\d\s\u00a0.,]*)\s*xaf", re.IGNORECASE)
+
+
+def _match_team_name(message: str, context: dict[str, Any] | None) -> str | None:
+    """Équipe active du contexte nommée dans le message, sinon None.
+
+    Nom complet contenu (normalisé, insensible casse/accents), plus long
+    match gagne : « Confier à Équipe Wouri Nord » -> « Équipe Wouri Nord ».
+    Fonction pure.
+    """
+    normed = _norm(message or "")
+    best: str | None = None
+    for team in (context or {}).get("teams", []) or []:
+        if not isinstance(team, dict) or not team.get("is_active", True):
+            continue
+        name = str(team.get("name") or "").strip()
+        normed_name = _norm(name)
+        if normed_name and normed_name in normed and (
+                best is None or len(normed_name) > len(_norm(best))):
+            best = name
+    return best
+
+
+def resolve_prep_slot_followup(
+    message: str,
+    history: Any,
+    context: dict[str, Any] | None = None,
+    today: Any = None,
+) -> str:
+    """Complète une prépa en cours avec la réponse courte (fonction pure).
+
+    Dernier tour assistant en interrogatoire prépa + « Confier à Équipe
+    Wouri Nord » -> « Prépare une intervention pour WASH-… à Bonanjo,
+    budget 100 000 XAF, équipe Équipe Wouri Nord » (slots antérieurs
+    réextraits du tour : réf, école, budget). « demain » -> même
+    reconstitution + date. Inchangé si : pas de prépa en cours, requête
+    de planification déjà complète, ni équipe ni date détectée, autre
+    école nommée (changement de sujet), ou rien à reconstituer.
+    """
+    from .tools.prepare_intervention import parse_date
+    text = (message or "").strip()
+    if not text or is_intervention_prep_request(text):
+        return message or ""
+    prep_turn = _last_assistant_turn(history)
+    if not prep_turn or not any(
+            marker in _norm(prep_turn) for marker in _PREP_QUESTION_MARKERS):
+        return message or ""
+    ctx = context or {}
+    team = _match_team_name(text, ctx)
+    try:
+        ref_today = today if today is not None else server_today()
+        has_date = parse_date(text, ref_today) is not None
+    except (TypeError, ValueError):
+        has_date = False
+    if team is None and not has_date:
+        return message or ""
+    turn_schools, _ = mentioned_places(prep_turn, ctx)
+    if len(turn_schools) != 1:
+        return message or ""
+    prep_school = turn_schools[0]
+    msg_schools, _ = mentioned_places(text, ctx)
+    if msg_schools and not any(_school_arg_matches(s, prep_school) for s in msg_schools):
+        return message or ""
+    ref_match = WASH_REF_RE.search(prep_turn)
+    ref = ref_match.group(0) if ref_match else None
+    budget_match = _PREP_BUDGET_RE.search(prep_turn)
+    budget = None
+    if budget_match:
+        try:
+            budget = int(re.sub(r"[\s\u00a0.,]", "", budget_match.group(1)))
+        except (TypeError, ValueError):
+            budget = None
+    if ref is None:
+        parts = [f"Prépare une intervention à {short_school_name(prep_school)}"]
+    else:
+        parts = [f"Prépare une intervention pour {ref} à {short_school_name(prep_school)}"]
+    if budget is not None:
+        parts.append(f"budget {budget} XAF")
+    if team is not None:
+        parts.append(f"équipe {team}")
+    if has_date:
+        date_text = text.strip()
+        while date_text and date_text[-1] in "?!":
+            date_text = date_text[:-1].rstrip()
+        parts.append(date_text)
+    return ", ".join(parts)
+
+
 def _single_school_scope(scope: dict[str, Any] | None) -> str | None:
     """Nom de l'école si périmètre restreint à une seule école, sinon None.
 
@@ -2519,7 +2629,7 @@ _INTERVENTION_STRIP_RES = (
     re.compile(r"\b(prepar\w*|planifi\w*|organis\w*|repare\w*|repair\w*"
                r"|fix\w*|schedul\w*|plan\w*)\b"),
     re.compile(r"\b(intervention\w*|reparation\w*|mission\w*|depannage\w*"
-               r"|travaux\w*|chantier\w*)\b"),
+               r"|travaux\w*|chantier\w*|equipe\w*)\b"),
     re.compile(r"\b(demain|lendemain|apres[\s\-]*demain|aujourd[\s\-]*hui)\b"),
     re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b"),
     re.compile(r"\d[\d\s\u00a0.,]*\s*(?:xaf|fcfa|francs?|k\b)"),
@@ -2585,7 +2695,11 @@ def is_dossier_request(message: str) -> bool:
 
 
 def _intervention_hint(message: str, context: dict[str, Any] | None) -> str:
-    """Indice incident isolé du message (fonction pure)."""
+    """Indice incident isolé du message (fonction pure).
+
+    La référence WASH (si présente) est préservée intacte en tête : la
+    tokenisation l'exploserait sinon (« wash 2026 pump », inmatchable).
+    """
     text = _norm(message or "")
     for pattern in _INTERVENTION_STRIP_RES:
         text = pattern.sub(" ", text)
@@ -2598,7 +2712,11 @@ def _intervention_hint(message: str, context: dict[str, Any] | None) -> str:
             text = text.replace(_norm(place), " ")
     tokens = [t for t in re.findall(r"[a-z0-9]+", text)
               if len(t) >= 3 and t not in _INTERVENTION_STOPWORDS]
-    return " ".join(tokens)
+    hint = " ".join(tokens)
+    ref_match = WASH_REF_RE.search(message or "")
+    if ref_match and ref_match.group(0).lower() not in hint:
+        hint = f"{ref_match.group(0).lower()} {hint}".strip()
+    return hint
 
 
 class AgentLoop:
@@ -2630,6 +2748,13 @@ class AgentLoop:
         prep_message = resolve_prep_followup(req.message, req.history, context)
         if prep_message != req.message:
             req = req.model_copy(update={"message": prep_message})
+        # Slot prépa : réponse courte (« Confier à… », « demain ») à un
+        # dossier en interrogatoire -> requête complète reconstituée.
+        slot_message = resolve_prep_slot_followup(
+            req.message, req.history, context,
+            today=_normalize_today(today) if today is not None else None)
+        if slot_message != req.message:
+            req = req.model_copy(update={"message": slot_message})
         # CANAL 3 : dialogue guidé vocal (opt-in). Hors signalement, guided_turn
         # retourne None et le flux normal ci-dessous est strictement inchangé.
         if getattr(req, "guided", False):
@@ -2966,6 +3091,7 @@ class AgentLoop:
             "date_text": req.message,
             "budget": req.message,
             "school": school or "",
+            "team": _match_team_name(req.message, context) or "",
             "today": today_iso,
         }, context)
         if not isinstance(obs, dict) or obs.get("error"):
