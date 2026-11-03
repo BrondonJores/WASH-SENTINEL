@@ -10,7 +10,7 @@ import difflib
 from typing import Any
 
 from ..schemas import AgentCard
-from ..tool_consts import INCIDENT_FUZZY_MIN_RATIO
+from ..tool_consts import INCIDENT_FUZZY_MIN_RATIO, tool_lang
 
 TOOL_NAME = "prepare_chantier_update"
 
@@ -102,6 +102,26 @@ _ROW_LABELS = {
     "progress_percent": "Avancement (%)",
     "step": "Étape",
     "cost_amount": "Coût (XAF)",
+    "notes": "Notes",
+}
+
+_SLOT_LABELS_EN = {
+    "incident": "the incident concerned (title, number or reference)",
+    "progress_percent": "progress in % (0-100)",
+    "step": "the current site step",
+}
+
+_SLOT_QUESTIONS_EN = {
+    "incident": "Which incident is concerned (title or reference)?",
+    "progress_percent": "What progress in % (0-100)?",
+    "step": "What is the current site step?",
+}
+
+_ROW_LABELS_EN = {
+    "incident_label": "Incident",
+    "progress_percent": "Progress (%)",
+    "step": "Step",
+    "cost_amount": "Cost (XAF)",
     "notes": "Notes",
 }
 
@@ -212,6 +232,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             args = {}
         if not isinstance(context, dict):
             context = {}
+        use_en = tool_lang(context) == "en"
 
         raw_incident = args.get("incident")
         hint = str(raw_incident or "").strip()
@@ -243,24 +264,37 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                    if (slot == "incident" and incident is None)
                    or (slot == "progress_percent" and percent is None)
                    or (slot == "step" and not step)]
-        labels = [_SLOT_LABELS[m] for m in missing]
-        questions = [_SLOT_QUESTIONS[m] for m in missing[:2]]
+        slot_labels = _SLOT_LABELS_EN if use_en else _SLOT_LABELS
+        slot_questions = _SLOT_QUESTIONS_EN if use_en else _SLOT_QUESTIONS
+        row_labels = _ROW_LABELS_EN if use_en else _ROW_LABELS
+        labels = [slot_labels[m] for m in missing]
+        questions = [slot_questions[m] for m in missing[:2]]
         ready = not missing
 
-        rows = [f"{_ROW_LABELS[k]} : {v}" for k, v in
+        rows = [f"{row_labels[k]} : {v}" for k, v in
                 (("incident_label", label), ("progress_percent", percent),
                  ("step", step), ("cost_amount", cost), ("notes", notes))
                 if v is not None and v != ""]
-        recap = "Suivi de chantier\n" + "\n".join(rows)
+        recap = ("Site follow-up\n" if use_en else "Suivi de chantier\n") + "\n".join(rows)
         if labels:
-            recap += "\nManquant : " + ", ".join(labels) + "."
+            recap += ("\nMissing: " if use_en else "\nManquant : ") + ", ".join(labels) + "."
 
         if ready:
-            insight = (f"Dossier chantier prêt : {label}, {percent} %, "
-                       f"étape « {step} »")
+            if use_en:
+                insight = (f"Site file ready: {label}, {percent}%, "
+                           f"step « {step} »")
+            else:
+                insight = (f"Dossier chantier prêt : {label}, {percent} %, "
+                           f"étape « {step} »")
             if cost is not None:
-                insight += f", coût {cost:g} XAF"
-            insight += ". À confirmer par un humain avant tout enregistrement."
+                insight += f", cost {cost:g} XAF" if use_en else f", coût {cost:g} XAF"
+            insight += (". To be confirmed by a human before any recording." if use_en
+                        else ". À confirmer par un humain avant tout enregistrement.")
+        elif use_en:
+            insight = ("Partial site file (nothing recorded) — "
+                       f"missing: {', '.join(labels)}.")
+            if percent_invalid:
+                insight += " Invalid percentage (0-100 expected)."
         else:
             insight = ("Dossier chantier partiel (rien n'est enregistré) — "
                        f"manque : {', '.join(labels)}.")
@@ -277,6 +311,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             "questions": questions,
             "ready": ready,
             "recap": recap,
+            "lang": "en" if use_en else "fr",
         }
         if hint and incident is None:
             obs["hint_unmatched"] = hint
@@ -300,10 +335,11 @@ def _build_chantier_dossier_card(obs: dict[str, Any]) -> AgentCard | None:
     has_value = any(v is not None and v != "" for v in fields.values())
     if not has_value and not obs.get("missing") and not obs.get("questions"):
         return None
-    title = "Dossier — suivi de chantier"
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
+    title = "File — site follow-up" if use_en else "Dossier — suivi de chantier"
     label = fields.get("incident_label")
     if label:
-        title = f"Dossier chantier — {label}"
+        title = f"Site file — {label}" if use_en else f"Dossier chantier — {label}"
     return AgentCard(type="chantier_dossier", title=title, data=obs)
 
 

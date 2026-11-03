@@ -24,6 +24,7 @@ from ..tool_consts import (
     ALERT_WINDOW_DAYS_DEFAULT,
     ALERT_WINDOW_DAYS_MAX,
     ALERT_WINDOW_DAYS_MIN,
+    tool_lang,
 )
 
 TOOL_NAME = "epidemic_alerts"
@@ -157,8 +158,25 @@ def _signal_keywords(incident: dict[str, Any]) -> list[str]:
     return matched
 
 
-def _signal_labels(patterns: list[str] | set[str]) -> list[str]:
-    return sorted({_SIGNAL_LABELS.get(p, p) for p in patterns})
+_SIGNAL_LABELS_EN = {
+    "diarrh": "diarrhoea",
+    "cholera": "cholera",
+    "vomiss": "vomiting",
+    "vomit": "vomiting",
+    "dysenteri": "dysentery",
+    "contamin": "contamination",
+    "eau jaune": "yellow water",
+    "jaune": "yellow water",
+    "jaunatre": "yellowish water",
+    "debord": "overflow",
+    "souille": "soiled water",
+    "epidemi": "epidemic",
+}
+
+
+def _signal_labels(patterns: list[str] | set[str], en: bool = False) -> list[str]:
+    table = _SIGNAL_LABELS_EN if en else _SIGNAL_LABELS
+    return sorted({table.get(p, p) for p in patterns})
 
 
 def _cluster_risk(school_count: int, signals: set[str]) -> str:
@@ -174,6 +192,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     try:
         args = args if isinstance(args, dict) else {}
         context = context if isinstance(context, dict) else {}
+        use_en = tool_lang(context) == "en"
         try:
             days = int(args.get("days", ALERT_WINDOW_DAYS_DEFAULT)
                        or ALERT_WINDOW_DAYS_DEFAULT)
@@ -186,10 +205,11 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 and context.get("recent_incidents") is None):
             # Cas "unknown" : clés manquantes -> erreur (guidance). Des listes
             # présentes mais vides sont un vide valide -> carte typée vide.
-            return {"error": (
-                "Aucune donnée d'incident disponible pour détecter "
-                "un cluster sanitaire."
-            ), "days": days}
+            err = ("No incident data available to detect "
+                     "a health cluster.") if use_en else (
+                         "Aucune donnée d'incident disponible pour détecter "
+                         "un cluster sanitaire.")
+            return {"error": err, "days": days}
 
         schools_by_id: dict[Any, dict[str, Any]] = {}
         for school in context.get("schools", []) or []:
@@ -230,8 +250,9 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             sig_words: set[str] = set()
             for e in entries:
                 sig_words.update(e["matched"])
-            sig_labels = _signal_labels(sig_words)
-            display = entries[0]["district"] or "District inconnu"
+            sig_labels = _signal_labels(sig_words, en=use_en)
+            display = entries[0]["district"] or ("Unknown district" if use_en
+                                                 else "District inconnu")
             labels = sorted({_school_label(e["incident"]) for e in entries})
             clusters.append({
                 "district": display,
@@ -253,33 +274,54 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         if not clusters:
             # Vide valide -> carte typée vide (pas d'erreur) : l'état vide
             # frontend devient atteignable (politique AXE 7 / P1b).
-            scope = f" à {district_label}" if district_label else ""
-            return {
-                "insight": (
+            if use_en:
+                scope = f" in {district_label}" if district_label else ""
+                insight = (
+                    f"No health cluster detected{scope} over the last {days} "
+                    f"days ({len(signals)} isolated signal(s), "
+                    "no multi-school grouping)."
+                )
+            else:
+                scope = f" à {district_label}" if district_label else ""
+                insight = (
                     f"Aucun cluster sanitaire détecté{scope} sur les {days} "
                     f"derniers jours ({len(signals)} signal(aux) isolé(s), "
                     "pas de regroupement multi-écoles)."
-                ),
+                )
+            return {
+                "insight": insight,
                 "clusters": [],
                 "district": district_label,
                 "days": days,
                 "signals_count": len(signals),
                 "signals_isolated": len(signals),
+                "lang": "en" if use_en else "fr",
             }
 
         total_schools = sum(c["school_count"] for c in clusters)
-        parts = [f"{c['district']} ({c['school_count']} écoles, "
-                 f"{c['incident_count']} signaux)" for c in clusters]
-        return {
-            "insight": (
+        if use_en:
+            parts = [f"{c['district']} ({c['school_count']} schools, "
+                     f"{c['incident_count']} signals)" for c in clusters]
+            insight = (
+                f"Health alert: {len(clusters)} cluster(s) detected "
+                f"({total_schools} schools, {len(signals)} signals over "
+                f"{days} days): " + "; ".join(parts) + "."
+            )
+        else:
+            parts = [f"{c['district']} ({c['school_count']} écoles, "
+                     f"{c['incident_count']} signaux)" for c in clusters]
+            insight = (
                 f"Alerte sanitaire : {len(clusters)} cluster(s) détecté(s) "
                 f"({total_schools} écoles, {len(signals)} signaux sur "
                 f"{days} jours) : " + "; ".join(parts) + "."
-            ),
+            )
+        return {
+            "insight": insight,
             "clusters": clusters,
             "district": district_label,
             "days": days,
             "signals_count": len(signals),
+            "lang": "en" if use_en else "fr",
         }
     except Exception as exc:
         return {"error": f"epidemic_alerts : {exc}"}
@@ -292,20 +334,18 @@ def _build_epidemic_alerts_card(obs: dict[str, Any]) -> AgentCard | None:
     if not isinstance(clusters, list):
         return None
     district = obs.get("district")
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     scope = f" — {district}" if district else ""
     if not clusters:
-        return AgentCard(
-            type="epidemic_alerts",
-            title=f"Aucun foyer sanitaire détecté{scope}",
-            data=obs,
-        )
+        title = (f"No health hotspot detected{scope}" if use_en
+                 else f"Aucun foyer sanitaire détecté{scope}")
+        return AgentCard(type="epidemic_alerts", title=title, data=obs)
     schools = sum(len(c.get("schools", [])) for c in clusters
                   if isinstance(c, dict))
-    return AgentCard(
-        type="epidemic_alerts",
-        title=f"Alerte sanitaire — {len(clusters)} cluster(s), {schools} écoles",
-        data=obs,
-    )
+    title = (f"Health alert — {len(clusters)} cluster(s), {schools} schools"
+             if use_en else
+             f"Alerte sanitaire — {len(clusters)} cluster(s), {schools} écoles")
+    return AgentCard(type="epidemic_alerts", title=title, data=obs)
 
 
 CARD_BUILDERS = {"epidemic_alerts": _build_epidemic_alerts_card}

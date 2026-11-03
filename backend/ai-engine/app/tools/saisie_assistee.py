@@ -11,7 +11,7 @@ import unicodedata
 from typing import Any
 
 from ..schemas import AgentCard
-from ..tool_consts import MAX_ECOLE_OPTIONS
+from ..tool_consts import MAX_ECOLE_OPTIONS, tool_lang
 
 TOOL_NAME = "saisie_assistee"
 
@@ -63,6 +63,10 @@ INTENT_HINTS = frozenset({
     "guide-moi", "guide moi", "guidez-moi", "guidez moi",
     "guide-moi pour signaler", "guide moi pour signaler",
     "remplir un signalement", "remplir le formulaire",
+    "help me report", "help me fill", "help me fill in",
+    "report step by step", "step by step",
+    "guided form", "guided entry", "guide me",
+    "i want to report", "how to report",
 })
 
 PROBLEMES = (
@@ -76,11 +80,29 @@ PROBLEMES = (
 
 URGENCES = ("Basse", "Moyenne", "Haute", "Critique")
 
+PROBLEMES_EN = (
+    "Water leak",
+    "Blocked latrines",
+    "Dry borehole / no water",
+    "Dirty or contaminated water",
+    "Broken pump",
+    "Other problem",
+)
+
+URGENCES_EN = ("Low", "Medium", "High", "Critical")
+
 PROGRESS = {"ecole": 0, "probleme": 33, "urgence": 66, "recap": 100}
 
 _ECole_Q = "Dans quelle école y a-t-il un problème ? Touchez le nom de l'école."
 _PROBLEME_Q = "Quel est le problème ? Touchez une réponse."
 _URGENCE_Q = "C'est urgent comment ? Touchez une réponse."
+
+_ECOLE_Q_EN = "Which school has a problem? Tap the school name."
+_PROBLEME_Q_EN = "What is the problem? Tap an answer."
+_URGENCE_Q_EN = "How urgent is it? Tap an answer."
+
+_STEP_EN = {"ecole": "school", "probleme": "issue",
+            "urgence": "urgency", "recap": "summary"}
 
 #: Alias partagé (source unique : app.tool_consts).
 _MAX_ECOLE_OPTIONS = MAX_ECOLE_OPTIONS
@@ -159,6 +181,23 @@ _URGENCE_LEVELS = dict(zip(
 _PROBLEME_CODES = dict(zip(
     (_norm(p) for p in PROBLEMES),
     ("leak", "blockage", "dry_well", "contamination", "total_breakdown", "other")))
+# Mêmes codes depuis les libellés EN (saisie bilingue, codes inchangés).
+_URGENCE_LEVELS.update(zip(
+    (_norm(u) for u in URGENCES_EN), ("low", "medium", "high", "critical")))
+_PROBLEME_CODES.update(zip(
+    (_norm(p) for p in PROBLEMES_EN),
+    ("leak", "blockage", "dry_well", "contamination", "total_breakdown", "other")))
+
+
+def _match_option_any(reponse: str, primary: tuple[str, ...],
+                       fallback: tuple[str, ...]) -> str | None:
+    """Apparie sur le tuple affiché, puis sur l'autre langue (texte seul)."""
+    found = _match_option(reponse, primary)
+    if found is not None:
+        return found
+    if str(reponse or "").strip().isdigit():
+        return None  # les chiffres visent toujours les options affichées
+    return _match_option(reponse, fallback)
 
 
 def _school_by_id(wanted: int, context: dict[str, Any]) -> dict[str, Any] | None:
@@ -238,30 +277,41 @@ def _recap_ready(enriched: dict[str, Any]) -> bool:
                 and enriched.get("urgence_level"))
 
 
-def _recap_question(enriched: dict[str, Any]) -> str:
+def _recap_question(enriched: dict[str, Any], en: bool = False) -> str:
     ecole = enriched.get("ecole") or "?"
     probleme = enriched.get("probleme") or "?"
     urgence = enriched.get("urgence") or "?"
+    if en:
+        return (f"Summary: {ecole} — {probleme} — {urgence} urgency. "
+                "Say « confirm » to save, or « restart ».")
     return (f"Récapitulatif : {ecole} — {probleme} — urgence {urgence}. "
             "Dites « confirmer » pour enregistrer, ou « recommencer ».")
 
 
-def _recap_confirmation(enriched: dict[str, Any], ready: bool) -> str:
+def _recap_confirmation(enriched: dict[str, Any], ready: bool,
+                        en: bool = False) -> str:
     if ready:
+        if en:
+            return ("Ready to save: say « confirm » and the operator "
+                    "will use prepare_report with this entry.")
         return ("Prêt pour enregistrement : dites « confirmer » et l'opérateur "
                 "utilisera prepare_report avec cette saisie.")
     missing = []
     if not enriched.get("ecole_valide"):
-        missing.append("école")
+        missing.append("school" if en else "école")
     if not enriched.get("probleme_code"):
-        missing.append("problème")
+        missing.append("issue" if en else "problème")
     if not enriched.get("urgence_level"):
-        missing.append("urgence")
+        missing.append("urgency" if en else "urgence")
+    if en:
+        return (f"Incomplete entry ({', '.join(missing)}): prepare_report "
+                "will wait for a confirmed complete entry.")
     return (f"Saisie incomplète ({', '.join(missing)}) : prepare_report "
             "attendra une saisie complète confirmée.")
 
 
-def _ecole_listing(names: list[str], recherche: str) -> tuple[list[str], str]:
+def _ecole_listing(names: list[str], recherche: str,
+                   en: bool = False) -> tuple[list[str], str]:
     """Options (max 6) + question, avec recherche au-delà de 6 écoles."""
     filt = _norm(recherche)
     if len(names) > _MAX_ECOLE_OPTIONS and filt:
@@ -269,19 +319,31 @@ def _ecole_listing(names: list[str], recherche: str) -> tuple[list[str], str]:
     else:
         filtered = names
     options = filtered[:_MAX_ECOLE_OPTIONS]
+    base_q = _ECOLE_Q_EN if en else _ECole_Q
     if len(names) > _MAX_ECOLE_OPTIONS and not filt:
-        question = (f"{_ECole_Q} ({len(names)} écoles au total : "
-                    "tapez quelques lettres pour chercher.)")
+        if en:
+            question = (f"{base_q} ({len(names)} schools in total: "
+                        "type a few letters to search.)")
+        else:
+            question = (f"{base_q} ({len(names)} écoles au total : "
+                        "tapez quelques lettres pour chercher.)")
     elif len(names) > _MAX_ECOLE_OPTIONS:
         needle = str(recherche or "").strip()
         if not filtered:
-            question = (f"Aucune école trouvée pour « {needle} » "
-                        f"sur {len(names)}. Essayez une autre orthographe.")
+            if en:
+                question = (f"No school found for « {needle} » "
+                            f"out of {len(names)}. Try another spelling.")
+            else:
+                question = (f"Aucune école trouvée pour « {needle} » "
+                            f"sur {len(names)}. Essayez une autre orthographe.")
+        elif en:
+            question = (f"« {needle} »: {len(filtered)} school(s) out of {len(names)}. "
+                        "Tap the school name, or refine the search.")
         else:
             question = (f"« {needle} » : {len(filtered)} école(s) sur {len(names)}. "
                         "Touchez le nom de l'école, ou affinez la recherche.")
     else:
-        question = _ECole_Q
+        question = base_q
     return options, question
 
 
@@ -290,6 +352,19 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     try:
         args = args if isinstance(args, dict) else {}
         context = context if isinstance(context, dict) else {}
+        use_en = tool_lang(context) == "en"
+        lang = "en" if use_en else "fr"
+        problemes = PROBLEMES_EN if use_en else PROBLEMES
+        urgences = URGENCES_EN if use_en else URGENCES
+        q_probleme = _PROBLEME_Q_EN if use_en else _PROBLEME_Q
+        q_urgence = _URGENCE_Q_EN if use_en else _URGENCE_Q
+
+        def make(step: str, question: str, options: list[str],
+                 recap: dict[str, Any], insight: str) -> dict[str, Any]:
+            payload = _step_payload(step, question, options, recap, insight)
+            payload["lang"] = lang
+            return payload
+
         etape = _norm(args.get("etape")) or "ecole"
         reponse = str(args.get("reponse") or "").strip()
         recap_in = args.get("recap")
@@ -302,37 +377,44 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 # École inconnue ou absente : retour à l'école au lieu
                 # d'un faux récapitulatif.
                 recherche = str(args.get("recherche") or "").strip()
-                options, ecole_q = _ecole_listing(names, recherche)
+                options, ecole_q = _ecole_listing(names, recherche, en=use_en)
                 raw = recap.get("ecole")
-                question = (f"Je n'ai pas trouvé l'école « {raw} ». {ecole_q}"
-                            if raw else ecole_q)
-                payload = _step_payload(
+                if use_en:
+                    question = (f"I did not find the school « {raw} ». {ecole_q}"
+                                if raw else ecole_q)
+                else:
+                    question = (f"Je n'ai pas trouvé l'école « {raw} ». {ecole_q}"
+                                if raw else ecole_q)
+                payload = make(
                     "ecole", question, options, enriched,
-                    "Récapitulatif rejeté : école inconnue, retour à la première question.",
+                    ("Summary rejected: unknown school, back to the first question." if use_en
+                     else "Récapitulatif rejeté : école inconnue, retour à la première question."),
                 )
                 payload["total_ecoles"] = len(names)
                 if recherche:
                     payload["recherche"] = recherche
                 return payload
             ready = _recap_ready(enriched)
-            payload = _step_payload(
+            payload = make(
                 "recap",
-                _recap_question(enriched),
+                _recap_question(enriched, en=use_en),
                 [],
                 enriched,
-                "Saisie terminée : récapitulatif validé, en attente de confirmation.",
+                ("Entry complete: summary validated, awaiting confirmation." if use_en
+                 else "Saisie terminée : récapitulatif validé, en attente de confirmation."),
             )
             payload["ready"] = ready
-            payload["confirmation"] = _recap_confirmation(enriched, ready)
+            payload["confirmation"] = _recap_confirmation(enriched, ready, en=use_en)
             return payload
 
         if etape == "ecole":
             recherche = str(args.get("recherche") or "").strip()
-            options, ecole_q = _ecole_listing(names, recherche)
+            options, ecole_q = _ecole_listing(names, recherche, en=use_en)
             if not reponse:
-                payload = _step_payload(
+                payload = make(
                     "ecole", ecole_q, options, recap,
-                    "Saisie assistée démarrée : je demande d'abord l'école concernée.",
+                    ("Guided entry started: I first ask which school is concerned." if use_en
+                     else "Saisie assistée démarrée : je demande d'abord l'école concernée."),
                 )
                 payload["total_ecoles"] = len(names)
                 if recherche:
@@ -346,9 +428,10 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                         found = str(school.get("school_name") or school.get("name") or wanted)
                         recap = {**recap, "ecole": found, "ecole_id": wanted,
                                  "ecole_valide": True}
-                        return _step_payload(
-                            "probleme", _PROBLEME_Q, list(PROBLEMES), recap,
-                            f"École reconnue : {found}. Je demande maintenant le problème.",
+                        return make(
+                            "probleme", q_probleme, list(problemes), recap,
+                            (f"School recognised: {found}. I now ask about the problem." if use_en
+                         else f"École reconnue : {found}. Je demande maintenant le problème."),
                         )
             except (TypeError, ValueError):
                 pass
@@ -356,11 +439,13 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             if found is None and not names and reponse:
                 found = reponse  # pas de référentiel : accepter le nom saisi
             if found is None:
-                payload = _step_payload(
+                payload = make(
                     "ecole",
-                    f"Je n'ai pas trouvé l'école « {reponse} ». {ecole_q}",
+                    (f"I did not find the school « {reponse} ». {ecole_q}" if use_en
+                     else f"Je n'ai pas trouvé l'école « {reponse} ». {ecole_q}"),
                     options, recap,
-                    "École non reconnue : je repose la question avec la liste des écoles.",
+                    ("School not recognised: I ask again with the school list." if use_en
+                     else "École non reconnue : je repose la question avec la liste des écoles."),
                 )
                 payload["total_ecoles"] = len(names)
                 if recherche:
@@ -368,73 +453,84 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 return payload
             recap = {**recap, "ecole": found, "ecole_valide": True,
                      "ecole_id": _school_id_by_name(found, context)}
-            return _step_payload(
-                "probleme", _PROBLEME_Q, list(PROBLEMES), recap,
-                f"École reconnue : {found}. Je demande maintenant le problème.",
+            return make(
+                "probleme", q_probleme, list(problemes), recap,
+                (f"School recognised: {found}. I now ask about the problem." if use_en
+                         else f"École reconnue : {found}. Je demande maintenant le problème."),
             )
 
         if etape == "probleme":
             if not reponse:
-                return _step_payload(
-                    "probleme", _PROBLEME_Q, list(PROBLEMES), recap,
-                    "Saisie assistée : je demande le type de problème.",
+                return make(
+                    "probleme", q_probleme, list(problemes), recap,
+                    ("Guided entry: I ask the problem type." if use_en
+                     else "Saisie assistée : je demande le type de problème."),
                 )
-            probleme = _match_option(reponse, PROBLEMES)
+            probleme = _match_option_any(reponse, problemes, PROBLEMES) if use_en else _match_option(reponse, PROBLEMES)
             if probleme is None:
-                return _step_payload(
+                return make(
                     "probleme",
-                    f"« {reponse} » n'est pas dans la liste. {_PROBLEME_Q}",
-                    list(PROBLEMES), recap,
-                    "Problème non reconnu : je repose la question avec les choix.",
+                    (f"« {reponse} » is not in the list. {q_probleme}" if use_en
+                     else f"« {reponse} » n'est pas dans la liste. {q_probleme}"),
+                    list(problemes), recap,
+                    ("Problem not recognised: I ask again with the choices." if use_en
+                     else "Problème non reconnu : je repose la question avec les choix."),
                 )
             recap = {**recap, "probleme": probleme}
-            return _step_payload(
-                "urgence", _URGENCE_Q, list(URGENCES), recap,
-                f"Problème noté : {probleme}. Je demande maintenant l'urgence.",
+            return make(
+                "urgence", q_urgence, list(urgences), recap,
+                (f"Problem noted: {probleme}. I now ask about urgency." if use_en
+                 else f"Problème noté : {probleme}. Je demande maintenant l'urgence."),
             )
 
         if etape == "urgence":
             if not reponse:
-                return _step_payload(
-                    "urgence", _URGENCE_Q, list(URGENCES), recap,
-                    "Saisie assistée : je demande le niveau d'urgence.",
+                return make(
+                    "urgence", q_urgence, list(urgences), recap,
+                    ("Guided entry: I ask the urgency level." if use_en
+                     else "Saisie assistée : je demande le niveau d'urgence."),
                 )
-            urgence = _match_option(reponse, URGENCES)
+            urgence = _match_option_any(reponse, urgences, URGENCES) if use_en else _match_option(reponse, URGENCES)
             if urgence is None:
-                return _step_payload(
+                return make(
                     "urgence",
-                    f"« {reponse} » n'est pas dans la liste. {_URGENCE_Q}",
-                    list(URGENCES), recap,
-                    "Urgence non reconnue : je repose la question avec les choix.",
+                    (f"« {reponse} » is not in the list. {q_urgence}" if use_en
+                     else f"« {reponse} » n'est pas dans la liste. {q_urgence}"),
+                    list(urgences), recap,
+                    ("Urgency not recognised: I ask again with the choices." if use_en
+                     else "Urgence non reconnue : je repose la question avec les choix."),
                 )
             recap = {**recap, "urgence": urgence}
             enriched = _finalize_recap(recap, context, names)
             if not enriched.get("ecole_valide"):
                 # Saut direct à l'urgence sans école valide : retour à l'école.
-                options, ecole_q = _ecole_listing(names, "")
-                payload = _step_payload(
+                options, ecole_q = _ecole_listing(names, "", en=use_en)
+                payload = make(
                     "ecole", ecole_q, options, enriched,
-                    "École manquante : je repose la première question avant le récapitulatif.",
+                    ("Missing school: I ask the first question again before the summary." if use_en
+                     else "École manquante : je repose la première question avant le récapitulatif."),
                 )
                 payload["total_ecoles"] = len(names)
                 return payload
             ready = _recap_ready(enriched)
-            payload = _step_payload(
+            payload = make(
                 "recap",
-                _recap_question(enriched),
+                _recap_question(enriched, en=use_en),
                 [],
                 enriched,
-                "Saisie terminée : récapitulatif validé, en attente de confirmation.",
+                ("Entry complete: summary validated, awaiting confirmation." if use_en
+                 else "Saisie terminée : récapitulatif validé, en attente de confirmation."),
             )
             payload["ready"] = ready
-            payload["confirmation"] = _recap_confirmation(enriched, ready)
+            payload["confirmation"] = _recap_confirmation(enriched, ready, en=use_en)
             return payload
 
         # Étape inconnue : reprendre au début (défensif).
-        options, ecole_q = _ecole_listing(names, "")
-        payload = _step_payload(
+        options, ecole_q = _ecole_listing(names, "", en=use_en)
+        payload = make(
             "ecole", ecole_q, options, {},
-            "Étape inconnue : je recommence la saisie à la première question.",
+            ("Unknown step: I restart the entry at the first question." if use_en
+             else "Étape inconnue : je recommence la saisie à la première question."),
         )
         payload["total_ecoles"] = len(names)
         return payload
@@ -446,11 +542,12 @@ def _build_saisie_assistee_card(obs: dict[str, Any]) -> AgentCard | None:
     if not isinstance(obs, dict) or obs.get("error") or not obs.get("question"):
         return None
     step = str(obs.get("step") or "?")
-    return AgentCard(
-        type="saisie_assistee",
-        title=f"Saisie assistée — étape {step}",
-        data=obs,
-    )
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
+    if use_en:
+        title = f"Guided entry — step {_STEP_EN.get(step, step)}"
+    else:
+        title = f"Saisie assistée — étape {step}"
+    return AgentCard(type="saisie_assistee", title=title, data=obs)
 
 
 CARD_BUILDERS = {"saisie_assistee": _build_saisie_assistee_card}

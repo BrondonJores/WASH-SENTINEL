@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..schemas import AgentCard
-from ..tool_consts import LOG_WINDOW_DAYS, STALE_AFTER_DAYS
+from ..tool_consts import LOG_WINDOW_DAYS, STALE_AFTER_DAYS, tool_lang
 
 TOOL_NAME = "document_briefing"
 
@@ -73,6 +73,10 @@ URGENCY_FR = {"critical": "critique", "high": "haute",
 FRENCH_MONTHS = ["", "janvier", "février", "mars", "avril", "mai", "juin",
                  "juillet", "août", "septembre", "octobre", "novembre",
                  "décembre"]
+
+ENGLISH_MONTHS = ["", "January", "February", "March", "April", "May", "June",
+                  "July", "August", "September", "October", "November",
+                  "December"]
 
 _VALID_FORMATS = ("briefing", "diaporama", "rapport")
 
@@ -167,6 +171,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     try:
         args = args or {}
         context = context or {}
+        use_en = tool_lang(context) == "en"
         topic = str(args.get("topic") or "").strip()
         format_ = _parse_format(args.get("format"))
 
@@ -188,14 +193,19 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                     or _matches(topic, lo.get("incident_title"))
                     or (lo.get("school_id") in sids)]
             if not schools and not incidents and not logs:
+                err = (f"No data for \u00ab {topic} \u00bb: district "
+                       "or school not found in the context.") if use_en else (
+                           f"Aucune donnée pour « {topic} » : district "
+                           "ou école introuvable dans le contexte.")
                 return {"topic": topic, "format": format_,
                         "sections": [], "slides": [], "total": 0,
-                        "error": (f"Aucune donnée pour « {topic} » : district "
-                                  "ou école introuvable dans le contexte.")}
+                        "error": err}
         elif not schools and not incidents and not logs:
+            err = ("No data available to assemble the document." if use_en
+                   else "Aucune donnée disponible pour assembler le document.")
             return {"topic": None, "format": format_,
                     "sections": [], "slides": [], "total": 0,
-                    "error": "Aucune donnée disponible pour assembler le document."}
+                    "error": err}
 
         now = datetime.now(timezone.utc)
         n_open = len(incidents)
@@ -206,31 +216,57 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                        if _log_within_days(lo, now, _LOG_WINDOW_DAYS)]
         cost_total = sum(_to_float(lo.get("cost_amount")) for lo in recent_logs)
 
-        scope = topic or "tout le territoire"
-        summary: list[str] = [
-            f"Périmètre : {scope}.",
-            (f"{n_open} {_plural(n_open, 'incident ouvert', 'incidents ouverts')}, "
-             f"{_fmt_int(affected)} {_plural(affected, 'élève affecté', 'élèves affectés')}, "
-             f"{len(schools)} {_plural(len(schools), 'école suivie', 'écoles suivies')}."),
-        ]
-        if crit:
-            summary.append(f"{len(crit)} {_plural(len(crit), 'incident critique exige', 'incidents critiques exigent')} "
-                           "une intervention immédiate.")
-        elif n_open:
-            summary.append("Aucun incident critique : situation sous contrôle.")
+        scope = topic or ("the whole territory" if use_en else "tout le territoire")
+        open_w = ("open incident", "open incidents") if use_en else ("incident ouvert", "incidents ouverts")
+        if use_en:
+            summary: list[str] = [
+                f"Scope: {scope}.",
+                (f"{n_open} {_plural(n_open, *open_w)}, "
+                 f"{_fmt_int(affected)} {_plural(affected, 'affected pupil', 'affected pupils')}, "
+                 f"{len(schools)} {_plural(len(schools), 'monitored school', 'monitored schools')}."),
+            ]
         else:
-            summary.append("Aucun incident ouvert : calme plat.")
+            summary = [
+                f"Périmètre : {scope}.",
+                (f"{n_open} {_plural(n_open, *open_w)}, "
+                 f"{_fmt_int(affected)} {_plural(affected, 'élève affecté', 'élèves affectés')}, "
+                 f"{len(schools)} {_plural(len(schools), 'école suivie', 'écoles suivies')}."),
+            ]
+        if crit:
+            if use_en:
+                summary.append(f"{len(crit)} {_plural(len(crit), 'critical incident requires', 'critical incidents require')} "
+                               "immediate intervention.")
+            else:
+                summary.append(f"{len(crit)} {_plural(len(crit), 'incident critique exige', 'incidents critiques exigent')} "
+                               "une intervention immédiate.")
+        elif n_open:
+            summary.append("No critical incident: situation under control." if use_en
+                           else "Aucun incident critique : situation sous contrôle.")
+        else:
+            summary.append("No open incident: all quiet." if use_en
+                           else "Aucun incident ouvert : calme plat.")
 
-        figures: list[str] = [
-            f"Incidents ouverts : {n_open}",
-            f"Dont critiques : {len(crit)}",
-            f"Élèves affectés : {_fmt_int(affected)}",
-            f"Écoles suivies : {len(schools)}",
-            (f"Interventions journalisées ({_LOG_WINDOW_DAYS} j) : "
-             f"{len(recent_logs)}"),
-        ]
+        if use_en:
+            figures: list[str] = [
+                f"Open incidents: {n_open}",
+                f"Of which critical: {len(crit)}",
+                f"Affected pupils: {_fmt_int(affected)}",
+                f"Monitored schools: {len(schools)}",
+                (f"Logged interventions ({_LOG_WINDOW_DAYS} d): "
+                 f"{len(recent_logs)}"),
+            ]
+        else:
+            figures = [
+                f"Incidents ouverts : {n_open}",
+                f"Dont critiques : {len(crit)}",
+                f"Élèves affectés : {_fmt_int(affected)}",
+                f"Écoles suivies : {len(schools)}",
+                (f"Interventions journalisées ({_LOG_WINDOW_DAYS} j) : "
+                 f"{len(recent_logs)}"),
+            ]
         if recent_logs:
-            figures.append(f"Coût total journalisé : {_fmt_int(cost_total)} XAF")
+            figures.append(f"Total logged cost: {_fmt_int(cost_total)} XAF" if use_en
+                           else f"Coût total journalisé : {_fmt_int(cost_total)} XAF")
 
         top = sorted(
             incidents,
@@ -238,49 +274,88 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 str(i.get("urgency", "low")).strip().lower(), 0.0),
                 _to_int(i.get("affected_students"))),
             reverse=True)[:3]
-        priorities = [
-            (f"{i.get('school_name', '?')} — {i.get('title', '?')} "
-             f"({URGENCY_FR.get(str(i.get('urgency', '')).strip().lower(), str(i.get('urgency', '?')))}, "
-             f"{_fmt_int(i.get('affected_students', 0))} élèves)")
-            for i in top
-        ] or ["Aucune priorité : calme plat sur ce périmètre."]
+        urg_map = URGENCY_FR
+        if use_en:
+            priorities = [
+                (f"{i.get('school_name', '?')} — {i.get('title', '?')} "
+                 f"({str(i.get('urgency', '?')).strip().lower()}, "
+                 f"{_fmt_int(i.get('affected_students', 0))} pupils)")
+                for i in top
+            ] or ["No priorities: all quiet in this scope."]
+        else:
+            priorities = [
+                (f"{i.get('school_name', '?')} — {i.get('title', '?')} "
+                 f"({urg_map.get(str(i.get('urgency', '')).strip().lower(), str(i.get('urgency', '?')))}, "
+                 f"{_fmt_int(i.get('affected_students', 0))} élèves)")
+                for i in top
+            ] or ["Aucune priorité : calme plat sur ce périmètre."]
 
         actions: list[str] = []
         if crit:
             names = ", ".join(sorted({str(i.get("school_name", "?")) for i in crit}))
-            actions.append(
-                f"Intervenir en priorité sur "
-                f"{_plural(len(crit), '1 incident critique', f'{len(crit)} incidents critiques')} : {names}."
-            )
+            if use_en:
+                actions.append(
+                    f"Intervene first on "
+                    f"{_plural(len(crit), '1 critical incident', f'{len(crit)} critical incidents')}: {names}."
+                )
+            else:
+                actions.append(
+                    f"Intervenir en priorité sur "
+                    f"{_plural(len(crit), '1 incident critique', f'{len(crit)} incidents critiques')} : {names}."
+                )
         old = [i for i in incidents
                if (age := _age_days(i.get("reported_at"), now)) is not None
                and age > _STALE_DAYS]
         if old:
-            actions.append(
-                f"{_plural(len(old), '1 incident ouvert', f'{len(old)} incidents ouverts')} "
-                "depuis plus de 7 jours : planifier la relance."
-            )
+            if use_en:
+                actions.append(
+                    f"{_plural(len(old), '1 incident open', f'{len(old)} incidents open')} "
+                    "for more than 7 days: schedule a follow-up."
+                )
+            else:
+                actions.append(
+                    f"{_plural(len(old), '1 incident ouvert', f'{len(old)} incidents ouverts')} "
+                    "depuis plus de 7 jours : planifier la relance."
+                )
         by_district: dict[str, int] = {}
         for i in incidents:
             by_district[str(i.get("district", "?"))] = by_district.get(
                 str(i.get("district", "?")), 0) + 1
         grouped = sorted(d for d, n in by_district.items() if n >= 2)
         if grouped:
-            actions.append(f"Tournée groupée possible : {', '.join(grouped)}.")
+            if use_en:
+                actions.append(f"Combined tour possible: {', '.join(grouped)}.")
+            else:
+                actions.append(f"Tournée groupée possible : {', '.join(grouped)}.")
         if recent_logs:
-            actions.append(
-                f"{len(recent_logs)} {_plural(len(recent_logs), 'intervention journalisée', 'interventions journalisées')} "
-                f"sur {_LOG_WINDOW_DAYS} jours ({_fmt_int(cost_total)} XAF) : poursuivre le rythme."
-            )
+            if use_en:
+                actions.append(
+                    f"{len(recent_logs)} {_plural(len(recent_logs), 'logged intervention', 'logged interventions')} "
+                    f"over {_LOG_WINDOW_DAYS} days ({_fmt_int(cost_total)} XAF): keep up the pace."
+                )
+            else:
+                actions.append(
+                    f"{len(recent_logs)} {_plural(len(recent_logs), 'intervention journalisée', 'interventions journalisées')} "
+                    f"sur {_LOG_WINDOW_DAYS} jours ({_fmt_int(cost_total)} XAF) : poursuivre le rythme."
+                )
         if not actions:
-            actions.append("Aucune action urgente : maintenir la surveillance.")
+            actions.append("No urgent action: maintain monitoring." if use_en
+                           else "Aucune action urgente : maintenir la surveillance.")
 
-        sections = [
-            {"title": "Résumé", "bullets": summary},
-            {"title": "Chiffres clés", "bullets": figures},
-            {"title": "Priorités", "bullets": priorities},
-            {"title": "Actions recommandées", "bullets": actions},
-        ]
+        if use_en:
+            sections = [
+                {"title": "Summary", "bullets": summary},
+                {"title": "Key figures", "bullets": figures},
+                {"title": "Priorities", "bullets": priorities},
+                {"title": "Recommended actions", "bullets": actions},
+            ]
+        else:
+            sections = [
+                {"title": "Résumé", "bullets": summary},
+                {"title": "Chiffres clés", "bullets": figures},
+                {"title": "Priorités", "bullets": priorities},
+                {"title": "Actions recommandées", "bullets": actions},
+            ]
         if format_ == "rapport":
             detail: list[str] = []
             for school in sorted(schools,
@@ -294,47 +369,76 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                              if (sid is not None and lo.get("school_id") == sid)
                              or _matches(sname, lo.get("school_name")))
                 s_aff = sum(_to_int(i.get("affected_students")) for i in s_open)
-                detail.append(
-                    f"{sname} ({school.get('district', '?')}) : "
-                    f"{len(s_open)} {_plural(len(s_open), 'incident ouvert', 'incidents ouverts')}, "
-                    f"{_fmt_int(s_aff)} élèves affectés, {_fmt_int(s_cost)} XAF de réparations."
-                )
-            sections.append({"title": "Détail par école",
-                             "bullets": detail or ["Aucune école suivie sur ce périmètre."]})
+                if use_en:
+                    detail.append(
+                        f"{sname} ({school.get('district', '?')}): "
+                        f"{len(s_open)} {_plural(len(s_open), 'open incident', 'open incidents')}, "
+                        f"{_fmt_int(s_aff)} affected pupils, {_fmt_int(s_cost)} XAF in repairs."
+                    )
+                else:
+                    detail.append(
+                        f"{sname} ({school.get('district', '?')}) : "
+                        f"{len(s_open)} {_plural(len(s_open), 'incident ouvert', 'incidents ouverts')}, "
+                        f"{_fmt_int(s_aff)} élèves affectés, {_fmt_int(s_cost)} XAF de réparations."
+                    )
+            empty_detail = ("No monitored school in this scope." if use_en
+                            else "Aucune école suivie sur ce périmètre.")
+            sections.append({"title": ("School detail" if use_en else "Détail par école"),
+                             "bullets": detail or [empty_detail]})
 
         slides: list[dict[str, Any]] = []
         if format_ == "diaporama":
+            months = ENGLISH_MONTHS if use_en else FRENCH_MONTHS
             slides.append({
                 "kind": "cover",
-                "title": f"Document WASH — {topic or 'Territoire'}",
-                "subtitle": (f"{now.day} {FRENCH_MONTHS[now.month]} {now.year} · "
-                             f"{topic or 'tous districts'}"),
+                "title": (f"WASH brief — {topic or 'Territory'}" if use_en
+                          else f"Document WASH — {topic or 'Territoire'}"),
+                "subtitle": ((f"{months[now.month]} {now.day}, {now.year} · "
+                              f"{topic or 'all districts'}") if use_en else
+                             (f"{now.day} {months[now.month]} {now.year} · "
+                              f"{topic or 'tous districts'}")),
                 "lines": [],
                 "stats": [
-                    {"label": "Incidents ouverts", "value": str(n_open)},
-                    {"label": "Élèves affectés", "value": _fmt_int(affected)},
-                    {"label": "Écoles suivies", "value": str(len(schools))},
+                    {"label": ("Open incidents" if use_en else "Incidents ouverts"),
+                     "value": str(n_open)},
+                    {"label": ("Affected pupils" if use_en else "Élèves affectés"),
+                     "value": _fmt_int(affected)},
+                    {"label": ("Monitored schools" if use_en else "Écoles suivies"),
+                     "value": str(len(schools))},
                 ],
             })
             for section in sections:
                 slides.append({"kind": "bullets", "title": section["title"],
                                "lines": list(section["bullets"]), "stats": []})
 
-        insight = (
-            f"Document « {format_} » pour {scope} : {n_open} "
-            f"{_plural(n_open, 'incident ouvert', 'incidents ouverts')}"
-            + (f" dont {len(crit)} critique(s)" if crit else "")
-            + (f", {_fmt_int(affected)} élèves affectés"
-               f", {len(schools)} école(s) suivie(s)"
-               f", {len(actions)} action(s) recommandée(s).")
-        )
+        if use_en:
+            insight = (
+                f"Document \u00ab {format_} \u00bb for {scope}: {n_open} "
+                f"{_plural(n_open, 'open incident', 'open incidents')}"
+                + (f" of which {len(crit)} critical" if crit else "")
+                + (f", {_fmt_int(affected)} affected pupils"
+                   f", {len(schools)} monitored school(s)"
+                   f", {len(actions)} recommended action(s).")
+            )
+        else:
+            insight = (
+                f"Document « {format_} » pour {scope} : {n_open} "
+                f"{_plural(n_open, 'incident ouvert', 'incidents ouverts')}"
+                + (f" dont {len(crit)} critique(s)" if crit else "")
+                + (f", {_fmt_int(affected)} élèves affectés"
+                   f", {len(schools)} école(s) suivie(s)"
+                   f", {len(actions)} action(s) recommandée(s).")
+            )
         if format_ == "diaporama":
-            insight += f" Deck de {len(slides)} slides généré."
+            insight += (f" Deck of {len(slides)} slides generated." if use_en
+                        else f" Deck de {len(slides)} slides généré.")
         return {"insight": insight, "topic": topic or None, "format": format_,
-                "sections": sections, "slides": slides, "total": len(sections)}
+                "sections": sections, "slides": slides, "total": len(sections),
+                "lang": "en" if use_en else "fr"}
     except Exception as exc:  # contrat : jamais d'exception vers la boucle
+        err = f"Document unavailable: {exc}" if use_en else f"Document indisponible : {exc}"
         return {"sections": [], "slides": [], "total": 0,
-                "error": f"Document indisponible : {exc}"}
+                "error": err}
 
 
 def _build_document_briefing_card(obs: dict[str, Any]) -> AgentCard | None:
@@ -342,10 +446,11 @@ def _build_document_briefing_card(obs: dict[str, Any]) -> AgentCard | None:
     if not isinstance(sections, list) or not sections:
         return None
     topic = obs.get("topic")
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     scope = f" — {topic}" if topic else ""
     return AgentCard(
         type="document_briefing",
-        title=f"Document briefing{scope}",
+        title=f"Briefing document{scope}" if use_en else f"Document briefing{scope}",
         data=obs,
     )
 

@@ -13,6 +13,7 @@ from ..tool_consts import (
     ALERT_WINDOW_DAYS_DEFAULT,
     ALERT_WINDOW_DAYS_MAX,
     ALERT_WINDOW_DAYS_MIN,
+    tool_lang,
 )
 
 TOOL_NAME = "relances_proactives"
@@ -155,8 +156,15 @@ def _last_activity(incident: dict[str, Any],
     return max(moments) if moments else None
 
 
-def _draft_message(school: str, title: str, ref: Any, days_idle: int) -> str:
+def _draft_message(school: str, title: str, ref: Any, days_idle: int,
+                   en: bool = False) -> str:
     code = f" ({ref})" if ref else ""
+    if en:
+        return (
+            f"Hello, following up on case {title}{code} at {school}: "
+            f"no news for {days_idle} days. "
+            "Can you confirm the progress? Thank you."
+        )
     return (
         f"Bonjour, suivi du dossier {title}{code} a {school} : "
         f"sans nouvelles depuis {days_idle} jours. "
@@ -169,16 +177,19 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     try:
         args = args or {}
         context = context or {}
+        use_en = tool_lang(context) == "en"
         district = str(args.get("district") or "").strip()
         district_low = district.lower()
         days = _parse_days(args.get("days", ALERT_WINDOW_DAYS_DEFAULT))
         now = datetime.now(timezone.utc)
 
         if context.get("incidents", None) is None:
+            err = ("No incident data available "
+                   "to detect dormant cases.") if use_en else (
+                       "Aucune donnee d'incident disponible "
+                       "pour detecter les dossiers dormants.")
             return {"items": [], "total": 0, "days": days,
-                    "district": district or None,
-                    "error": "Aucune donnee d'incident disponible "
-                             "pour detecter les dossiers dormants."}
+                    "district": district or None, "error": err}
 
         log_index = _logs_by_incident(context)
         items: list[dict[str, Any]] = []
@@ -195,35 +206,44 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             idle = max((now - last).days, 0)
             if idle <= days:
                 continue
-            school = str(incident.get("school_name") or "École inconnue")
+            school = str(incident.get("school_name")
+                         or ("Unknown school" if use_en else "École inconnue"))
             title = str(incident.get("title") or incident.get("summary")
-                        or "Incident sans titre")
+                        or ("Untitled incident" if use_en else "Incident sans titre"))
             ref = incident.get("reference_code")
             items.append({
                 "school_name": school,
                 "incident_title": title,
                 "reference_code": ref,
                 "days_idle": idle,
-                "draft_message": _draft_message(school, title, ref, idle),
+                "draft_message": _draft_message(school, title, ref, idle, en=use_en),
             })
 
-        scope = f" à {district}" if district else ""
+        scope = ((f" in {district}" if district else "") if use_en
+                 else (f" à {district}" if district else ""))
         if not items:
+            err = (f"No dormant incident for more than {days} "
+                   f"days{scope}.") if use_en else (
+                       f"Aucun incident dormant depuis plus de {days} "
+                       f"jours{scope}.")
             return {"items": [], "total": 0, "days": days,
-                    "district": district or None,
-                    "error": f"Aucun incident dormant depuis plus de {days} "
-                             f"jours{scope}."}
+                    "district": district or None, "error": err}
 
         items.sort(key=lambda i: int(i.get("days_idle", 0) or 0), reverse=True)
         total = len(items)
         plural = "s" if total > 1 else ""
-        insight = (f"{total} incident{plural} dormant{plural} depuis plus de "
-                   f"{days} jours{scope} : brouillons de relance prêts.")
+        if use_en:
+            insight = (f"{total} dormant incident{plural} for more than "
+                       f"{days} days{scope}: follow-up drafts ready.")
+        else:
+            insight = (f"{total} incident{plural} dormant{plural} depuis plus de "
+                       f"{days} jours{scope} : brouillons de relance prêts.")
         return {"insight": insight, "items": items, "total": total,
-                "days": days, "district": district or None}
+                "days": days, "district": district or None,
+                "lang": "en" if use_en else "fr"}
     except Exception as exc:  # contrat : jamais d'exception vers la boucle
-        return {"items": [], "total": 0,
-                "error": f"Relances indisponibles : {exc}"}
+        err = f"Follow-ups unavailable: {exc}" if use_en else f"Relances indisponibles : {exc}"
+        return {"items": [], "total": 0, "error": err}
 
 
 def _build_relances_card(obs: dict[str, Any]) -> AgentCard | None:
@@ -232,12 +252,11 @@ def _build_relances_card(obs: dict[str, Any]) -> AgentCard | None:
         return None
     total = obs.get("total") or len(items)
     district = obs.get("district")
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     scope = f" — {district}" if district else ""
-    return AgentCard(
-        type="relances",
-        title=f"{total} relance(s) proposée(s){scope}",
-        data=obs,
-    )
+    title = (f"{total} suggested follow-up(s){scope}" if use_en
+             else f"{total} relance(s) proposée(s){scope}")
+    return AgentCard(type="relances", title=title, data=obs)
 
 
 CARD_BUILDERS = {"relances": _build_relances_card}

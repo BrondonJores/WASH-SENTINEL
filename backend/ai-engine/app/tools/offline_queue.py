@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import tool_lang
 
 TOOL_NAME = "offline_queue"
 
@@ -123,14 +124,17 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(context, dict):
             context = {}
         del args
+        use_en = tool_lang(context) == "en"
         has_queue = "offline_queue" in context
         has_sync = "sync_status" in context
         if not has_queue and not has_sync:
-            return {"error": (
-                "File hors-ligne inconnue : le contexte ne contient ni "
-                "'offline_queue' ni 'sync_status'. Reconnectez-vous ou "
-                "precisez l'ecole concernee."
-            )}
+            err = ("Offline queue unknown: the context holds neither "
+                   "'offline_queue' nor 'sync_status'. Reconnect or "
+                   "name the school concerned.") if use_en else (
+                       "File hors-ligne inconnue : le contexte ne contient ni "
+                       "'offline_queue' ni 'sync_status'. Reconnectez-vous ou "
+                       "precisez l'ecole concernee.")
+            return {"error": err}
         raw_queue = context.get("offline_queue", [])
         if not isinstance(raw_queue, list):
             raw_queue = []
@@ -139,7 +143,30 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         ]
         count = len(pending)
         online, last_sync = _sync_of(context.get("sync_status"))
-        if count == 0:
+        if use_en:
+            if count == 0:
+                if online:
+                    insight = ("Offline queue empty: everything synced, "
+                               "connection active.")
+                else:
+                    insight = ("Offline queue empty, but device offline: the "
+                               "next reports will wait to be sent.")
+            elif count == 1:
+                first = pending[0]
+                where = f" ({first.get('school')})" if first.get("school") else ""
+                if online:
+                    insight = (f"1 report waiting for synchronisation{where}: "
+                               "connection active, sending soon.")
+                else:
+                    insight = (f"1 report waiting for synchronisation{where}: "
+                               "device offline, it will go out on reconnection.")
+            elif online:
+                insight = (f"{count} reports waiting for synchronisation: "
+                           "connection active, sending soon.")
+            else:
+                insight = (f"{count} reports waiting for synchronisation: "
+                           "device offline, they will go out on reconnection.")
+        elif count == 0:
             if online:
                 insight = (
                     "File hors-ligne vide : tout est synchronise, "
@@ -178,21 +205,31 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             n_crit = sum(1 for p in pending if p.get("urgency") == "critical")
             n_high = sum(1 for p in pending if p.get("urgency") == "high")
             severe: list[str] = []
-            if n_crit:
-                severe.append(f"{n_crit} critique{'s' if n_crit > 1 else ''}")
-            if n_high:
-                many = n_high > 1
-                severe.append(f"{n_high} haute{'s' if many else ''} "
-                              f"urgence{'s' if many else ''}")
-            if severe:
-                insight += f" Dont {' et '.join(severe)}."
+            if use_en:
+                if n_crit:
+                    severe.append(f"{n_crit} critical")
+                if n_high:
+                    severe.append(f"{n_high} high urgency")
+                if severe:
+                    insight += f" Of which {' and '.join(severe)}."
+            else:
+                if n_crit:
+                    severe.append(f"{n_crit} critique{'s' if n_crit > 1 else ''}")
+                if n_high:
+                    many = n_high > 1
+                    severe.append(f"{n_high} haute{'s' if many else ''} "
+                                  f"urgence{'s' if many else ''}")
+                if severe:
+                    insight += f" Dont {' et '.join(severe)}."
         if last_sync:
-            insight += f" Derniere synchro : {last_sync}."
+            insight += (f" Last sync: {last_sync}." if use_en
+                        else f" Derniere synchro : {last_sync}.")
         result: dict[str, Any] = {
             "insight": insight,
             "pending": pending,
             "count": count,
             "online": online,
+            "lang": "en" if use_en else "fr",
         }
         if last_sync is not None:
             result["last_sync"] = last_sync
@@ -208,9 +245,10 @@ def _build_offline_queue_card(obs: dict[str, Any]) -> AgentCard | None:
         return None
     if "pending" not in obs and "count" not in obs:
         return None
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     return AgentCard(
         type="offline_queue",
-        title="File hors-ligne",
+        title="Offline queue" if use_en else "File hors-ligne",
         data=obs,
     )
 

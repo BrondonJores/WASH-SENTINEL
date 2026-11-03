@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import tool_lang
 
 TOOL_NAME = "maintenance_team"
 
@@ -132,13 +133,15 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 continue
             open_inc.append(row)
 
+        use_en = tool_lang(context) == "en"
         if not open_inc:
-            scope = f" pour {district_filter}" if district_filter else ""
-            return {
-                "insight": f"Aucun incident ouvert{scope} — équipe disponible, pas de tournée à planifier.",
-                "workload": [],
-                "suggested_tour": [],
-            }
+            scope = ((f" for {district_filter}" if district_filter else "")
+                     if use_en else
+                     (f" pour {district_filter}" if district_filter else ""))
+            empty = ("No open incidents%s — team available, no tour to plan."
+                     if use_en else
+                     "Aucun incident ouvert%s — équipe disponible, pas de tournée à planifier.")
+            return {"insight": empty % scope, "workload": [], "suggested_tour": []}
 
         # --- Charge par district ---
         teams = _teams_by_district(context)
@@ -263,13 +266,22 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             f"{s['school_name']} ({s['max_urgency']}"
             f"{', ' + s['suggested_team'] if s['suggested_team'] else ''})"
             for s in suggested_tour[:3])
-        insight = (
-            f"{total} incident{'s' if total > 1 else ''} ouvert{'s' if total > 1 else ''} "
-            f"dans {len(workload)} district{'s' if len(workload) > 1 else ''} : {head}{extra}. "
-            f"Charge : {assigned_total} assigné{'s' if assigned_total > 1 else ''}, "
-            f"{total - assigned_total} sans assigné. "
-            f"Tournée suggérée : {stops}."
-        )
+        if use_en:
+            insight = (
+                f"{total} open incident{'s' if total > 1 else ''} "
+                f"in {len(workload)} district{'s' if len(workload) > 1 else ''}: {head}{extra}. "
+                f"Load: {assigned_total} assigned, "
+                f"{total - assigned_total} unassigned. "
+                f"Suggested tour: {stops}."
+            )
+        else:
+            insight = (
+                f"{total} incident{'s' if total > 1 else ''} ouvert{'s' if total > 1 else ''} "
+                f"dans {len(workload)} district{'s' if len(workload) > 1 else ''} : {head}{extra}. "
+                f"Charge : {assigned_total} assigné{'s' if assigned_total > 1 else ''}, "
+                f"{total - assigned_total} sans assigné. "
+                f"Tournée suggérée : {stops}."
+            )
         return {"insight": insight, "workload": workload, "suggested_tour": suggested_tour}
     except Exception as exc:
         return {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
@@ -284,9 +296,10 @@ def _build_maintenance_team_card(obs: dict[str, Any]) -> AgentCard | None:
     tour = obs.get("suggested_tour")
     if not workload and not tour:
         return None
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     return AgentCard(
         type="maintenance_team",
-        title="Dispatch — équipe maintenance",
+        title="Dispatch — maintenance team" if use_en else "Dispatch — équipe maintenance",
         data=obs,
     )
 

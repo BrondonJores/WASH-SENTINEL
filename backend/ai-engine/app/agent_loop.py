@@ -62,7 +62,7 @@ from .schemas import (
     ImageAnalysisResponse,
     RepairPlanRequest,
 )
-from .tool_consts import TIME_WINDOW_LAST_7D_DAYS, TIME_WINDOW_LAST_30D_DAYS
+from .tool_consts import TIME_WINDOW_LAST_7D_DAYS, TIME_WINDOW_LAST_30D_DAYS, tool_lang
 
 #: Prompt système : rendu neutre des sections prompts.agent_sections()
 #: (mêmes règles comportementales, une phrase par règle).
@@ -826,7 +826,8 @@ def format_empty_period_message(window: dict[str, Any] | None,
 
 def _annotate_period_obs(name: str, observation: dict[str, Any],
                          window: dict[str, Any] | None,
-                         total: int, place: str) -> None:
+                         total: int, place: str,
+                         lang: str = "fr") -> None:
     """Tamponne une observation réussie (période + stock général), en place.
 
     Le modèle lit la période, le libellé et le total hors-période ; les
@@ -840,7 +841,7 @@ def _annotate_period_obs(name: str, observation: dict[str, Any],
     start, end = window.get("start"), window.get("end")
     observation["time_window"] = {
         "preset": window.get("preset"),
-        "label": time_window_label(window, "fr"),
+        "label": time_window_label(window, lang),
         "start": start.isoformat() if isinstance(start, date) else start,
         "end": end.isoformat() if isinstance(end, date) else end,
     }
@@ -929,7 +930,7 @@ _SCHOOL_PRECEDERS = frozenset({
 _GLOBAL_OK_RES = (
     re.compile(r"\bcombien\b|how many|how much"),
     re.compile(r"\ble plus\b|\bla plus\b|\bles plus\b|\bmost\b|\btop\b|"
-               r"classement|ranking|priorita|besoin d aide|need help"),
+               r"classement|ranking|priorita|besoin d[ '’]?aide|need help"),
     re.compile(r"\btoutes?\b|\btous\b|\bchaque\b|\ball\b|\bevery\b"),
     re.compile(r"qui envoyer|envoyer|depech|dispatch|\bsend\b"),
 )
@@ -1138,6 +1139,22 @@ def _turn_text(turn: Any) -> str:
     return str(content) if content and str(content).strip() else ""
 
 
+def _mask_team_names(text: str, context: dict[str, Any] | None) -> str:
+    """Masque les noms d'équipes connues (« Équipe Wouri Nord »).
+
+    Leurs tokens districts (« Wouri ») pollueraient la détection du sujet
+    discuté : une équipe n'est pas un lieu. Fonction pure.
+    """
+    masked = str(text or "")
+    for team in (context or {}).get("teams", []) or []:
+        if not isinstance(team, dict):
+            continue
+        name = str(team.get("name") or "").strip()
+        if len(name) >= 3:
+            masked = re.sub(re.escape(name), " ", masked, flags=re.IGNORECASE)
+    return masked
+
+
 def recent_single_place(
     history: Any,
     context: dict[str, Any] | None = None,
@@ -1147,13 +1164,13 @@ def recent_single_place(
     Premier tour (en remontant, REPORT_FOLLOWUP_TURNS max) qui cite un lieu
     décide : une seule école -> son nom court, un seul district -> son nom.
     2+ lieux (ambigu) ou aucun lieu cité -> None : on ne devine jamais.
-    Fonction pure, sans état serveur. Partagée par les mémos rapport et
-    préparation d'intervention.
+    Noms d'équipes masqués avant détection (pas des lieux). Fonction pure,
+    sans état serveur. Partagée par les mémos rapport et préparation.
     """
     turns = list(reversed(history or []))[:REPORT_FOLLOWUP_TURNS]
     for turn in turns:
-        content = _turn_text(turn)
-        if not content:
+        content = _mask_team_names(_turn_text(turn), context)
+        if not content.strip():
             continue
         turn_schools, turn_districts = mentioned_places(content, context or {})
         if not turn_schools and not turn_districts:
@@ -1199,6 +1216,25 @@ def resolve_report_followup(
     return f"{base} {place[1]}"
 
 
+def recent_single_incident(history: Any) -> str | None:
+    """Référence unique des tours récents (WASH-AAAA-XXXX), sinon None.
+
+    Premier tour (en remontant, REPORT_FOLLOWUP_TURNS max) qui cite des
+    références décide : une seule -> elle, 2+ (ambigu) -> None. Les refs
+    sont auto-identifiantes : pas besoin de contexte. Fonction pure.
+    """
+    turns = list(reversed(history or []))[:REPORT_FOLLOWUP_TURNS]
+    for turn in turns:
+        content = _turn_text(turn)
+        if not content:
+            continue
+        refs = list(dict.fromkeys(m.group(0) for m in WASH_REF_RE.finditer(content)))
+        if not refs:
+            continue
+        return refs[0] if len(refs) == 1 else None
+    return None
+
+
 def resolve_prep_followup(
     message: str,
     history: Any,
@@ -1208,9 +1244,11 @@ def resolve_prep_followup(
 
     « Prépare une intervention pour le robinet... » après un tour ne
     citant que Bonanjo -> « ... Bonanjo » (la branche déterministe
-    scope le dossier au lieu de rendre la main au listing). Inchangé
-    si : lieu explicite, pas une demande de planification, ou sujet
-    récent ambigu/absent. Miroir de resolve_report_followup.
+    scope le dossier au lieu de rendre la main au listing). « ... pour
+    ce signalement » (aucun indice propre) + une seule réf récente ->
+    la réf est ajoutée aussi. Inchangé si : lieu explicite, pas une
+    demande de planification, ou sujet récent ambigu/absent. Miroir de
+    resolve_report_followup.
     """
     text = message or ""
     if not is_intervention_prep_request(text):
@@ -1224,7 +1262,12 @@ def resolve_prep_followup(
     base = text.strip()
     while base and base[-1] in "?!":
         base = base[:-1].rstrip()
-    return f"{base} {place[1]}"
+    rewritten = f"{base} {place[1]}"
+    if not WASH_REF_RE.search(text) and not _intervention_hint(text, context):
+        ref = recent_single_incident(history)
+        if ref is not None:
+            rewritten = f"{rewritten} {ref}"
+    return rewritten
 
 
 def _last_assistant_turn(history: Any) -> str:
@@ -1242,10 +1285,28 @@ def _last_assistant_turn(history: Any) -> str:
 #: Questions de slots du dossier prépa (miroir normalisé de _SLOT_QUESTIONS
 #: de app/tools/prepare_intervention.py) : leur présence dans le dernier
 #: tour assistant prouve une prépa en cours d'interrogatoire.
+def _norm_marker_text(text: str) -> str:
+    """Normalisation comparaison : _norm + tirets/apostrophes -> espace.
+
+    Les questions prépa réelles portent « faut-il », « l'intervention »,
+    « s'agit-il » : sans cette passe, les marqueurs ne matchent jamais
+    et le slot resolver ne se déclenche pas. Fonction pure.
+    """
+    collapsed = re.sub(r"[-'’‘`]", " ", _norm(text))
+    return re.sub(r"\s+", " ", collapsed).strip()
+
+
 _PREP_QUESTION_MARKERS = (
     "pour quelle date prevoir l intervention",
     "quelle equipe doit intervenir",
     "quel incident existant faut il reparer",
+    "quel budget allouez vous",
+    "de quelle ecole s agit il",
+    "for which date should the intervention be planned",
+    "which team should intervene",
+    "which existing incident should be repaired",
+    "which budget do you allocate",
+    "which school do you mean",
 )
 
 #: Budget déjà cadré dans le tour prépa (« budget 100 000 XAF »).
@@ -1272,6 +1333,62 @@ def _match_team_name(message: str, context: dict[str, Any] | None) -> str | None
     return best
 
 
+def _prep_turn_assertions(prep_turn: str) -> str:
+    """Phrases affirmatives du tour prépa, listes de choix exclues.
+
+    « Quelle équipe doit intervenir (Équipe Wouri Nord, Équipe Wouri
+    Sud) ? » propose, « équipe Équipe Wouri Nord. » dispose : seules
+    les phrases non interrogatives, parenthèses retirées, portent les
+    slots déjà cadrés (réf, budget, équipe, date). Fonction pure.
+    """
+    assertions: list[str] = []
+    for sentence in re.split(r"(?<=[.?!])\s+", str(prep_turn or "")):
+        stripped = sentence.strip()
+        if not stripped or stripped.endswith("?"):
+            continue
+        stripped = re.sub(r"\([^()]*\)", " ", stripped)
+        if stripped.strip():
+            assertions.append(stripped.strip())
+    return " ".join(assertions)
+
+
+_PREP_MONTHS = {
+    "janvier": 1, "january": 1, "fevrier": 2, "february": 2,
+    "mars": 3, "march": 3, "avril": 4, "april": 4, "mai": 5, "may": 5,
+    "juin": 6, "june": 6, "juillet": 7, "july": 7, "aout": 8,
+    "august": 8, "septembre": 9, "september": 9, "octobre": 10,
+    "october": 10, "novembre": 11, "november": 11, "decembre": 12,
+    "december": 12,
+}
+_PREP_LITERAL_DATE_RE = re.compile(
+    r"\b(\d{1,2})\s+([a-z]+)\s+(\d{4})\b")
+
+
+def _prep_asserted_date(assertions: str, ref_today: Any) -> Any:
+    """Date déjà cadrée dans les affirmations du tour prépa, sinon None.
+
+    Le littéral « JJ mois AAAA » passe AVANT parse_date : celui-ci
+    avalerait « le 15 » de « prévue le 15 décembre 2026 » et rendrait
+    le mauvais mois. Repli parse_date (relatif, JJ/MM) ensuite.
+    FR/EN, insensible aux accents. Fonction pure.
+    """
+    from datetime import date as _date
+
+    from .tools.prepare_intervention import parse_date
+    match = _PREP_LITERAL_DATE_RE.search(_norm(assertions))
+    if match:
+        month = _PREP_MONTHS.get(match.group(2))
+        if month is not None:
+            try:
+                return _date(int(match.group(3)), month, int(match.group(1)))
+            except ValueError:
+                pass
+    try:
+        return parse_date(assertions, ref_today)
+    except (TypeError, ValueError):
+        return None
+
+
 def resolve_prep_slot_followup(
     message: str,
     history: Any,
@@ -1281,58 +1398,106 @@ def resolve_prep_slot_followup(
     """Complète une prépa en cours avec la réponse courte (fonction pure).
 
     Dernier tour assistant en interrogatoire prépa + « Confier à Équipe
-    Wouri Nord » -> « Prépare une intervention pour WASH-… à Bonanjo,
-    budget 100 000 XAF, équipe Équipe Wouri Nord » (slots antérieurs
-    réextraits du tour : réf, école, budget). « demain » -> même
-    reconstitution + date. Inchangé si : pas de prépa en cours, requête
-    de planification déjà complète, ni équipe ni date détectée, autre
-    école nommée (changement de sujet), ou rien à reconstituer.
+    Wouri Nord » (ou « demain », « 100 000 XAF », une réf nue, ou
+    l'école seule cliquée) -> requête reconstituée : slots du message
+    (équipe, date, budget, réf, école) + slots déjà cadrés dans
+    les affirmations du tour (équipes proposées exclues) + école/réf en
+    repli sur l'historique. L'école manquante n'est plus bloquante : la
+    branche déterministe repose sa question ciblée (+ chips) au lieu de
+    laisser le LLM dégénérer en listing global. Inchangé si : pas de
+    prépa en cours, planification déjà complète, aucun slot détecté, ou
+    autre école nommée (changement de sujet).
     """
-    from .tools.prepare_intervention import parse_date
+    from .tools.prepare_intervention import parse_budget, parse_date
     text = (message or "").strip()
     if not text or is_intervention_prep_request(text):
         return message or ""
     prep_turn = _last_assistant_turn(history)
     if not prep_turn or not any(
-            marker in _norm(prep_turn) for marker in _PREP_QUESTION_MARKERS):
+            marker in _norm_marker_text(prep_turn)
+            for marker in _PREP_QUESTION_MARKERS):
         return message or ""
     ctx = context or {}
-    team = _match_team_name(text, ctx)
     try:
         ref_today = today if today is not None else server_today()
+    except (TypeError, ValueError):
+        ref_today = server_today()
+    team = _match_team_name(text, ctx)
+    try:
         has_date = parse_date(text, ref_today) is not None
     except (TypeError, ValueError):
         has_date = False
-    if team is None and not has_date:
-        return message or ""
-    turn_schools, _ = mentioned_places(prep_turn, ctx)
-    if len(turn_schools) != 1:
-        return message or ""
-    prep_school = turn_schools[0]
+    msg_ref_match = WASH_REF_RE.search(text)
+    msg_ref = msg_ref_match.group(0) if msg_ref_match else None
+    # Budget explicite (« 100 000 XAF », « 100k ») : réponse au
+    # « Quel budget allouez-vous ? ». parse_budget est strict : un
+    # nombre nu n'est jamais un budget.
+    try:
+        msg_budget = parse_budget(text)
+    except (TypeError, ValueError):
+        msg_budget = None
+    # École seule = réponse courte au « De quelle école s'agit-il ? »
+    # (clic chip). Message long nommant une école = vraie question.
     msg_schools, _ = mentioned_places(text, ctx)
-    if msg_schools and not any(_school_arg_matches(s, prep_school) for s in msg_schools):
+    lone_school: str | None = None
+    if len(msg_schools) == 1 and len(_norm(text).split()) <= 4:
+        lone_school = msg_schools[0]
+    if (team is None and not has_date and msg_ref is None
+            and lone_school is None and msg_budget is None):
         return message or ""
-    ref_match = WASH_REF_RE.search(prep_turn)
-    ref = ref_match.group(0) if ref_match else None
-    budget_match = _PREP_BUDGET_RE.search(prep_turn)
-    budget = None
-    if budget_match:
-        try:
-            budget = int(re.sub(r"[\s\u00a0.,]", "", budget_match.group(1)))
-        except (TypeError, ValueError):
-            budget = None
+    # Sujet : message (clic) > tour prépa > historique récent.
+    turn_schools, _ = mentioned_places(_mask_team_names(prep_turn, ctx), ctx)
+    subject: str | None = turn_schools[0] if len(turn_schools) == 1 else None
+    if subject is None:
+        place = recent_single_place(history, ctx)
+        if place is not None and place[0] == "school":
+            known = mentioned_places(place[1], ctx)[0]
+            subject = known[0] if known else None
+    if lone_school is not None:
+        if subject is not None and not _school_arg_matches(lone_school, subject):
+            return message or ""
+        subject = lone_school
+    elif msg_schools and (
+            subject is None or not any(
+                _school_arg_matches(s, subject) for s in msg_schools)):
+        return message or ""
+    assertions = _prep_turn_assertions(prep_turn)
+    ref_match = WASH_REF_RE.search(assertions)
+    ref = msg_ref or (ref_match.group(0) if ref_match else None)
     if ref is None:
-        parts = [f"Prépare une intervention à {short_school_name(prep_school)}"]
-    else:
-        parts = [f"Prépare une intervention pour {ref} à {short_school_name(prep_school)}"]
-    if budget is not None:
-        parts.append(f"budget {budget} XAF")
-    if team is not None:
-        parts.append(f"équipe {team}")
+        ref = recent_single_incident(history)
+    budget = msg_budget
+    if budget is None:
+        budget_match = _PREP_BUDGET_RE.search(assertions)
+        if budget_match:
+            try:
+                budget = int(re.sub(r"[\s\u00a0.,]", "", budget_match.group(1)))
+            except (TypeError, ValueError):
+                budget = None
+    if team is None:
+        team = _match_team_name(assertions, ctx)
+    # Date : message d'abord, sinon date déjà cadrée dans le tour
+    # (réémise JJ/MM/AAAA, le seul format calendaire absolu parsé).
+    date_text: str | None = None
     if has_date:
         date_text = text.strip()
         while date_text and date_text[-1] in "?!":
             date_text = date_text[:-1].rstrip()
+    else:
+        prior_date = _prep_asserted_date(assertions, ref_today)
+        if prior_date is not None:
+            date_text = prior_date.strftime("%d/%m/%Y")
+    base = "Prépare une intervention"
+    if ref is not None:
+        base += f" pour {ref}"
+    if subject is not None:
+        base += f" à {short_school_name(subject)}"
+    parts = [base]
+    if budget is not None:
+        parts.append(f"budget {budget} XAF")
+    if team is not None:
+        parts.append(f"équipe {team}")
+    if date_text is not None:
         parts.append(date_text)
     return ", ".join(parts)
 
@@ -1775,11 +1940,12 @@ def _fmt_int(value: Any) -> str:
         return "0"
 
 
-def _fmt_1(value: Any) -> str:
+def _fmt_1(value: Any, en: bool = False) -> str:
     try:
-        return f"{float(value):.1f}".replace(".", ",")
+        text = f"{float(value):.1f}"
+        return text if en else text.replace(".", ",")
     except (TypeError, ValueError):
-        return "0,0"
+        return "0.0" if en else "0,0"
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
@@ -1812,11 +1978,18 @@ def _period_meta(obs: dict[str, Any]) -> tuple[str, str, Any]:
     return label, str(obs.get("period_place") or ""), obs.get("total_ouverts")
 
 
-def _period_stock(stock_n: Any) -> str:
+def _obs_en(obs: dict[str, Any]) -> bool:
+    """Synthèses fallback : anglais si l'observation est tamponnée 'en'."""
+    return str(obs.get("lang") or "fr").lower().startswith("en")
+
+
+def _period_stock(stock_n: Any, en: bool = False) -> str:
     """Parenthèse stock général (« (6 ouverts au total.) »), "" si inconnu."""
     if stock_n is None:
         return ""
     try:
+        if en:
+            return f" ({int(stock_n)} open in total.)"
         return f" ({int(stock_n)} ouverts au total.)"
     except (TypeError, ValueError):
         return ""
@@ -1828,10 +2001,22 @@ def _summarize_district(obs: dict[str, Any]) -> str:
     schools = obs.get("schools_involved", []) or []
     critical = int((obs.get("by_urgency", {}) or {}).get("critical", 0) or 0)
     label, place, stock_n = _period_meta(obs)
+    en = _obs_en(obs)
     if label:
-        stock = _period_stock(stock_n)
+        stock = _period_stock(stock_n, en)
         if n == 0:
+            if en:
+                return f"No incidents reported {label}{place}.{stock}"
             return f"Aucun incident signalé {label}{place}.{stock}"
+        if en:
+            text = (
+                f"{n} {_plural(n, 'reported incident', 'reported incidents')} "
+                f"{label}{place} ({pupils} pupils, {len(schools)} "
+                f"{_plural(len(schools), 'school', 'schools')}"
+            )
+            if critical:
+                text += f", of which {critical} {_plural(critical, 'critical')}"
+            return text + f".{stock} Details are in the card below."
         text = (
             f"{n} {_plural(n, 'incident signalé', 'incidents signalés')} "
             f"{label}{place} ({pupils} élèves, {len(schools)} "
@@ -1840,6 +2025,15 @@ def _summarize_district(obs: dict[str, Any]) -> str:
         if critical:
             text += f", dont {critical} {_plural(critical, 'critique')}"
         return text + f".{stock} Le détail est dans la carte ci-dessous."
+    if en:
+        text = (
+            f"{n} {_plural(n, 'open incident', 'open incidents')} "
+            f"{_plural(n, 'affects', 'affect')} "
+            f"{pupils} pupils in {len(schools)} {_plural(len(schools), 'school', 'schools')}"
+        )
+        if critical:
+            text += f", of which {critical} {_plural(critical, 'critical')}"
+        return text + ". Details are in the card below."
     text = (
         f"{n} {_plural(n, 'incident ouvert', 'incidents ouverts')} "
         f"{_plural(n, 'touche', 'touchent')} "
@@ -1853,44 +2047,77 @@ def _summarize_district(obs: dict[str, Any]) -> str:
 def _summarize_trends(obs: dict[str, Any]) -> str:
     figures = obs.get("figures", {}) or {}
     label, _place, stock_n = _period_meta(obs)
+    en = _obs_en(obs)
     if label:
         n = int(figures.get("total_incidents", 0) or 0)
+        if en:
+            return (
+                f"At {obs.get('school_name', '?')} {label}: "
+                f"{n} {_plural(n, 'breakdown', 'breakdowns')}, "
+                f"{_fmt_int(figures.get('total_cost', 0))} "
+                f"{figures.get('currency', 'XAF')} in repairs."
+                f"{_period_stock(stock_n, en)} The chart is in the card below."
+            )
         return (
             f"À {obs.get('school_name', '?')} {label} : "
             f"{n} {_plural(n, 'panne', 'pannes')}, "
             f"{_fmt_int(figures.get('total_cost', 0))} "
             f"{figures.get('currency', 'XAF')} de réparations."
-            f"{_period_stock(stock_n)} Le graphique est dans la carte ci-dessous."
+            f"{_period_stock(stock_n, en)} Le graphique est dans la carte ci-dessous."
         )
-    trend = {"up": "en hausse", "down": "en baisse"}.get(
-        str(figures.get("trend_direction", "")), "stable"
-    )
-    n = int(figures.get("total_incidents", 0) or 0)
-    text = (
-        f"À {obs.get('school_name', '?')} sur {obs.get('months', 3)} mois : "
-        f"{n} {_plural(n, 'panne')}, "
-        f"{_fmt_int(figures.get('total_cost', 0))} {figures.get('currency', 'XAF')} de réparations, "
-        f"tendance {trend}."
-    )
+    if en:
+        trend = {"up": "rising", "down": "falling"}.get(
+            str(figures.get("trend_direction", "")), "stable"
+        )
+        n = int(figures.get("total_incidents", 0) or 0)
+        text = (
+            f"At {obs.get('school_name', '?')} over {obs.get('months', 3)} months: "
+            f"{n} {_plural(n, 'breakdown', 'breakdowns')}, "
+            f"{_fmt_int(figures.get('total_cost', 0))} {figures.get('currency', 'XAF')} in repairs, "
+            f"{trend} trend."
+        )
+    else:
+        trend = {"up": "en hausse", "down": "en baisse"}.get(
+            str(figures.get("trend_direction", "")), "stable"
+        )
+        n = int(figures.get("total_incidents", 0) or 0)
+        text = (
+            f"À {obs.get('school_name', '?')} sur {obs.get('months', 3)} mois : "
+            f"{n} {_plural(n, 'panne')}, "
+            f"{_fmt_int(figures.get('total_cost', 0))} {figures.get('currency', 'XAF')} de réparations, "
+            f"tendance {trend}."
+        )
     try:
         disruption = int(figures.get("service_disruption_days", 0) or 0)
         logged = int(figures.get("total_days_lost", 0) or 0)
     except (TypeError, ValueError):
         disruption, logged = 0, 0
     if disruption > logged:
-        text += f" Privation réelle en cours depuis {disruption} jours."
-    return text + " Le graphique est dans la carte ci-dessous."
+        text += (f" Actual ongoing deprivation for {disruption} days." if en
+                 else f" Privation réelle en cours depuis {disruption} jours.")
+    return text + (" The chart is in the card below." if en
+                   else " Le graphique est dans la carte ci-dessous.")
 
 
 def _summarize_ranking(obs: dict[str, Any]) -> str:
     ranking = obs.get("ranking", []) or []
     label, place, stock_n = _period_meta(obs)
+    en = _obs_en(obs)
     if label:
-        stock = _period_stock(stock_n)
+        stock = _period_stock(stock_n, en)
         if not ranking:
+            if en:
+                return f"No school with a reported breakdown {label}{place}.{stock}"
             return f"Aucune école avec panne signalée {label}{place}.{stock}"
         top = ranking[0]
         total = int(obs.get("total", len(ranking)) or 0)
+        if en:
+            return (
+                f"{total} {_plural(total, 'school concerned', 'schools concerned')} "
+                f"by reported breakdowns {label}{place}, leading: "
+                f"{top.get('school_name', '?')} (score {_fmt_1(top.get('need_score', 0), en)})."
+                f"{stock} The full ranking is in the card below."
+            )
         return (
             f"{total} {_plural(total, 'école concernée', 'écoles concernées')} "
             f"par des pannes signalées {label}{place}, en tête : "
@@ -1898,9 +2125,16 @@ def _summarize_ranking(obs: dict[str, Any]) -> str:
             f"{stock} Le classement complet est dans la carte ci-dessous."
         )
     if not ranking:
-        return "Aucune école avec panne ouverte pour le moment."
+        return ("No school with an open breakdown for now." if en
+                else "Aucune école avec panne ouverte pour le moment.")
     top = ranking[0]
     total = int(obs.get("total", len(ranking)) or 0)
+    if en:
+        return (
+            f"{total} {_plural(total, 'school needs', 'schools need')} help, leading: "
+            f"{top.get('school_name', '?')} (score {_fmt_1(top.get('need_score', 0), en)}). "
+            "The full ranking is in the card below."
+        )
     return (
         f"{total} {_plural(total, 'école a', 'écoles ont')} besoin d'aide, en tête : "
         f"{top.get('school_name', '?')} (score {_fmt_1(top.get('need_score', 0))}). "
@@ -1983,25 +2217,51 @@ def _compact_observation(name: str, obs: Any) -> Any:
 
 
 def _summarize_analysis(obs: dict[str, Any]) -> str:
-    verdict = {
-        "REPLACE_EQUIPMENT": "remplacer l'équipement",
-        "CONTINUE_REPAIR": "continuer les réparations",
-        "MONITOR_CLOSELY": "renforcer la surveillance",
-    }.get(str(obs.get("recommendation", "")), "étudier le dossier")
+    en = _obs_en(obs)
+    if en:
+        verdict = {
+            "REPLACE_EQUIPMENT": "replace the equipment",
+            "CONTINUE_REPAIR": "continue repairs",
+            "MONITOR_CLOSELY": "increase monitoring",
+        }.get(str(obs.get("recommendation", "")), "review the case")
+    else:
+        verdict = {
+            "REPLACE_EQUIPMENT": "remplacer l'équipement",
+            "CONTINUE_REPAIR": "continuer les réparations",
+            "MONITOR_CLOSELY": "renforcer la surveillance",
+        }.get(str(obs.get("recommendation", "")), "étudier le dossier")
     n = len(obs.get("open_incidents", []) or [])
     label, _place, stock_n = _period_meta(obs)
     if label:
-        stock = _period_stock(stock_n)
+        stock = _period_stock(stock_n, en)
         if n == 0:
+            if en:
+                return (
+                    f"At {obs.get('school_name', '?')}: no breakdown reported {label}."
+                    f"{stock} The full analysis is in the card below."
+                )
             return (
                 f"À {obs.get('school_name', '?')} : aucune panne signalée {label}."
                 f"{stock} L'analyse complète est dans la carte ci-dessous."
+            )
+        if en:
+            return (
+                f"At {obs.get('school_name', '?')}: {n} "
+                f"{_plural(n, 'reported breakdown', 'reported breakdowns')} {label}, "
+                f"repair/new ratio of {_fmt_1(obs.get('repair_ratio_percent', 0), en)}%. "
+                f"Verdict: {verdict}.{stock} The full analysis is in the card below."
             )
         return (
             f"À {obs.get('school_name', '?')} : {n} "
             f"{_plural(n, 'panne signalée', 'pannes signalées')} {label}, "
             f"ratio réparations/neuf de {_fmt_1(obs.get('repair_ratio_percent', 0))} %. "
             f"Verdict : {verdict}.{stock} L'analyse complète est dans la carte ci-dessous."
+        )
+    if en:
+        return (
+            f"At {obs.get('school_name', '?')}: {n} {_plural(n, 'open breakdown', 'open breakdowns')}, "
+            f"repair/new ratio of {_fmt_1(obs.get('repair_ratio_percent', 0), en)}%. "
+            f"Verdict: {verdict}. The full analysis is in the card below."
         )
     return (
         f"À {obs.get('school_name', '?')} : {n} {_plural(n, 'panne ouverte', 'pannes ouvertes')}, "
@@ -2012,6 +2272,13 @@ def _summarize_analysis(obs: dict[str, Any]) -> str:
 
 def _summarize_incident(obs: dict[str, Any]) -> str:
     ref = obs.get("reference_code") or f"#{obs.get('id', '?')}"
+    if _obs_en(obs):
+        return (
+            f"Incident {ref} at {obs.get('school_name', '?')}: {obs.get('title', '?')} "
+            f"({obs.get('urgency', '?')} urgency, "
+            f"{_fmt_int(obs.get('affected_students', 0))} pupils). "
+            "Details are in the card below."
+        )
     return (
         f"Incident {ref} à {obs.get('school_name', '?')} : {obs.get('title', '?')} "
         f"(urgence {obs.get('urgency', '?')}, "
@@ -2022,9 +2289,17 @@ def _summarize_incident(obs: dict[str, Any]) -> str:
 
 def _summarize_report(obs: dict[str, Any]) -> str:
     missing = obs.get("missing_labels", []) or []
+    en = _obs_en(obs)
     if missing:
+        if en:
+            return f"Incomplete report: missing {', '.join(missing)}. Please specify to continue."
         return f"Signalement incomplet : il manque {', '.join(missing)}. Précisez pour continuer."
     school = (obs.get("slots", {}) or {}).get("school_name", "?")
+    if en:
+        return (
+            f"Report prepared for {school}. "
+            "Check the summary and confirm in the card below."
+        )
     return (
         f"Signalement préparé pour {school}. "
         "Vérifiez le récapitulatif et confirmez dans la carte ci-dessous."
@@ -2032,15 +2307,29 @@ def _summarize_report(obs: dict[str, Any]) -> str:
 
 
 def _summarize_proposal(obs: dict[str, Any]) -> str:
-    title = {"create_incident": "Intervention",
-             "create_maintenance_log": "Journal d'intervention"}.get(
-                 str(obs.get("action", "")), "Proposition")
+    en = _obs_en(obs)
+    if en:
+        title = {"create_incident": "Intervention",
+                 "create_maintenance_log": "Intervention log"}.get(
+                     str(obs.get("action", "")), "Proposal")
+    else:
+        title = {"create_incident": "Intervention",
+                 "create_maintenance_log": "Journal d'intervention"}.get(
+                     str(obs.get("action", "")), "Proposition")
     missing = obs.get("missing_labels", []) or []
     if missing:
-        text = f"{title} incomplet : il manque {', '.join(missing)}. Précisez pour continuer."
+        if en:
+            text = f"{title} incomplete: missing {', '.join(missing)}. Please specify to continue."
+        else:
+            text = f"{title} incomplet : il manque {', '.join(missing)}. Précisez pour continuer."
         if obs.get("incident_choices"):
-            text += f" Incidents possibles : {obs['incident_choices']}."
+            text += (f" Possible incidents: {obs['incident_choices']}." if en
+                     else f" Incidents possibles : {obs['incident_choices']}.")
         return text
+    if en:
+        return (
+            f"{title} prepared. Check the summary and confirm in the card below."
+        )
     return (
         f"{title} préparé. Vérifiez le récapitulatif et confirmez dans la carte ci-dessous."
     )
@@ -2050,10 +2339,17 @@ def _summarize_maintenance_logs(obs: dict[str, Any]) -> str:
     items = obs.get("items", []) or []
     date = obs.get("date", "?")
     n = int(obs.get("total", len(items)) or 0)
+    en = _obs_en(obs)
     if not items and n == 0:
-        return f"Aucune intervention journalisée le {date}."
+        return (f"No intervention logged on {date}." if en
+                else f"Aucune intervention journalisée le {date}.")
     names = [str(i.get("school_name", "?")) for i in items[:3]]
     suffix = f" : {', '.join(names)}" if names else ""
+    if en:
+        return (
+            f"{n} {_plural(n, 'logged intervention', 'logged interventions')} "
+            f"on {date}{suffix}. Details are in the card below."
+        )
     return (
         f"{n} {_plural(n, 'intervention journalisée', 'interventions journalisées')} "
         f"le {date}{suffix}. Le détail est dans la carte ci-dessous."
@@ -2064,10 +2360,17 @@ def _summarize_incidents(obs: dict[str, Any]) -> str:
     items = obs.get("items", []) or []
     date = obs.get("date", "?")
     n = int(obs.get("total", len(items)) or 0)
+    en = _obs_en(obs)
     if not items and n == 0:
-        return f"Aucun signalement déclaré le {date}."
+        return (f"No report filed on {date}." if en
+                else f"Aucun signalement déclaré le {date}.")
     names = [str(i.get("school_name", "?")) for i in items[:3]]
     suffix = f" : {', '.join(names)}" if names else ""
+    if en:
+        return (
+            f"{n} {_plural(n, 'filed report', 'filed reports')} "
+            f"on {date}{suffix}. Details are in the card below."
+        )
     return (
         f"{n} {_plural(n, 'signalement déclaré', 'signalements déclarés')} "
         f"le {date}{suffix}. Le détail est dans la carte ci-dessous."
@@ -2079,22 +2382,43 @@ def _summarize_territory(obs: dict[str, Any]) -> str:
     n = int(obs.get("open_incidents", 0) or 0)
     missing = len(obs.get("missing_gps", []) or [])
     label, place, stock_n = _period_meta(obs)
+    en = _obs_en(obs)
     if label:
+        if en:
+            text = (
+                f"{total} {_plural(total, 'geolocated school', 'geolocated schools')}, "
+                f"{n} {_plural(n, 'reported incident', 'reported incidents')} {label}{place}."
+                f"{_period_stock(stock_n, en)} The interactive map is below."
+            )
+        else:
+            text = (
+                f"{total} {_plural(total, 'école géolocalisée', 'écoles géolocalisées')}, "
+                f"{n} {_plural(n, 'incident signalé', 'incidents signalés')} {label}{place}."
+                f"{_period_stock(stock_n, en)} La carte interactive est ci-dessous."
+            )
+        if missing:
+            if en:
+                text += f" ({missing} {_plural(missing, 'school without', 'schools without')} GPS.)"
+            else:
+                text += f" ({missing} {_plural(missing, 'école sans', 'écoles sans')} GPS.)"
+        return text
+    if en:
+        text = (
+            f"{total} {_plural(total, 'geolocated school', 'geolocated schools')}, "
+            f"{n} {_plural(n, 'open incident', 'open incidents')}. "
+            "The interactive map is below."
+        )
+    else:
         text = (
             f"{total} {_plural(total, 'école géolocalisée', 'écoles géolocalisées')}, "
-            f"{n} {_plural(n, 'incident signalé', 'incidents signalés')} {label}{place}."
-            f"{_period_stock(stock_n)} La carte interactive est ci-dessous."
+            f"{n} {_plural(n, 'incident ouvert', 'incidents ouverts')}. "
+            "La carte interactive est ci-dessous."
         )
-        if missing:
-            text += f" ({missing} {_plural(missing, 'école sans', 'écoles sans')} GPS.)"
-        return text
-    text = (
-        f"{total} {_plural(total, 'école géolocalisée', 'écoles géolocalisées')}, "
-        f"{n} {_plural(n, 'incident ouvert', 'incidents ouverts')}. "
-        "La carte interactive est ci-dessous."
-    )
     if missing:
-        text += f" ({missing} {_plural(missing, 'école sans', 'écoles sans')} GPS.)"
+        if en:
+            text += f" ({missing} {_plural(missing, 'school without', 'schools without')} GPS.)"
+        else:
+            text += f" ({missing} {_plural(missing, 'école sans', 'écoles sans')} GPS.)"
     return text
 
 
@@ -2102,11 +2426,24 @@ def _summarize_briefing(obs: dict[str, Any]) -> str:
     slides = int(obs.get("total", 0) or 0)
     value = (obs.get("slides", [{}])[0].get("stats", [{}])[0].get("value", "?"))
     label, _place, stock_n = _period_meta(obs)
+    en = _obs_en(obs)
     if label:
+        if en:
+            return (
+                f"Briefing ready {label}: {slides} slides "
+                f"({value} incidents reported {label}).{_period_stock(stock_n, en)} "
+                "The presentation is in the card below."
+            )
         return (
             f"Briefing prêt {label} : {slides} slides "
-            f"({value} incidents signalés {label}).{_period_stock(stock_n)} "
+            f"({value} incidents signalés {label}).{_period_stock(stock_n, en)} "
             "La présentation est dans la carte ci-dessous."
+        )
+    if en:
+        return (
+            f"Briefing ready: {slides} slides "
+            f"({value} "
+            "open incidents). The presentation is in the card below."
         )
     return (
         f"Briefing prêt : {slides} slides "
@@ -2196,27 +2533,39 @@ def _intervention_answer(obs: dict[str, Any], lang: str) -> str:
 STARTER_CHIPS = ["Résumer mon district",
                  "Quelles écoles ont le plus besoin d'aide ?",
                  "Voir la carte du territoire"]
+STARTER_CHIPS_EN = ["Summarize my district",
+                    "Which schools need help most?",
+                    "Show the territory map"]
 CATEGORY_CHIPS = ["Point d'eau", "Latrines", "Lavage des mains", "Évacuation"]
+CATEGORY_CHIPS_EN = ["Water point", "Latrines", "Handwashing", "Drainage"]
 URGENCY_CHIPS = ["Basse", "Moyenne", "Haute", "Critique"]
+URGENCY_CHIPS_EN = ["Low", "Medium", "High", "Critical"]
 
 
 def _follow_ups(message: str, executed: list[tuple[str, dict[str, Any]]],
                 context: dict[str, Any],
-                scope: dict[str, Any] | None = None) -> list[str]:
+                scope: dict[str, Any] | None = None,
+                lang: str = "fr") -> list[str]:
     """Relances cliquables : démarrage, ou réponses rapides au premier slot manquant.
 
     Périmètre école unique : relances cantonnées à cette école (ni district,
     ni territoire, ni autres écoles). scope=None = comportement historique.
+    lang="en" : relances anglaises (défaut fr, appels historiques inchangés).
     """
+    use_en = str(lang or "fr").strip().lower().startswith("en")
     school = _single_school_scope(scope)
     if not executed:
         if not _STARTER_RE.search(message or ""):
             return []
         if school is not None:
+            if use_en:
+                return [f"Trends for {school}?",
+                        f"Repair or replace at {school}?",
+                        f"Emergencies at {school}?"]
             return [f"Tendances de {school} ?",
                     f"Faut-il réparer à {school} ?",
                     f"Urgences à {school} ?"]
-        return list(STARTER_CHIPS)
+        return list(STARTER_CHIPS_EN if use_en else STARTER_CHIPS)
     name, obs = executed[-1]
     if name not in ("prepare_report", "prepare_incident", "prepare_maintenance_log"):
         return []
@@ -2225,9 +2574,9 @@ def _follow_ups(message: str, executed: list[tuple[str, dict[str, Any]]],
     missing = obs.get("missing", []) or []
     first = missing[0] if missing else ""
     if first == "category":
-        return list(CATEGORY_CHIPS)
+        return list(CATEGORY_CHIPS_EN if use_en else CATEGORY_CHIPS)
     if first == "urgency":
-        return list(URGENCY_CHIPS)
+        return list(URGENCY_CHIPS_EN if use_en else URGENCY_CHIPS)
     if first == "school":
         if school is not None:
             return [school]
@@ -2502,6 +2851,7 @@ def collect_map_points(
 def build_forced_map_card(
     points: list[dict[str, Any]],
     district: str | None = None,
+    lang: str = "fr",
 ) -> AgentCard:
     """Carte territory_map de secours (même forme que territory_overview)."""
     if district is None:
@@ -2510,7 +2860,9 @@ def build_forced_map_card(
     total_open = sum(int(p.get("open_incidents", 0) or 0) for p in points)
     return AgentCard(
         type="territory_map",
-        title=f"Carte du territoire{f' — {district}' if district else ''}",
+        title=(f"Territory map{f' — {district}' if district else ''}"
+              if str(lang or "fr").lower().startswith("en")
+              else f"Carte du territoire{f' — {district}' if district else ''}"),
         data={
             "district": district,
             "schools": points,
@@ -2547,7 +2899,8 @@ def maybe_force_map_card(
     points = collect_map_points(executed, context)
     if not points:
         return cards
-    card = build_forced_map_card(points)
+    lang = str((context or {}).get("lang") or "fr")
+    card = build_forced_map_card(points, lang=lang)
     label = time_window_label(time_window, "fr")
     if label:
         card.title = f"{card.title} ({label})"
@@ -2562,20 +2915,32 @@ PHOTO_CONTEXT_PREFIX = (
 )
 
 
-def summarize_photo_analysis(photo: ImageAnalysisResponse) -> str:
-    """Résumé FR déterministe d'une analyse photo (fonction pure).
+def summarize_photo_analysis(photo: ImageAnalysisResponse, lang: str = "fr") -> str:
+    """Résumé déterministe d'une analyse photo (fonction pure, FR/EN).
 
     Injecté dans le contexte de conclusion : le LLM commente ce résumé
     (et voit la photo au premier tour) au lieu de deviner. Vision en
     panne -> consigne explicite de ne pas décrire la photo.
     """
+    use_en = str(lang or "fr").lower().startswith("en")
     if is_vision_unavailable(photo):
-        reason = photo.vision_error or "raison inconnue"
+        reason = photo.vision_error or ("unknown reason" if use_en else "raison inconnue")
+        if use_en:
+            return (
+                f"Photo provided but vision analysis unavailable ({reason}). "
+                "Do not describe the photo, suggest resending a clear photo."
+            )
         return (
             f"Photo fournie mais analyse vision indisponible ({reason}). "
             "Ne décris pas la photo, propose de renvoyer une photo nette."
         )
     if not photo.is_wash_related:
+        if use_en:
+            return (
+                "The provided photo does not show WASH infrastructure "
+                "(off-topic, severity 0/100). Say so politely, "
+                "without describing any breakdown."
+            )
         return (
             "La photo fournie ne montre pas d'infrastructure WASH "
             "(hors sujet, sévérité 0/100). Signale-le poliment, "
@@ -2586,6 +2951,15 @@ def summarize_photo_analysis(photo: ImageAnalysisResponse) -> str:
     except (TypeError, ValueError):
         severity = 0
     severity = max(0, min(100, severity))
+    if use_en:
+        hazard = "yes" if photo.health_hazard_detected else "no"
+        return (
+            f"Photo analysed: {photo.infrastructure_detected} — "
+            f"{photo.visible_damage} "
+            f"Visual severity: {severity}/100. "
+            f"Visible health hazard: {hazard}. "
+            f"Technician note: {photo.technician_notes}"
+        )
     hazard = "oui" if photo.health_hazard_detected else "non"
     return (
         f"Photo analysée : {photo.infrastructure_detected} — "
@@ -2596,13 +2970,17 @@ def summarize_photo_analysis(photo: ImageAnalysisResponse) -> str:
     )
 
 
-def _photo_card(photo: Any) -> AgentCard | None:
+def _photo_card(photo: Any, lang: str = "fr") -> AgentCard | None:
     """Carte photo_analysis depuis une analyse (None sans photo)."""
     if photo is None:
         return None
+    use_en = str(lang or "fr").lower().startswith("en")
     obs = photo.model_dump() if hasattr(photo, "model_dump") else dict(photo)
     if obs.get("vision_unavailable"):
-        title = "Analyse photo — vision indisponible"
+        title = ("Photo analysis — vision unavailable" if use_en
+                 else "Analyse photo — vision indisponible")
+    elif use_en:
+        title = f"Photo analysis — {obs.get('infrastructure_detected', '?')}"
     else:
         title = f"Analyse photo — {obs.get('infrastructure_detected', '?')}"
     return AgentCard(type="photo_analysis", title=title, data=obs)
@@ -2630,7 +3008,7 @@ _INTERVENTION_STRIP_RES = (
                r"|fix\w*|schedul\w*|plan\w*)\b"),
     re.compile(r"\b(intervention\w*|reparation\w*|mission\w*|depannage\w*"
                r"|travaux\w*|chantier\w*|equipe\w*)\b"),
-    re.compile(r"\b(demain|lendemain|apres[\s\-]*demain|aujourd[\s\-]*hui)\b"),
+    re.compile(r"\b(demain|lendemain|apres[\s\-’']*demain|aujourd[\s\-’']*hui)\b"),
     re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b"),
     re.compile(r"\d[\d\s\u00a0.,]*\s*(?:xaf|fcfa|francs?|k\b)"),
     re.compile(r"budget(?:\s+de)?\s+\d[\d\s\u00a0.,]*"),
@@ -2638,6 +3016,10 @@ _INTERVENTION_STRIP_RES = (
     # Mot « budget » orphelin (montant déjà retiré par les motifs
     # ci-dessus) : il polluerait l'indice incident (« robinet budget »).
     re.compile(r"\bbudgets?\b"),
+    # Anaphores (« ce signalement », « cet incident ») : sans valeur de
+    # matching, elles masqueraient l'absence d'indice (héritage réf).
+    re.compile(r"\b(ce|cet|cette|ces)\s+(signalement|incident|dossier|rapport)s?\b"
+               r"|\bcelui-ci\b|\bcela\b"),
 )
 _INTERVENTION_STOPWORDS = frozenset({
     "pour", "avec", "une", "les", "des", "sur", "dans", "aux", "ces",
@@ -2767,6 +3149,7 @@ class AgentLoop:
                     cards=[],
                     model_used=self.llm.model,
                     follow_ups=turn.get("chips", []),
+                    lang=_resolve_lang(req),
                 )
             if turn is not None and turn.get("status") == "confirmed":
                 # Bascule sur le flux normal avec le signalement reconstitué.
@@ -2781,7 +3164,6 @@ class AgentLoop:
         if photo_b64 is not None:
             photo_mime = req.image_mime or CHAT_IMAGE_DEFAULT_MIME
             photo = await ImageAnalyzer(self.llm).analyze_base64(photo_b64, photo_mime)
-            photo_summary = summarize_photo_analysis(photo)
             try:
                 photo_send = (
                     base64.b64encode(decode_chat_image(photo_b64)).decode("ascii")
@@ -2792,6 +3174,11 @@ class AgentLoop:
         else:
             photo_mime = CHAT_IMAGE_DEFAULT_MIME
         lang = _resolve_lang(req)
+        # Langue visible des outils (insights) : scope_context_to_window
+        # copie le dict, la clé suit partout (déterministe + boucle LLM).
+        context["lang"] = lang
+        if photo is not None:
+            photo_summary = summarize_photo_analysis(photo, lang)
         scope_info = detect_scope(req.message, context)
         # Périmètre PHOTO : image + question sur l'image seule -> aucun outil,
         # carte photo_analysis unique, synthèse = commentaire de la photo.
@@ -2822,7 +3209,7 @@ class AgentLoop:
             period_total = len(open_incidents_in_scope(context, scope_info))
             period_count = len(open_incidents_in_window(
                 context, time_window, scope_info))
-            period_place = period_place_suffix(scope_info, "fr")
+            period_place = period_place_suffix(scope_info, lang)
             exec_context = scope_context_to_window(context, time_window)
             period = {"window": time_window, "total": period_total,
                       "place": period_place}
@@ -2904,7 +3291,7 @@ class AgentLoop:
                 observation = self._execute_tool(name, arguments, exec_context)
                 if period is not None:
                     _annotate_period_obs(name, observation, time_window,
-                                         period_total, period_place)
+                                         period_total, period_place, lang)
                 executed.append((name, observation))
                 messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
             if not fresh:
@@ -2983,16 +3370,18 @@ class AgentLoop:
                     suggest.get("fragment") and suggest.get("from_marker")):
                 cards.append(AgentCard(
                     type="place_suggestions",
-                    title="Quel lieu vouliez-vous dire ?",
+                    title=("Which place did you mean?" if lang == "en"
+                            else "Quel lieu vouliez-vous dire ?"),
                     data=suggest,
                 ))
-        follow_ups = _follow_ups(req.message, executed, context, scope_info)
+        follow_ups = _follow_ups(req.message, executed, context, scope_info, lang)
         if clarify_kind is not None:
             # Choix cliquables du contexte réel ; sans lieu connu, repli sur
             # les relances actuelles (puis démarrage) : jamais vide, jamais
             # d'erreur.
             follow_ups = (clarify_follow_ups(clarify_kind, req.message, context, lang)
-                          or follow_ups or list(STARTER_CHIPS))
+                          or follow_ups or list(STARTER_CHIPS_EN if lang == "en"
+                                                else STARTER_CHIPS))
         if empty_period:
             chip = EMPTY_PERIOD_FOLLOW_UPS.get(
                 lang, EMPTY_PERIOD_FOLLOW_UPS["fr"])
@@ -3004,6 +3393,7 @@ class AgentLoop:
             cards=cards,
             model_used=self.llm.model,
             follow_ups=follow_ups,
+            lang=lang,
         )
 
     async def _run_dossier_branch(
@@ -3048,7 +3438,7 @@ class AgentLoop:
                 answer += f" {run['poster_error']}"
         follow_ups = _follow_ups(
             req.message, [("dossier_decideur", {"cards": len(cards)})],
-            context, scope)
+            context, scope, lang or "fr")
         briefing_chip = ("Prepare a briefing" if (lang or "fr") == "en"
                          else "Pr\u00e9parer un briefing")
         if briefing_chip not in follow_ups:
@@ -3059,6 +3449,7 @@ class AgentLoop:
             cards=cards,
             model_used=self.llm.model,
             follow_ups=follow_ups,
+            lang=lang,
         )
 
     async def _run_intervention_prep(
@@ -3114,7 +3505,7 @@ class AgentLoop:
         if obs.get("candidates"):
             cards.append(AgentCard(
                 type="incident_picker",
-                title="Quel incident réparer ?",
+                title=("Which incident to fix?" if lang == "en" else "Quel incident réparer ?"),
                 data={"candidates": obs["candidates"][:5],
                       "hint": obs.get("hint_unmatched"),
                       "action": "prepare_intervention"},
@@ -3135,7 +3526,8 @@ class AgentLoop:
             if open_here:
                 cards.append(AgentCard(
                     type="incident_picker",
-                    title=f"Quel incident réparer à {short_school_name(school)} ?",
+                    title=(f"Which incident to fix at {short_school_name(school)}?" if lang == "en"
+                            else f"Quel incident réparer à {short_school_name(school)} ?"),
                     data={"candidates": open_here[:5],
                           "hint": obs.get("hint_unmatched"),
                           "action": "prepare_intervention"},
@@ -3145,9 +3537,11 @@ class AgentLoop:
         if card is not None:
             cards.append(card)
         follow_ups = _follow_ups(
-            req.message, [("prepare_intervention", obs)], context, scope)
+            req.message, [("prepare_intervention", obs)], context, scope,
+            lang or "fr")
         for choice in (obs.get("team_choices") or [])[:3]:
-            chip = f"Confier à {choice}"
+            chip = (f"Assign to {choice}" if (lang or "fr") == "en"
+                    else f"Confier à {choice}")
             if chip not in follow_ups:
                 follow_ups.insert(0, chip)
         return AgentChatResponse(
@@ -3156,6 +3550,7 @@ class AgentLoop:
             cards=cards,
             model_used=self.llm.model,
             follow_ups=follow_ups,
+            lang=lang,
         )
 
     def _prep_missing_school_response(
@@ -3175,13 +3570,14 @@ class AgentLoop:
         follow_ups = (clarify_follow_ups(
             "school", req.message, context, use_lang)
             or _follow_ups(req.message, [("prepare_intervention", obs)],
-                           context, scope))
+                           context, scope, use_lang))
         return AgentChatResponse(
             answer=answer,
             tools_executed=["prepare_intervention"],
             cards=cards,
             model_used=self.llm.model,
             follow_ups=follow_ups,
+            lang=lang,
         )
 
     async def _repair_kit_for(self, incident: dict[str, Any],
@@ -3219,13 +3615,23 @@ class AgentLoop:
             }
 
     def _execute_tool(self, name: str, arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        from .tool_consts import tool_lang
+        lang = tool_lang(context)
         executor = TOOL_EXECUTORS.get(name)
         if executor is None:
-            return {"error": f"Outil inconnu : {name}."}
+            unknown = (f"Unknown tool: {name}." if lang == "en"
+                       else f"Outil inconnu : {name}.")
+            return {"error": unknown, "lang": lang}
         try:
-            return executor(arguments, context)
+            observation = executor(arguments, context)
         except Exception as exc:
-            return {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+            return {"error": f"{type(exc).__name__}: {str(exc)[:200]}", "lang": lang}
+        # Langue visible des builders de cartes et résumés de repli (zéro
+        # changement de signature) ; les appels directs (tests) sans clé
+        # contexte restent en français par défaut.
+        if isinstance(observation, dict) and "lang" not in observation:
+            observation["lang"] = lang
+        return observation
 
     async def _vision_first_turn(
         self,
@@ -3296,7 +3702,8 @@ class AgentLoop:
             observation = self._execute_tool(name, arguments, context)
             if period is not None:
                 _annotate_period_obs(name, observation, period.get("window"),
-                                     period.get("total", 0), period.get("place", ""))
+                                     period.get("total", 0), period.get("place", ""),
+                                     tool_lang(context))
             executed.append((name, observation))
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not executed:
@@ -3359,7 +3766,8 @@ class AgentLoop:
             observation = self._execute_tool(name, arguments, context)
             if period is not None:
                 _annotate_period_obs(name, observation, period.get("window"),
-                                     period.get("total", 0), period.get("place", ""))
+                                     period.get("total", 0), period.get("place", ""),
+                                     tool_lang(context))
             executed.append((name, observation))
             messages.append(self.llm.format_tool_result(name, _compact_observation(name, observation), call.get("id")))
         if not _has_read_tool(executed):
@@ -3401,6 +3809,8 @@ class AgentLoop:
         Périmètre école unique : relances cantonnées à cette école (ni
         district, ni territoire) + purge des mentions d'autres écoles.
         """
+        lang = tool_lang(context or {})
+        use_en = lang == "en"
         school = _single_school_scope(scope)
         for name, observation in reversed(executed):
             if "error" in observation:
@@ -3408,17 +3818,35 @@ class AgentLoop:
             summarizer = FALLBACK_SUMMARIES.get(name)
             if summarizer:
                 try:
-                    text = summarizer(observation)
+                    # La langue requête suit la synthèse (copie, jamais de mutation).
+                    text = summarizer({**observation, "lang": lang})
                 except (TypeError, ValueError, KeyError, IndexError, AttributeError):
                     continue
                 return self._scoped_fallback_text(text, school, scope, context)
             if school is not None:
+                if use_en:
+                    return (
+                        f"Good news, I found your data for {school}: "
+                        "details are in the card just below. To go further, "
+                        "ask for example: "
+                        f"« Trends for {school}? » or "
+                        f"« Should we repair at {school}? »."
+                    )
                 return (
                     f"Bonne nouvelle, j'ai trouvé vos données pour {school} : "
                     "le détail est dans la carte juste en dessous. Pour aller "
                     "plus loin, demandez par exemple : "
                     f"« Tendances de {school} ? » ou "
                     f"« Faut-il réparer à {school} ? »."
+                )
+            if use_en:
+                return (
+                    "Good news, I found your data: the details (key figures, "
+                    "schools and incidents concerned) are in the card just "
+                    "below. If you miss a detail, tell me which school "
+                    "or district interests you, for example: « Summarize the "
+                    "Wouri district ». Ask for example: « Which schools "
+                    "need the most help? » or « Show the territory map »."
                 )
             return (
                 "Bonne nouvelle, j'ai trouvé vos données : le détail (chiffres "
@@ -3431,11 +3859,19 @@ class AgentLoop:
             )
         if photo is not None:
             text = (
-                f"{summarize_photo_analysis(photo)} "
-                "Le détail est dans la carte ci-dessous."
+                f"{summarize_photo_analysis(photo, lang)} "
+                + ("Details are in the card below." if use_en
+                   else "Le détail est dans la carte ci-dessous.")
             )
             return self._scoped_fallback_text(text, school, scope, context)
         if school is not None:
+            if use_en:
+                return (
+                    f"I could not retrieve data for {school}. "
+                    "Tell me what you want to know — for example: "
+                    f"« Trends for {school}? » or "
+                    f"« Should we repair at {school}? »."
+                )
             return (
                 f"Je n'ai pas pu récupérer de données pour {school}. "
                 "Précisez ce que vous voulez savoir — par exemple : "
@@ -3445,6 +3881,15 @@ class AgentLoop:
         districts = known_places(context or {})[1] if context else []
         if districts:
             examples = ", ".join(districts[:4])
+            if use_en:
+                return (
+                    "I could not retrieve data for this question, as I "
+                    "miss the school or district name that interests you. "
+                    f"I know for example: {examples}. "
+                    "For example, ask me: « Summarize my district ». Ask "
+                    "for example: « Which schools need the most help? » "
+                    "or « Show the territory map »."
+                )
             return (
                 "Je n'ai pas pu récupérer de données pour cette question, car il "
                 "me manque le nom de l'école ou du district qui vous intéresse. "
@@ -3452,6 +3897,14 @@ class AgentLoop:
                 "Par exemple, demandez-moi : « Résumez mon district ». Demandez "
                 "par exemple : « Quelles écoles ont le plus besoin d'aide ? » "
                 "ou « Montrez la carte du territoire »."
+            )
+        if use_en:
+            return (
+                "I could not retrieve data for this question, as I "
+                "miss the school or district name that interests you. "
+                "Tell me for example: « Summarize the Wouri district ». Ask "
+                "for example: « Which schools need the most help? » "
+                "or « Show the territory map », and I'll take care of it with pleasure."
             )
         return (
             "Je n'ai pas pu récupérer de données pour cette question, car il me "
@@ -3471,6 +3924,12 @@ class AgentLoop:
         scrubbed = strip_other_school_mentions(text, scope, context)
         if scrubbed.strip():
             return scrubbed
+        if tool_lang(context or {}) == "en":
+            return (
+                f"I have no further detail for {school}. "
+                f"Ask for example: « Trends for {school}? » or "
+                f"« Should we repair at {school}? »."
+            )
         return (
             f"Je n'ai pas de détail supplémentaire pour {school}. "
             f"Demandez par exemple : « Tendances de {school} ? » ou "
@@ -3493,10 +3952,12 @@ class AgentLoop:
         (time_window) : les cartes de données sont suffixées de la période
         (leurs données sont déjà restreintes en amont, jamais de mélange).
         """
+        lang_en = str((context or {}).get("lang") or "fr").lower().startswith("en")
+        card_lang = "en" if lang_en else "fr"
         if _is_photo_scope(scope):
-            card = _photo_card(photo)
+            card = _photo_card(photo, card_lang)
             return [card] if card is not None else []
-        period_label = time_window_label(time_window, "fr")
+        period_label = time_window_label(time_window, card_lang)
         school = _single_school_scope(scope)
         other_schools: list[str] = []
         if school is not None:
@@ -3507,7 +3968,7 @@ class AgentLoop:
             own = _norm(school)
             other_schools = [s for s in known if _norm(s) != own]
         cards: list[AgentCard] = []
-        photo_card = _photo_card(photo)
+        photo_card = _photo_card(photo, card_lang)
         if photo_card is not None:
             cards.append(photo_card)
         district_examples: str | None = None
@@ -3537,19 +3998,20 @@ class AgentLoop:
                     continue
                 cards.append(AgentCard(
                     type="school_analysis",
-                    title=f"Analyse — {observation.get('school_name', '?')}",
+                    title=(f"Analysis — {observation.get('school_name', '?')}" if lang_en
+                           else f"Analyse — {observation.get('school_name', '?')}"),
                     data=observation,
                 ))
             elif name == "rank_schools_by_need":
                 cards.append(AgentCard(
                     type="school_ranking",
-                    title="Classement des écoles par besoin",
+                    title=("School ranking by need" if lang_en else "Classement des écoles par besoin"),
                     data=observation,
                 ))
             elif name == "summarize_district":
                 cards.append(AgentCard(
                     type="district_summary",
-                    title="Synthèse du district",
+                    title=("District summary" if lang_en else "Synthèse du district"),
                     data=observation,
                 ))
             elif name == "explain_incident":
@@ -3563,7 +4025,8 @@ class AgentLoop:
                 if observation.get("timeline"):
                     cards.append(AgentCard(
                         type="incident_timeline",
-                        title=f"Suivi — {observation.get('reference_code') or observation.get('id', '?')}",
+                        title=((f"Follow-up — {observation.get('reference_code') or observation.get('id', '?')}" if lang_en
+                                 else f"Suivi — {observation.get('reference_code') or observation.get('id', '?')}")),
                         data={"timeline": observation["timeline"],
                               "incident_id": observation.get("id"),
                               "reference_code": observation.get("reference_code"),
@@ -3579,7 +4042,7 @@ class AgentLoop:
                             continue
                     cards.append(AgentCard(
                         type="incident_picker",
-                        title="Quel incident ?",
+                        title=("Which incident?" if lang_en else "Quel incident ?"),
                         data={"candidates": candidates,
                               "hint": observation.get("hint_unmatched"),
                               "action": observation.get("action")},
@@ -3606,7 +4069,7 @@ class AgentLoop:
                 district = observation.get("district")
                 cards.append(AgentCard(
                     type="territory_map",
-                    title=f"Carte du territoire{f' — {district}' if district else ''}",
+                    title=(f"Territory map{f' — {district}' if district else ''}" if lang_en else f"Carte du territoire{f' — {district}' if district else ''}"),
                     data=observation,
                 ))
             elif name == "repair_trends":
@@ -3614,19 +4077,21 @@ class AgentLoop:
                     continue
                 cards.append(AgentCard(
                     type="trend_chart",
-                    title=f"Tendances — {observation.get('school_name', '?')} ({observation.get('months', 3)} mois)",
+                    title=(f"Trends — {observation.get('school_name', '?')} ({observation.get('months', 3)} months)" if lang_en
+                           else f"Tendances — {observation.get('school_name', '?')} ({observation.get('months', 3)} mois)"),
                     data=observation,
                 ))
                 if observation.get("calendar_heatmap"):
                     cards.append(AgentCard(
                         type="calendar_heatmap",
-                        title=f"Calendrier des pannes — {observation.get('school_name', '?')}",
+                        title=(f"Breakdown calendar — {observation.get('school_name', '?')}" if lang_en
+                                   else f"Calendrier des pannes — {observation.get('school_name', '?')}"),
                         data=observation["calendar_heatmap"],
                     ))
                 if observation.get("budget_compare") and school is None:
                     cards.append(AgentCard(
                         type="budget_compare",
-                        title="Comparaison des budgets réparations",
+                        title=("Repair budget comparison" if lang_en else "Comparaison des budgets réparations"),
                         data=observation["budget_compare"],
                     ))
             elif name == "list_maintenance_logs":
@@ -3643,9 +4108,11 @@ class AgentLoop:
                         except (TypeError, ValueError):
                             total = len(items)
                         data = {**observation, "items": items, "total": total}
+                title_date = observation.get('date', '?')
                 cards.append(AgentCard(
                     type="maintenance_logs",
-                    title=f"Interventions journalisées — {observation.get('date', '?')}",
+                    title=(f"Logged interventions — {title_date}" if lang_en
+                           else f"Interventions journalisées — {title_date}"),
                     data=data,
                 ))
             elif name == "list_incidents":
@@ -3662,9 +4129,11 @@ class AgentLoop:
                         except (TypeError, ValueError):
                             total = len(items)
                         data = {**observation, "items": items, "total": total}
+                title_date = observation.get('date', '?')
                 cards.append(AgentCard(
                     type="incident_list",
-                    title=f"Signalements déclarés — {observation.get('date', '?')}",
+                    title=(f"Filed reports — {title_date}" if lang_en
+                           else f"Signalements déclarés — {title_date}"),
                     data=data,
                 ))
             elif name in PLUGIN_CARDS:

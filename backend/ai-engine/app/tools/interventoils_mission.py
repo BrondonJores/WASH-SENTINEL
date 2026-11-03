@@ -14,6 +14,7 @@ from ..tool_consts import (
     MISSION_WINDOW_DAYS_DEFAULT,
     MISSION_WINDOW_DAYS_MAX,
     MISSION_WINDOW_DAYS_MIN,
+    tool_lang,
 )
 
 TOOL_NAME = "interventoils_mission"
@@ -166,6 +167,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     try:
         args = args if isinstance(args, dict) else {}
         context = context if isinstance(context, dict) else {}
+        use_en = tool_lang(context) == "en"
         district = str(args.get("district") or "").strip()
         school = str(args.get("school") or "").strip()
         try:
@@ -179,7 +181,8 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         if raw_logs is None:
             raw_logs = []
         if not isinstance(raw_logs, list):
-            return {"error": "Contexte maintenance_logs invalide."}
+            return {"error": ("Invalid maintenance_logs context." if use_en
+                        else "Contexte maintenance_logs invalide.")}
         schools = context.get("schools", [])
         if not isinstance(schools, list):
             schools = []
@@ -211,9 +214,10 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 or str(log.get("title") or "").strip()
                 or str(log.get("notes") or "").strip()
                 or str(log.get("incident_ref") or "").strip()
-                or "Intervention"
+                or ("Intervention" if use_en else "Intervention")
             )
-            school_name = str(log.get("school_name") or "").strip() or "École inconnue"
+            school_name = (str(log.get("school_name") or "").strip()
+                           or ("Unknown school" if use_en else "École inconnue"))
             items.append({
                 "date": day,
                 "school": school_name,
@@ -231,13 +235,30 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             "total_cost": total_cost,
         }
 
-        scope = f"sur les {days} derniers jours"
-        if district:
-            scope += f" dans le district de {district}"
-        if school:
-            scope += f" à {school}"
+        if use_en:
+            scope = f"over the last {days} days"
+            if district:
+                scope += f" in the {district} district"
+            if school:
+                scope += f" at {school}"
+        else:
+            scope = f"sur les {days} derniers jours"
+            if district:
+                scope += f" dans le district de {district}"
+            if school:
+                scope += f" à {school}"
         if not items:
-            insight = f"Aucune mission terrain trouvée {scope}."
+            insight = (f"No field mission found {scope}." if use_en
+                       else f"Aucune mission terrain trouvée {scope}.")
+        elif use_en:
+            missions = totals["missions"]
+            visited = totals["schools_visited"]
+            insight = (
+                f"{missions} {_plural(missions, 'mission', 'missions')} "
+                f"across {visited} "
+                f"{_plural(visited, 'visited school', 'visited schools')} "
+                f"({_fmt_cost(total_cost)} XAF in total) {scope}."
+            )
         else:
             insight = (
                 f"{totals['missions']} {_plural(totals['missions'], 'mission', 'missions')} "
@@ -250,9 +271,11 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             "items": items,
             "totals": totals,
             "applied_filters": {"district": district or None, "school": school or None, "days": days},
+            "lang": "en" if use_en else "fr",
         }
     except Exception as exc:
-        return {"error": f"interventoils_mission : {exc}"}
+        err = f"interventoils_mission: {exc}" if use_en else f"interventoils_mission : {exc}"
+        return {"error": err}
 
 
 def _build_mission_timeline_card(obs: dict[str, Any]) -> AgentCard | None:
@@ -260,9 +283,10 @@ def _build_mission_timeline_card(obs: dict[str, Any]) -> AgentCard | None:
         return None
     if not obs.get("items"):
         return None
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     return AgentCard(
         type="mission_timeline",
-        title="Timeline des missions terrain",
+        title="Field mission timeline" if use_en else "Timeline des missions terrain",
         data=obs,
     )
 

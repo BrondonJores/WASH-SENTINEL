@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..schemas import AgentCard
-from ..tool_consts import TREND_MONTHS
+from ..tool_consts import TREND_MONTHS, tool_lang
 
 TOOL_NAME = "observatoire"
 
@@ -97,15 +97,16 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         args = args or {}
         context = context or {}
         del args
+        use_en = tool_lang(context) == "en"
+        no_data = ("No incident data available for the observatory." if use_en
+                   else "Aucune donnée d'incident disponible pour l'observatoire.")
 
         raw_incidents = context.get("incidents")
         if not isinstance(raw_incidents, list) or not raw_incidents:
-            return {"total": 0,
-                    "error": "Aucune donnée d'incident disponible pour l'observatoire."}
+            return {"total": 0, "error": no_data}
         incidents = [i for i in raw_incidents if isinstance(i, dict)]
         if not incidents:
-            return {"total": 0,
-                    "error": "Aucune donnée d'incident disponible pour l'observatoire."}
+            return {"total": 0, "error": no_data}
 
         schools = context.get("schools", []) or []
         school_count = len([s for s in schools if isinstance(s, dict)]) if isinstance(schools, list) else 0
@@ -133,7 +134,8 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
         by_district_map: dict[str, dict[str, Any]] = {}
         for incident in open_incs:
-            district = str(incident.get("district") or "").strip() or "non renseigné"
+            district = (str(incident.get("district") or "").strip()
+                        or ("unspecified" if use_en else "non renseigné"))
             slot = by_district_map.setdefault(district, {"district": district, "open": 0, "critical": 0})
             slot["open"] += 1
             if str(incident.get("urgency") or "").strip().lower() == "critical":
@@ -143,7 +145,8 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
         by_urgency_map: dict[str, int] = {}
         for incident in open_incs:
-            urgency = str(incident.get("urgency") or "").strip().lower() or "non renseignée"
+            urgency = (str(incident.get("urgency") or "").strip().lower()
+                       or ("unspecified" if use_en else "non renseignée"))
             by_urgency_map[urgency] = by_urgency_map.get(urgency, 0) + 1
         by_urgency = [{"urgency": u, "count": c}
                       for u, c in sorted(by_urgency_map.items(), key=lambda kv: (-kv[1], kv[0]))]
@@ -152,7 +155,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         for incident in open_incs:
             category = (str(incident.get("category") or "").strip()
                         or str(incident.get("issue_type") or "").strip()
-                        or "non renseignée")
+                        or ("unspecified" if use_en else "non renseignée"))
             by_category_map[category] = by_category_map.get(category, 0) + 1
         by_category = [{"category": c, "count": n}
                        for c, n in sorted(by_category_map.items(), key=lambda kv: (-kv[1], kv[0]))]
@@ -173,14 +176,24 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         plur_n = "s" if n != 1 else ""
         plur_m = "s" if school_count != 1 else ""
         plur_c = "s" if critical != 1 else ""
-        first = (f"{n} incident{plur_n} ouvert{plur_n} dans {school_count} école{plur_m}, "
-                 f"dont {critical} critique{plur_c} et {affected} élèves affectés.")
+        if use_en:
+            first = (f"{n} open incident{plur_n} in {school_count} school{plur_m}, "
+                     f"of which {critical} critical and {affected} affected pupils.")
+        else:
+            first = (f"{n} incident{plur_n} ouvert{plur_n} dans {school_count} école{plur_m}, "
+                     f"dont {critical} critique{plur_c} et {affected} élèves affectés.")
         if by_district:
             top = by_district[0]
-            second = (f"Le district {top['district']} concentre le plus d'incidents "
-                      f"ouverts ({top['open']}).")
+            if use_en:
+                second = (f"The {top['district']} district concentrates the most open "
+                          f"incidents ({top['open']}).")
+            else:
+                second = (f"Le district {top['district']} concentre le plus d'incidents "
+                          f"ouverts ({top['open']}).")
         else:
-            second = "Aucun incident ouvert : situation stable sur le territoire."
+            second = ("No open incident: stable situation across the territory."
+                      if use_en else
+                      "Aucun incident ouvert : situation stable sur le territoire.")
         insight = f"{first} {second}"
 
         return {
@@ -191,9 +204,11 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             "by_urgency": by_urgency,
             "by_category": by_category,
             "trend": trend,
+            "lang": "en" if use_en else "fr",
         }
     except Exception as exc:  # contrat : jamais d'exception vers la boucle
-        return {"total": 0, "error": f"Observatoire indisponible : {exc}"}
+        err = f"Observatory unavailable: {exc}" if use_en else f"Observatoire indisponible : {exc}"
+        return {"total": 0, "error": err}
 
 
 def _build_observatoire_card(obs: dict[str, Any]) -> AgentCard | None:
@@ -208,11 +223,10 @@ def _build_observatoire_card(obs: dict[str, Any]) -> AgentCard | None:
     except (TypeError, ValueError):
         n_int = 0
     plur = "s" if n_int != 1 else ""
-    return AgentCard(
-        type="observatoire",
-        title=f"Observatoire : {n_int} incident{plur} ouvert{plur}",
-        data=obs,
-    )
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
+    title = (f"Observatory: {n_int} open incident{plur}" if use_en
+             else f"Observatoire : {n_int} incident{plur} ouvert{plur}")
+    return AgentCard(type="observatoire", title=title, data=obs)
 
 
 CARD_BUILDERS = {"observatoire": _build_observatoire_card}
