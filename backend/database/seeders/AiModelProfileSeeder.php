@@ -50,24 +50,31 @@ class AiModelProfileSeeder extends Seeder
             'api_key' => null,
             'timeout' => 120,
         ], false, false);
+
+        // Meta Muse Spark : inactif par défaut (le local reste le défaut),
+        // clé à coller dans Réglages (jamais fournie ni écrasée ici).
+        $this->seedProfile('Meta Muse Spark (cloud)', [
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.meta.ai/v1',
+            'model' => 'muse-spark-1.3-contributor',
+            'vision_model' => null,
+            'embed_model' => 'text-embedding-3-small',
+            'api_key' => null,
+            'timeout' => 120,
+        ], false, false);
     }
 
     /**
-     * Crée le profil avec les flags initiaux, puis rafraîchit la config seule.
-     * start.sh re-seed à chaque boot : les flags is_active/is_default choisis
-     * par l'admin dans Réglages ne sont JAMAIS réécrits ici.
+     * Crée le profil s'il manque, ne touche JAMAIS à l'existant.
+     * start.sh re-seed à chaque boot : la config posée par l'admin dans
+     * Réglages (URL, modèle, clé, flags actif/défaut) survit au re-seed.
+     * (Un refresh systématique a déjà détruit un profil Meta configuré.)
      */
     private function seedProfile(string $name, array $config, bool $active, bool $default): void
     {
-        $profile = AiModelProfile::firstOrCreate(
+        AiModelProfile::firstOrCreate(
             ['name' => $name],
             $config + ['is_active' => $active, 'is_default' => $default]
         );
-        // Ne jamais écraser une clé API posée via Réglages (le seeder n'en fournit aucune).
-        $update = $config;
-        if (($update['api_key'] ?? null) === null && $profile->getRawOriginal('api_key')) {
-            unset($update['api_key']);
-        }
-        $profile->update($update);
     }
 }

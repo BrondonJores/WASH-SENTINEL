@@ -129,6 +129,25 @@ class AiSttProfileTest extends TestCase
         $this->assertEquals('meta_transcribe', AiSttProfile::where('name', 'Meta perso')->firstOrFail()->driver);
     }
 
+    public function test_reseed_never_overwrites_admin_config(): void
+    {
+        // Même classe de bug que côté LLM : le re-seed réécrivait la config.
+        $this->seed(\Database\Seeders\AiSttProfileSeeder::class);
+        $meta = AiSttProfile::where('name', 'Meta Muse Transcribe (cloud)')->firstOrFail();
+        $meta->update([
+            'model' => 'muse-voice-transcribe-9.9',
+            'api_key' => 'SEKRET',
+            'is_active' => true,
+        ]);
+
+        $this->seed(\Database\Seeders\AiSttProfileSeeder::class);
+
+        $fresh = $meta->fresh();
+        $this->assertEquals('muse-voice-transcribe-9.9', $fresh->model);
+        $this->assertEquals('SEKRET', $fresh->plainApiKey());
+        $this->assertTrue($fresh->is_active);
+    }
+
     public function test_reseed_preserves_active_choice(): void
     {
         // start.sh re-seed à chaque boot : le choix actif de l'admin doit survivre.

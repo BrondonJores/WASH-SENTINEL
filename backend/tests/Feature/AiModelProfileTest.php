@@ -100,4 +100,42 @@ class AiModelProfileTest extends TestCase
             ->deleteJson("/api/v1/admin/model-profiles/{$profile->id}")
             ->assertStatus(422);
     }
+
+    public function test_meta_spark_profile_seeded_inactive_without_key(): void
+    {
+        $this->seed(\Database\Seeders\AiModelProfileSeeder::class);
+
+        $profile = AiModelProfile::where('name', 'Meta Muse Spark (cloud)')->firstOrFail();
+        $this->assertEquals('openai_compatible', $profile->provider);
+        $this->assertEquals('https://api.meta.ai/v1', $profile->base_url);
+        $this->assertEquals('muse-spark-1.3-contributor', $profile->model);
+        $this->assertFalse($profile->is_active);
+        $this->assertNull($profile->plainApiKey());
+        // Le local reste le défaut primaire.
+        $this->assertTrue(AiModelProfile::where('name', 'Llama 3.2 Local (Ollama)')->firstOrFail()->is_default);
+    }
+
+    public function test_reseed_never_overwrites_admin_config(): void
+    {
+        // Régression réelle : le re-seed de start.sh réécrivait la config
+        // (URL/modèle) d'un profil Meta configuré dans Réglages.
+        $this->seed(\Database\Seeders\AiModelProfileSeeder::class);
+        $meta = AiModelProfile::where('name', 'Meta Muse Spark (cloud)')->firstOrFail();
+        AiModelProfile::query()->update(['is_active' => false]);
+        $meta->update([
+            'model' => 'muse-spark-1.3-custom',
+            'timeout' => 45,
+            'api_key' => 'SEKRET',
+            'is_active' => true,
+        ]);
+
+        $this->seed(\Database\Seeders\AiModelProfileSeeder::class);
+
+        $fresh = $meta->fresh();
+        $this->assertEquals('muse-spark-1.3-custom', $fresh->model);
+        $this->assertEquals(45, $fresh->timeout);
+        $this->assertEquals('SEKRET', $fresh->plainApiKey());
+        $this->assertTrue($fresh->is_active);
+        $this->assertEquals($meta->id, AiModelProfile::active()->id);
+    }
 }

@@ -57,21 +57,16 @@ class AiSttProfileSeeder extends Seeder
     }
 
     /**
-     * Crée le profil avec les flags initiaux, puis rafraîchit la config seule.
-     * start.sh re-seed à chaque boot : les flags is_active/is_default choisis
-     * par l'admin dans Réglages ne sont JAMAIS réécrits ici.
+     * Crée le profil s'il manque, ne touche JAMAIS à l'existant.
+     * start.sh re-seed à chaque boot : la config posée par l'admin dans
+     * Réglages (URL, modèle, clé, langue, flags actif/défaut) survit.
+     * (Même classe de bug que côté LLM : refresh destructeur.)
      */
     private function seedProfile(string $name, array $config, bool $active, bool $default): void
     {
-        $profile = AiSttProfile::firstOrCreate(
+        AiSttProfile::firstOrCreate(
             ['name' => $name],
             $config + ['is_active' => $active, 'is_default' => $default]
         );
-        // Ne jamais écraser une clé API posée via Réglages (le seeder n'en fournit aucune).
-        $update = $config;
-        if (($update['api_key'] ?? null) === null && $profile->getRawOriginal('api_key')) {
-            unset($update['api_key']);
-        }
-        $profile->update($update);
     }
 }
