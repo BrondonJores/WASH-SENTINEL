@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -365,9 +366,13 @@ class VoiceService:
             # demandée est native Whisper.
             try:
                 result = provider.transcribe(audio_bytes, filename, language)
-            except Exception:
+            except Exception as exc:
                 # Panne moteur (modèle/binaire absent, FFmpeg, réseau
-                # cloud...) : message guidé, sans détail technique.
+                # cloud...) : message guidé côté usager, cause racine
+                # dans les logs moteur (docker compose logs ai-engine).
+                logging.getLogger(__name__).warning(
+                    "STT provider %s failed (direct): %s",
+                    provider.driver_name, exc)
                 raise guided_error(STT_UNAVAILABLE) from None
             transcript = (result.get("transcript", "") or "").strip()
             # Voie directe : la langue DÉTECTÉE par le moteur (cloud Meta :
@@ -512,7 +517,10 @@ class VoiceService:
         # Repli historique : le seul provider actif (ex. cloud), puis panne.
         try:
             result = provider.transcribe(audio_bytes, filename, language)
-        except Exception:
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "STT provider %s failed (fallback): %s",
+                provider.driver_name, exc)
             raise guided_error(STT_UNAVAILABLE) from None
         return ((result.get("transcript", "") or "").strip(), language,
                 provider.driver_name,

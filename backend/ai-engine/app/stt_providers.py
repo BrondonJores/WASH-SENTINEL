@@ -73,6 +73,49 @@ _WHISPER_DETECTED_RE = re.compile(
 #: Cache du support JSON par binaire (sniffé via --help, jamais supposé).
 _WHISPER_JSON_FLAGS: dict[str, list[str]] = {}
 
+#: Cache du style d'entrée audio par binaire : "flag" (-f fichier,
+#: whisper.cpp < 1.7) ou "positional" (fichier en fin d'argv, v1.7+ où
+#: -f/--file a disparu au profit de `whisper-cli [options] file0.wav...`).
+#: Sniffé via --help, jamais supposé (un -f inconnu = échec systématique).
+_WHISPER_INPUT_STYLE: dict[str, str] = {}
+
+#: Ligne d'aide déclarant -f/--file (ligne commençant par -f, donc jamais
+#: -nf/--no-fallback ni -of/--output-file).
+_WHISPER_FILE_FLAG_RE = re.compile(r"(?m)^\s*-f[,\s]")
+
+
+def whisper_input_args(binary: str, wav_file: str, timeout: float = 15.0) -> list[str]:
+    """Args d'entrée audio adaptés au binaire (pré/post whisper.cpp 1.7).
+
+    Sniffe --help une fois par binaire (cache). En cas de doute total
+    (--help inexploitable), style positionnel moderne.
+    """
+    if binary not in _WHISPER_INPUT_STYLE:
+        style = "positional"
+        try:
+            res = subprocess.run(
+                [binary, "--help"], capture_output=True, text=True,
+                check=False, timeout=timeout)
+            if _WHISPER_FILE_FLAG_RE.search(f"{res.stdout}\n{res.stderr}"):
+                style = "flag"
+        except Exception:
+            style = "positional"
+        _WHISPER_INPUT_STYLE[binary] = style
+    if _WHISPER_INPUT_STYLE[binary] == "flag":
+        return ["-f", wav_file]
+    return [wav_file]
+
+
+def _raise_for_whisper_exit(res: Any, binary: str) -> None:
+    """Échec binaire explicite : code + extrait stderr (jamais muet).
+
+    Sans ce garde, un flag inconnu (dérive de version CLI) produisait un
+    transcript vide/garbage au lieu d'une erreur diagnostiquable.
+    """
+    if res.returncode != 0:
+        detail = ((res.stderr or "").strip() or (res.stdout or "").strip())[:300]
+        raise RuntimeError(f"whisper-cli a échoué (code {res.returncode}) : {detail}")
+
 
 def whisper_json_flags(binary: str, timeout: float = 15.0) -> list[str]:
     """Flags JSON du binaire whisper.cpp (sniffés, cache par chemin).
@@ -274,17 +317,21 @@ class WhisperCppProvider(BaseSTTProvider):
         with tempfile.TemporaryDirectory(prefix="wash-stt-") as tmpdir:
             wav_file = normalize_to_wav(audio_bytes, filename, tmpdir)
             out_base = os.path.join(tmpdir, "output")
-            argv = [self.binary, "-m", self.model, "-f", wav_file,
+            # Fichier d'entrée en FIN d'argv : positionnels requis en v1.7+,
+            # -f accepté partout en pré-1.7 (sniffé, cf. whisper_input_args).
+            argv = [self.binary, "-m", self.model,
                    "-l", effective,
                    "-otxt", "-of", out_base]
             argv += whisper_json_flags(self.binary, self.timeout)
             if prompt_text:
                 # whisper.cpp : -p / --prompt = initial_prompt (noms propres WASH).
                 argv += ["--prompt", prompt_text]
+            argv += whisper_input_args(self.binary, wav_file, self.timeout)
             res = subprocess.run(
                 argv,
                 capture_output=True, text=True, check=False, timeout=self.timeout,
             )
+            _raise_for_whisper_exit(res, self.binary)
             transcript = ""
             txt_file = out_base + ".txt"
             if os.path.isfile(txt_file):
@@ -318,10 +365,12 @@ class WhisperCppProvider(BaseSTTProvider):
             wav_file = normalize_to_wav(audio_bytes, filename, tmpdir)
             out_base = os.path.join(tmpdir, "output")
             res = subprocess.run(
-                [self.binary, "-m", self.model, "-f", wav_file,
-                 "-otxt", "-of", out_base],
+                [self.binary, "-m", self.model,
+                 "-otxt", "-of", out_base,
+                 *whisper_input_args(self.binary, wav_file, self.timeout)],
                 capture_output=True, text=True, check=False, timeout=self.timeout,
             )
+            _raise_for_whisper_exit(res, self.binary)
             transcript = ""
             txt_file = out_base + ".txt"
             if os.path.isfile(txt_file):
