@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import { api, ApiError } from '../lib/api';
 import type { Incident, School } from '../lib/api';
-import { LOCALE } from '../lib/locale';
-import { STATUS_FR, URGENCY_FR, urgencyTone } from '../lib/wash';
+import { localeFor } from '../lib/locale';
+import { STATUS_EN, STATUS_FR, URGENCY_EN, URGENCY_FR, urgencyTone } from '../lib/wash';
 import { Badge, Button, Skeleton } from './ui';
 import { Icon } from './icons';
 
@@ -12,21 +12,21 @@ export type DetailTarget = { kind: DetailKind; id: number };
 
 // ---------- Helpers ----------
 
-const fmtInt = (v: unknown): string => {
-  if (typeof v === 'number' && Number.isFinite(v)) return new Intl.NumberFormat(LOCALE).format(Math.round(v));
+const fmtInt = (v: unknown, lang?: string): string => {
+  if (typeof v === 'number' && Number.isFinite(v)) return new Intl.NumberFormat(localeFor(lang)).format(Math.round(v));
   return '—';
 };
 
-const fmtDate = (v: unknown): string => {
+const fmtDate = (v: unknown, lang?: string): string => {
   if (typeof v !== 'string' || v === '') return '—';
   const d = new Date(v);
   return Number.isNaN(d.getTime())
     ? '—'
-    : d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
+    : d.toLocaleDateString(localeFor(lang), { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
-const fmtMoney = (v: number | null, currency: string | null): string =>
-  v === null ? '—' : `${fmtInt(v)}${currency ? ` ${currency}` : ''}`;
+const fmtMoney = (v: number | null, currency: string | null, lang?: string): string =>
+  v === null ? '—' : `${fmtInt(v, lang)}${currency ? ` ${currency}` : ''}`;
 
 // DIVERGENCE volontaire conservée : 'Évacuation' (court, badge) vs
 // CATEGORY_FR 'Évacuation / drainage' de lib/wash.ts — rendu identique exigé.
@@ -35,6 +35,13 @@ const CATEGORY_LABEL: Record<string, string> = {
   toilets_latrines: 'Toilettes / latrines',
   handwashing: 'Lavage des mains',
   sewage_drainage: 'Évacuation',
+};
+// Jumeau EN court ('Drainage'), miroir de la divergence volontaire ci-dessus.
+const CATEGORY_LABEL_EN: Record<string, string> = {
+  water_point: 'Water point',
+  toilets_latrines: 'Toilets / latrines',
+  handwashing: 'Handwashing',
+  sewage_drainage: 'Drainage',
 };
 
 /** Report sérialisé : le backend ajoute photo_url absolue (null si vide/manquante). */
@@ -52,9 +59,9 @@ function Stat({ label, value, mono = true }: { label: string; value: string; mon
   );
 }
 
-function DrawerSkeleton() {
+function DrawerSkeleton({ lang }: { lang?: string }) {
   return (
-    <div className="space-y-3" aria-label="Chargement du détail">
+    <div className="space-y-3" aria-label={lang === 'en' ? 'Loading details' : 'Chargement du détail'}>
       <Skeleton className="h-7 w-3/4" />
       <Skeleton className="h-4 w-1/3" />
       <div className="flex gap-2">
@@ -79,12 +86,18 @@ function IncidentView({
   incident,
   onDetail,
   onAsk,
+  lang,
 }: {
   incident: Incident;
   onDetail: (kind: DetailKind, id: number) => void;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
-  const schoolName = incident.school?.name ?? `École #${incident.school_id}`;
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
+  const statusLabel = en ? STATUS_EN : STATUS_FR;
+  const categoryLabel = en ? CATEGORY_LABEL_EN : CATEGORY_LABEL;
+  const schoolName = incident.school?.name ?? (en ? `School #${incident.school_id}` : `École #${incident.school_id}`);
   const district = incident.school?.district;
   const reportsCount = incident.reports_count ?? incident.reports?.length ?? 0;
   const logs = incident.maintenance_logs ?? [];
@@ -100,16 +113,16 @@ function IncidentView({
       <h2 className="mt-1 font-display text-xl font-bold leading-snug tracking-tight">{incident.title}</h2>
       <div className="mt-2 flex flex-wrap gap-1.5">
         <Badge tone={urgencyTone(incident.urgency)}>
-          Urgence {URGENCY_FR[incident.urgency] ?? incident.urgency}
+          {en ? `${urgencyLabel[incident.urgency] ?? incident.urgency} urgency` : `Urgence ${urgencyLabel[incident.urgency] ?? incident.urgency}`}
         </Badge>
-        <Badge>{STATUS_FR[incident.status] ?? incident.status}</Badge>
-        <Badge tone="info">{CATEGORY_LABEL[incident.category] ?? incident.category}</Badge>
+        <Badge>{statusLabel[incident.status] ?? incident.status}</Badge>
+        <Badge tone="info">{categoryLabel[incident.category] ?? incident.category}</Badge>
       </div>
 
       <button
         type="button"
         onClick={() => onDetail('school', incident.school_id)}
-        title="Voir le détail de l'école"
+        title={en ? 'View school details' : "Voir le détail de l'école"}
         className="mt-3 flex w-full items-center gap-2.5 rounded-xl border border-line bg-card px-3 py-2.5 text-left transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100"
       >
         <Icon name="school" className="h-5 w-5 shrink-0 text-teal-700 dark:text-teal-300" />
@@ -135,12 +148,12 @@ function IncidentView({
                 target="_blank"
                 rel="noreferrer"
                 title={incident.title}
-                aria-label={`Ouvrir la photo ${i + 1} de ${incident.title} dans un nouvel onglet`}
+                aria-label={en ? `Open photo ${i + 1} of ${incident.title} in a new tab` : `Ouvrir la photo ${i + 1} de ${incident.title} dans un nouvel onglet`}
                 className="shrink-0 overflow-hidden rounded-lg border border-line transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
               >
                 <img
                   src={url}
-                  alt={`Photo ${i + 1} de ${incident.title}`}
+                  alt={en ? `Photo ${i + 1} of ${incident.title}` : `Photo ${i + 1} de ${incident.title}`}
                   loading="lazy"
                   className="h-16 w-16 object-cover"
                 />
@@ -151,30 +164,30 @@ function IncidentView({
       )}
 
       <div className="mt-4 grid grid-cols-2 gap-3">
-        <Stat label="Élèves affectés" value={fmtInt(incident.affected_students)} />
-        <Stat label="Priorité IA" value={fmtInt(incident.priority_score)} />
-        <Stat label="Signalements" value={fmtInt(reportsCount)} />
-        <Stat label="Assigné à" value={incident.assignee?.name ?? 'Personne'} mono={false} />
-        <Stat label="Signalé le" value={fmtDate(incident.created_at)} mono={false} />
-        <Stat label="Résolu le" value={incident.resolved_at ? fmtDate(incident.resolved_at) : '—'} mono={false} />
+        <Stat label={en ? 'Affected pupils' : 'Élèves affectés'} value={fmtInt(incident.affected_students, lang)} />
+        <Stat label={en ? 'AI priority' : 'Priorité IA'} value={fmtInt(incident.priority_score, lang)} />
+        <Stat label={en ? 'Reports' : 'Signalements'} value={fmtInt(reportsCount, lang)} />
+        <Stat label={en ? 'Assigned to' : 'Assigné à'} value={incident.assignee?.name ?? (en ? 'Unassigned' : 'Personne')} mono={false} />
+        <Stat label={en ? 'Reported on' : 'Signalé le'} value={fmtDate(incident.created_at, lang)} mono={false} />
+        <Stat label={en ? 'Resolved on' : 'Résolu le'} value={incident.resolved_at ? fmtDate(incident.resolved_at, lang) : '—'} mono={false} />
       </div>
 
       {incident.issue_type !== null && incident.issue_type !== '' && (
         <p className="mt-3 text-sm">
-          <span className="text-stone-500 dark:text-stone-400">Type de panne : </span>
+          <span className="text-stone-500 dark:text-stone-400">{en ? 'Breakdown type: ' : 'Type de panne : '}</span>
           <span className="font-medium">{incident.issue_type}</span>
         </p>
       )}
       {incident.health_hazard !== null && incident.health_hazard !== '' && (
         <p className="mt-1 text-sm">
-          <span className="text-stone-500 dark:text-stone-400">Risque sanitaire : </span>
+          <span className="text-stone-500 dark:text-stone-400">{en ? 'Health risk: ' : 'Risque sanitaire : '}</span>
           <span className="font-medium">{incident.health_hazard}</span>
         </p>
       )}
 
       {incident.ai_summary !== null && incident.ai_summary !== '' && (
         <div className="mt-4 rounded-xl border border-line bg-raised/60 p-3">
-          <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">Résumé IA</p>
+          <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">{en ? 'AI summary' : 'Résumé IA'}</p>
           <p className="mt-1 text-sm leading-relaxed">{incident.ai_summary}</p>
         </div>
       )}
@@ -195,9 +208,9 @@ function IncidentView({
             {logs.slice(0, 5).map((l) => (
               <li key={l.id} className="rounded-lg border border-line px-3 py-2 text-sm">
                 <span className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{fmtDate(l.repaired_at ?? l.created_at)}</span>
+                  <span className="font-medium">{fmtDate(l.repaired_at ?? l.created_at, lang)}</span>
                   <span className="font-mono text-xs tabular-nums">
-                    {fmtMoney(l.cost_amount, l.currency)}
+{fmtMoney(l.cost_amount, l.currency, lang)}
                   </span>
                 </span>
                 {l.notes !== null && l.notes !== '' && (
@@ -212,11 +225,11 @@ function IncidentView({
       {onAsk !== undefined && (
         <Button
           size="sm"
-          onClick={() => onAsk(`Explique l'incident ${incident.reference_code} en langage simple`)}
+          onClick={() => onAsk(en ? `Explain incident ${incident.reference_code} in simple language` : `Explique l'incident ${incident.reference_code} en langage simple`)}
           className="mt-4"
         >
           <Icon name="chat" className="h-3.5 w-3.5" />
-          Expliquer dans le chat
+{en ? 'Explain in chat' : 'Expliquer dans le chat'}
         </Button>
       )}
     </div>
@@ -227,39 +240,43 @@ function SchoolView({
   school,
   onDetail,
   onAsk,
+  lang,
 }: {
   school: School;
   onDetail: (kind: DetailKind, id: number) => void;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
   const open = school.open_incidents ?? [];
   const openCount = school.open_incidents_count ?? open.length;
   return (
     <div>
       <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-teal-700 dark:text-teal-300">
-        École · {school.code}
+{en ? 'School' : 'École'} · {school.code}
       </p>
       <h2 className="mt-1 font-display text-xl font-bold leading-snug tracking-tight">{school.name}</h2>
       <p className="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400">{school.district}</p>
 
       <div className="mt-4 grid grid-cols-2 gap-3">
-        <Stat label="Élèves" value={fmtInt(school.student_count)} />
-        <Stat label="Incidents ouverts" value={fmtInt(openCount)} />
-        <Stat label="Enseignants" value={school.teacher_count === null ? '—' : fmtInt(school.teacher_count)} />
-        <Stat label="Signalements" value={school.reports_count === undefined ? '—' : fmtInt(school.reports_count)} />
+        <Stat label={en ? 'Pupils' : 'Élèves'} value={fmtInt(school.student_count, lang)} />
+        <Stat label={en ? 'Open incidents' : 'Incidents ouverts'} value={fmtInt(openCount, lang)} />
+        <Stat label={en ? 'Teachers' : 'Enseignants'} value={school.teacher_count === null ? '—' : fmtInt(school.teacher_count, lang)} />
+        <Stat label={en ? 'Reports' : 'Signalements'} value={school.reports_count === undefined ? '—' : fmtInt(school.reports_count, lang)} />
       </div>
 
       {(school.equipment_type !== null || school.installation_year !== null || school.contact_phone !== null) && (
         <dl className="mt-3 space-y-1.5 border-t border-stone-200/70 pt-3 text-sm dark:border-white/[0.06]">
           {school.equipment_type !== null && school.equipment_type !== '' && (
             <div className="flex items-start justify-between gap-3">
-              <dt className="shrink-0 text-stone-500 dark:text-stone-400">Équipement</dt>
+              <dt className="shrink-0 text-stone-500 dark:text-stone-400">{en ? 'Equipment' : 'Équipement'}</dt>
               <dd className="text-right font-medium">{school.equipment_type}</dd>
             </div>
           )}
           {school.installation_year !== null && (
             <div className="flex items-start justify-between gap-3">
-              <dt className="shrink-0 text-stone-500 dark:text-stone-400">Installé en</dt>
+              <dt className="shrink-0 text-stone-500 dark:text-stone-400">{en ? 'Installed in' : 'Installé en'}</dt>
               <dd className="text-right font-medium tabular-nums">{school.installation_year}</dd>
             </div>
           )}
@@ -274,10 +291,10 @@ function SchoolView({
 
       <div className="mt-4">
         <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
-          Incidents ouverts ({fmtInt(openCount)})
+{en ? 'Open incidents' : 'Incidents ouverts'} ({fmtInt(openCount, lang)})
         </p>
         {open.length === 0 ? (
-          <p className="mt-2 text-sm text-stone-600 dark:text-stone-400">Aucun incident ouvert pour cette école.</p>
+          <p className="mt-2 text-sm text-stone-600 dark:text-stone-400">{en ? 'No open incidents for this school.' : 'Aucun incident ouvert pour cette école.'}</p>
         ) : (
           <ul className="mt-2 space-y-2">
             {open.map((inc) => (
@@ -285,17 +302,17 @@ function SchoolView({
                 <button
                   type="button"
                   onClick={() => onDetail('incident', inc.id)}
-                  title="Voir le détail de l'incident"
+                  title={en ? 'View incident details' : "Voir le détail de l'incident"}
                   className="flex w-full items-center gap-2.5 rounded-xl border border-line bg-card px-3 py-2.5 text-left transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100"
                 >
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold">{inc.title}</span>
                     <span className="mt-1 flex flex-wrap items-center gap-1.5">
                       <Badge tone={urgencyTone(inc.urgency)}>
-                        {URGENCY_FR[inc.urgency] ?? inc.urgency}
+                        {urgencyLabel[inc.urgency] ?? inc.urgency}
                       </Badge>
                       <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">
-                        {inc.reference_code} · {fmtInt(inc.affected_students)} élèves
+{inc.reference_code} · {fmtInt(inc.affected_students, lang)} {en ? 'pupils' : 'élèves'}
                       </span>
                     </span>
                   </span>
@@ -308,9 +325,9 @@ function SchoolView({
       </div>
 
       {onAsk !== undefined && (
-        <Button size="sm" onClick={() => onAsk(`Analyse ${school.name} ?`)} className="mt-4">
+        <Button size="sm" onClick={() => onAsk(en ? `Analyze ${school.name}?` : `Analyse ${school.name} ?`)} className="mt-4">
           <Icon name="chat" className="h-3.5 w-3.5" />
-          Analyser dans le chat
+          {en ? 'Analyze in chat' : 'Analyser dans le chat'}
         </Button>
       )}
     </div>
@@ -324,11 +341,13 @@ function SlidePanel({
   onClose,
   closeRef,
   children,
+  lang,
 }: {
   label: string;
   onClose: () => void;
   closeRef: RefObject<HTMLButtonElement | null>;
   children: ReactNode;
+  lang?: string;
 }) {
   const [shown, setShown] = useState(false);
   useEffect(() => {
@@ -347,7 +366,7 @@ function SlidePanel({
           ref={closeRef}
           type="button"
           onClick={onClose}
-          aria-label="Fermer"
+          aria-label={lang === 'en' ? 'Close' : 'Fermer'}
           className="flex h-9 w-9 items-center justify-center rounded-full text-ink-soft transition-[transform,color] duration-150 ease-snap hover:bg-raised hover:text-ink active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100"
         >
           <Icon name="x" className="h-5 w-5" />
@@ -363,12 +382,15 @@ export function DetailDrawer({
   onClose,
   onDetail,
   onAsk,
+  lang,
 }: {
   detail: DetailTarget | null;
   onClose: () => void;
   onDetail: (kind: DetailKind, id: number) => void;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -393,20 +415,21 @@ export function DetailDrawer({
   if (detail === null) return null;
 
   return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Détail">
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={en ? 'Details' : 'Détail'}>
       <button
         type="button"
-        aria-label="Fermer le panneau"
+        aria-label={en ? 'Close panel' : 'Fermer le panneau'}
         onClick={onClose}
         className="absolute inset-0 h-full w-full cursor-default bg-stone-950/45 backdrop-blur-[2px]"
       />
       <SlidePanel
         key={`${detail.kind}-${detail.id}`}
-        label={detail.kind === 'incident' ? 'Détail incident' : "Détail école"}
+        label={detail.kind === 'incident' ? (en ? 'Incident details' : 'Détail incident') : en ? 'School details' : "Détail école"}
         onClose={onClose}
         closeRef={closeRef}
+        lang={lang}
       >
-        <DetailContent key={`${detail.kind}-${detail.id}`} detail={detail} onDetail={onDetail} onAsk={onAsk} />
+        <DetailContent key={`${detail.kind}-${detail.id}`} detail={detail} onDetail={onDetail} onAsk={onAsk} lang={lang} />
       </SlidePanel>
     </div>
   );
@@ -414,7 +437,7 @@ export function DetailDrawer({
 
 type ContentState =
   | { status: 'loading' }
-  | { status: 'error'; message: string }
+  | { status: 'error'; message: string | null }
   | { status: 'incident'; incident: Incident }
   | { status: 'school'; school: School };
 
@@ -422,10 +445,12 @@ function DetailContent({
   detail,
   onDetail,
   onAsk,
+  lang,
 }: {
   detail: DetailTarget;
   onDetail: (kind: DetailKind, id: number) => void;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
   const [attempt, setAttempt] = useState(0);
   return (
@@ -435,6 +460,7 @@ function DetailContent({
       onDetail={onDetail}
       onAsk={onAsk}
       onRetry={() => setAttempt((a) => a + 1)}
+      lang={lang}
     />
   );
 }
@@ -444,12 +470,15 @@ function DetailFetch({
   onDetail,
   onAsk,
   onRetry,
+  lang,
 }: {
   detail: DetailTarget;
   onDetail: (kind: DetailKind, id: number) => void;
   onAsk?: (q: string) => void;
   onRetry: () => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const [state, setState] = useState<ContentState>({ status: 'loading' });
 
   useEffect(() => {
@@ -467,7 +496,7 @@ function DetailFetch({
         if (!cancelled) {
           setState({
             status: 'error',
-            message: e instanceof ApiError ? e.message : 'Détail indisponible.',
+            message: e instanceof ApiError ? e.message : null,
           });
         }
       }
@@ -477,19 +506,19 @@ function DetailFetch({
     };
   }, [detail]);
 
-  if (state.status === 'loading') return <DrawerSkeleton />;
+  if (state.status === 'loading') return <DrawerSkeleton lang={lang} />;
   if (state.status === 'error') {
     return (
       <div className="rounded-xl border border-danger/30 bg-danger-soft px-4 py-6 text-center">
-        <p className="text-sm font-medium text-danger">{state.message}</p>
+        <p className="text-sm font-medium text-danger">{state.message ?? (en ? 'Details unavailable.' : 'Détail indisponible.')}</p>
         <Button size="sm" onClick={onRetry} className="mt-3">
-          Réessayer
+{en ? 'Retry' : 'Réessayer'}
         </Button>
       </div>
     );
   }
   if (state.status === 'incident') {
-    return <IncidentView incident={state.incident} onDetail={onDetail} onAsk={onAsk} />;
+    return <IncidentView incident={state.incident} onDetail={onDetail} onAsk={onAsk} lang={lang} />;
   }
-  return <SchoolView school={state.school} onDetail={onDetail} onAsk={onAsk} />;
+  return <SchoolView school={state.school} onDetail={onDetail} onAsk={onAsk} lang={lang} />;
 }

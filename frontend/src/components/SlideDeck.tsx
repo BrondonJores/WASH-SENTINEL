@@ -18,7 +18,8 @@ export interface DeckSlide {
 const navBtn =
   'flex h-8 w-8 items-center justify-center rounded-md border border-line text-ink-soft transition-[background-color,transform] duration-150 ease-snap hover:bg-raised active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100';
 
-export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
+export function SlideDeck({ slides, lang }: { slides: DeckSlide[]; lang?: string }) {
+  const en = lang === 'en';
   const total = slides.length;
   const [index, setIndex] = useState(0);
   const go = useCallback((dir: number) => setIndex((i) => (i + dir + total) % total), [total]);
@@ -94,10 +95,10 @@ export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
       </div>
       {total > 1 && (
         <div className="mt-3 flex items-center gap-2">
-          <button type="button" onClick={() => go(-1)} aria-label="Slide précédente" className={navBtn}>
+          <button type="button" onClick={() => go(-1)} aria-label={en ? 'Previous slide' : 'Slide précédente'} className={navBtn}>
             <Icon name="arrow-right" className="h-4 w-4 rotate-180" />
           </button>
-          <button type="button" onClick={() => go(1)} aria-label="Slide suivante" className={navBtn}>
+          <button type="button" onClick={() => go(1)} aria-label={en ? 'Next slide' : 'Slide suivante'} className={navBtn}>
             <Icon name="arrow-right" className="h-4 w-4" />
           </button>
           <div className="ml-1 flex items-center gap-1.5">
@@ -106,7 +107,7 @@ export function SlideDeck({ slides }: { slides: DeckSlide[] }) {
                 key={i}
                 type="button"
                 onClick={() => setIndex(i)}
-                aria-label={`Aller à la slide ${i + 1}`}
+                aria-label={en ? `Go to slide ${i + 1}` : `Aller à la slide ${i + 1}`}
                 className={`h-1.5 rounded-full transition-all ${
                   i === index
                     ? 'w-6 bg-accent'

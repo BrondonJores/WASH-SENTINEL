@@ -16,7 +16,7 @@ import {
   YAxis,
 } from 'recharts';
 import { useTheme } from '../theme';
-import { LOCALE } from '../lib/locale';
+import { localeFor } from '../lib/locale';
 
 export interface TrendSeries {
   key: string;
@@ -44,9 +44,9 @@ interface TooltipEntry {
   color?: string;
 }
 
-const fmtFR = (v: number): string => new Intl.NumberFormat(LOCALE).format(v);
-const fmtCompact = (v: number): string =>
-  new Intl.NumberFormat(LOCALE, { notation: 'compact' }).format(v);
+const fmtFR = (v: number, lang?: string): string => new Intl.NumberFormat(localeFor(lang)).format(v);
+const fmtCompact = (v: number, lang?: string): string =>
+  new Intl.NumberFormat(localeFor(lang), { notation: 'compact' }).format(v);
 
 /** Respecte prefers-reduced-motion pour les animations recharts. */
 function useReducedMotion(): boolean {
@@ -64,13 +64,14 @@ function useAxisColors(): { grid: string; tick: string } {
 }
 
 /** Unité lisible selon le libellé de la série (« 12 500 XAF », « 3 pannes », « 5 jours »). */
-function suffixFor(label: unknown, value: number): string {
+function suffixFor(label: unknown, value: number, lang?: string): string {
   if (typeof label !== 'string') return '';
+  const en = lang === 'en';
   const l = label.toLowerCase();
-  if (/coût|cout|xaf|fcfa|franc|réparation|reparation/.test(l)) return ' XAF';
-  if (/panne|incident/.test(l)) return value > 1 ? ' pannes' : ' panne';
-  if (/jour/.test(l)) return value > 1 ? ' jours' : ' jour';
-  if (/école|ecole/.test(l)) return value > 1 ? ' écoles' : ' école';
+  if (/coût|cout|cost|xaf|fcfa|franc|réparation|reparation|repair/.test(l)) return ' XAF';
+  if (/panne|incident|breakdown|failure/.test(l)) return en ? (value > 1 ? ' breakdowns' : ' breakdown') : value > 1 ? ' pannes' : ' panne';
+  if (/jour|day/.test(l)) return en ? (value > 1 ? ' days' : ' day') : value > 1 ? ' jours' : ' jour';
+  if (/école|ecole|school/.test(l)) return en ? (value > 1 ? ' schools' : ' school') : value > 1 ? ' écoles' : ' école';
   return '';
 }
 
@@ -78,10 +79,12 @@ function ChartTooltip({
   active,
   payload,
   label,
+  lang,
 }: {
   active?: boolean;
   payload?: TooltipEntry[];
   label?: string | number;
+  lang?: string;
 }) {
   if (!active || !payload || payload.length === 0) return null;
   return (
@@ -93,7 +96,7 @@ function ChartTooltip({
           <span className="text-stone-500 dark:text-stone-400">{p.name}</span>
           <span className="ml-auto pl-3 font-semibold">
             {typeof p.value === 'number'
-              ? `${fmtFR(p.value)}${suffixFor(p.name, p.value)}`
+              ? `${fmtFR(p.value, lang)}${suffixFor(p.name, p.value, lang)}`
               : (p.value ?? '—')}
           </span>
         </p>
@@ -108,13 +111,16 @@ export function TrendChart({
   series,
   height = 224,
   onSelect,
+  lang,
 }: {
   labels: string[];
   series: TrendSeries[];
   height?: number;
   /** Clic sur un point ou une barre : index du mois. */
   onSelect?: (index: number) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const reduced = useReducedMotion();
   const { grid, tick } = useAxisColors();
 
@@ -163,7 +169,7 @@ export function TrendChart({
               tickLine={false}
               axisLine={false}
               width={52}
-              tickFormatter={(v: number) => fmtCompact(v)}
+              tickFormatter={(v: number) => fmtCompact(v, lang)}
             />
           )}
           {hasLines && (
@@ -177,7 +183,7 @@ export function TrendChart({
               allowDecimals={false}
             />
           )}
-          <Tooltip content={<ChartTooltip />} cursor={{ stroke: grid }} />
+          <Tooltip content={<ChartTooltip lang={lang} />} cursor={{ stroke: grid }} />
           <Legend
             wrapperStyle={{ fontSize: 12 }}
             formatter={(v: string) => <span className="text-stone-600 dark:text-stone-400">{v}</span>}
@@ -188,7 +194,7 @@ export function TrendChart({
               yAxisId="left"
               stroke={tick}
               strokeDasharray="4 4"
-              label={{ value: 'moyenne', position: 'insideTopRight', fontSize: 10, fill: tick }}
+              label={{ value: en ? 'average' : 'moyenne', position: 'insideTopRight', fontSize: 10, fill: tick }}
             />
           )}
           {series
@@ -233,10 +239,12 @@ function DonutTooltip({
   active,
   payload,
   total,
+  lang,
 }: {
   active?: boolean;
   payload?: TooltipEntry[];
   total: number;
+  lang?: string;
 }) {
   const first = payload?.[0];
   if (!active || first === undefined) return null;
@@ -251,7 +259,7 @@ function DonutTooltip({
         />
         <span className="text-stone-500 dark:text-stone-400">{first.name}</span>
         <span className="ml-auto pl-3 font-semibold">
-          {fmtFR(value)} ({pct} %)
+{fmtFR(value, lang)} ({pct} %)
         </span>
       </p>
     </div>
@@ -263,12 +271,15 @@ export function TrendDonut({
   entries,
   height = 200,
   onSelect,
+  lang,
 }: {
   entries: DonutEntry[];
   height?: number;
   /** Clic sur une part ou une ligne de légende : index de l'entrée. */
   onSelect?: (index: number) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const reduced = useReducedMotion();
   const total = entries.reduce((s, e) => s + e.value, 0);
   const clickable = onSelect !== undefined;
@@ -278,7 +289,7 @@ export function TrendDonut({
       <div style={{ height }} className={`relative w-full ${clickable ? 'cursor-pointer' : ''}`}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Tooltip content={<DonutTooltip total={total} />} />
+            <Tooltip content={<DonutTooltip total={total} lang={lang} />} />
             <Pie
               data={entries}
               dataKey="value"
@@ -297,8 +308,8 @@ export function TrendDonut({
           </PieChart>
         </ResponsiveContainer>
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <span className="font-mono text-2xl font-bold tabular-nums">{fmtFR(total)}</span>
-          <span className="text-[11px] text-stone-500 dark:text-stone-400">au total</span>
+          <span className="font-mono text-2xl font-bold tabular-nums">{fmtFR(total, lang)}</span>
+          <span className="text-[11px] text-stone-500 dark:text-stone-400">{en ? 'in total' : 'au total'}</span>
         </div>
       </div>
       <ul className="mt-1 space-y-1">
@@ -309,7 +320,7 @@ export function TrendDonut({
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: e.color }} />
               <span className="text-[13px] text-stone-600 dark:text-stone-400">{e.name}</span>
               <span className="ml-auto font-mono text-xs font-semibold tabular-nums">
-                {fmtFR(e.value)} · {pct} %
+{fmtFR(e.value, lang)} · {pct} %
               </span>
             </>
           );
@@ -338,10 +349,12 @@ function HBarTooltip({
   active,
   payload,
   unit,
+  lang,
 }: {
   active?: boolean;
   payload?: (TooltipEntry & { payload?: { name?: string } })[];
   unit?: string;
+  lang?: string;
 }) {
   const first = payload?.[0];
   if (!active || first === undefined) return null;
@@ -351,7 +364,7 @@ function HBarTooltip({
       <p className="mb-0.5 text-[11px] font-semibold">{first.payload?.name ?? first.name}</p>
       <p className="font-mono text-xs tabular-nums">
         <span className="font-semibold">
-          {fmtFR(value)}
+{fmtFR(value, lang)}
           {unit !== undefined && unit !== '' ? ` ${unit}` : ''}
         </span>
       </p>
@@ -364,12 +377,15 @@ export function TrendHBars({
   entries,
   unit,
   onSelect,
+  lang,
 }: {
   entries: HBarEntry[];
   unit?: string;
   /** Clic sur une barre : index de l'entrée. */
   onSelect?: (index: number) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const reduced = useReducedMotion();
   const { grid, tick } = useAxisColors();
   if (entries.length === 0) return null;
@@ -385,7 +401,7 @@ export function TrendHBars({
             tick={{ fill: tick, fontSize: 11 }}
             tickLine={false}
             axisLine={{ stroke: grid }}
-            tickFormatter={(v: number) => fmtCompact(v)}
+            tickFormatter={(v: number) => fmtCompact(v, lang)}
           />
           <YAxis
             type="category"
@@ -396,10 +412,10 @@ export function TrendHBars({
             axisLine={false}
             tickFormatter={(v: string) => (v.length > 16 ? `${v.slice(0, 15)}…` : v)}
           />
-          <Tooltip content={<HBarTooltip unit={unit} />} cursor={{ fill: grid, opacity: 0.35 }} />
+          <Tooltip content={<HBarTooltip unit={unit} lang={lang} />} cursor={{ fill: grid, opacity: 0.35 }} />
           <Bar
             dataKey="value"
-            name={unit ?? 'Valeur'}
+            name={unit ?? (en ? 'Value' : 'Valeur')}
             radius={[0, 4, 4, 0]}
             maxBarSize={20}
             isAnimationActive={!reduced}

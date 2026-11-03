@@ -1,26 +1,28 @@
 // Rendus graphiques supplémentaires : calendrier des pannes, suivi d'incident, budgets.
 // Thème maison (teal/stone/amber), français simple, chiffres fr-FR, motion réduite respectée.
 import { Icon } from './icons';
-import { LOCALE } from '../lib/locale';
+import { localeFor } from '../lib/locale';
 
-const fmtIntFR = (v: number): string => new Intl.NumberFormat(LOCALE).format(Math.round(v));
+const fmtIntFR = (v: number, lang?: string): string =>
+  new Intl.NumberFormat(localeFor(lang)).format(Math.round(v));
 
 /** Date lisible fr-FR depuis AAAA-MM-JJ ou ISO complet ; '—' si absent. */
-function fmtDateFR(v: unknown): string {
+function fmtDateFR(v: unknown, lang?: string): string {
   if (typeof v !== 'string' || v === '') return '—';
   const day = v.length >= 10 ? v.slice(0, 10) : v;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
   const d = m !== null ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(v);
   return Number.isNaN(d.getTime())
     ? '—'
-    : d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
+    : d.toLocaleDateString(localeFor(lang), { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 const MONTH_SHORT = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+const MONTH_SHORT_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /** Libellé « 12 500 XAF » ; '—' si absent. */
-function fmtMoney(cost: number, currency: string): string {
-  return `${fmtIntFR(cost)} ${currency}`;
+function fmtMoney(cost: number, currency: string, lang?: string): string {
+  return `${fmtIntFR(cost, lang)} ${currency}`;
 }
 
 // ---------- Calendrier des pannes (style GitHub) ----------
@@ -60,13 +62,16 @@ export function CalendarHeatmap({
   days,
   total,
   onSelect,
+  lang,
 }: {
   days: HeatmapDay[];
   total?: number;
   /** Clic sur un jour : date AAAA-MM-JJ. */
   onSelect?: (date: string) => void;
+  lang?: string;
 }) {
   if (days.length === 0) return null;
+  const en = lang === 'en';
   const sorted = [...days].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const max = Math.max(0, ...sorted.map((d) => d.count));
   const sum = typeof total === 'number' && Number.isFinite(total) ? total : sorted.reduce((s, d) => s + d.count, 0);
@@ -88,17 +93,23 @@ export function CalendarHeatmap({
     const month = Number(first.date.slice(5, 7)) - 1;
     if (month === prevMonth || month < 0 || month > 11) return '';
     prevMonth = month;
-    return MONTH_SHORT[month];
+    return (en ? MONTH_SHORT_EN : MONTH_SHORT)[month];
   });
 
   const cellBox = 'h-3.5 w-3.5 sm:h-4 sm:w-4';
   const clickable = onSelect !== undefined;
   const dayLabel = (d: HeatmapDay): string =>
     d.count === 0
-      ? `Aucune panne le ${fmtDateFR(d.date)}`
+      ? en
+        ? `No breakdowns on ${fmtDateFR(d.date, lang)}`
+        : `Aucune panne le ${fmtDateFR(d.date, lang)}`
       : d.count === 1
-        ? `1 panne le ${fmtDateFR(d.date)}`
-        : `${fmtIntFR(d.count)} pannes le ${fmtDateFR(d.date)}`;
+        ? en
+          ? `1 breakdown on ${fmtDateFR(d.date, lang)}`
+          : `1 panne le ${fmtDateFR(d.date, lang)}`
+        : en
+          ? `${fmtIntFR(d.count, lang)} breakdowns on ${fmtDateFR(d.date, lang)}`
+          : `${fmtIntFR(d.count, lang)} pannes le ${fmtDateFR(d.date, lang)}`;
 
   return (
     <div>
@@ -108,7 +119,7 @@ export function CalendarHeatmap({
           <div className="flex shrink-0 flex-col" aria-hidden="true">
             <span className="mb-1 h-4 text-[10px] leading-4">&nbsp;</span>
             <div className="flex flex-col gap-[3px]">
-              {['Lun', '', 'Mer', '', 'Ven', '', ''].map((w, i) => (
+              {(en ? ['Mon', '', 'Wed', '', 'Fri', '', ''] : ['Lun', '', 'Mer', '', 'Ven', '', '']).map((w, i) => (
                 <span key={i} className={`${cellBox} flex items-center text-[10px] text-stone-500 dark:text-stone-400`}>
                   {w}
                 </span>
@@ -126,7 +137,7 @@ export function CalendarHeatmap({
             </div>
             <div
               role={clickable ? 'group' : 'img'}
-              aria-label={clickable ? 'Calendrier des pannes, touchez un jour pour le détail' : 'Calendrier des pannes'}
+              aria-label={clickable ? (en ? 'Breakdown calendar, tap a day for details' : 'Calendrier des pannes, touchez un jour pour le détail') : en ? 'Breakdown calendar' : 'Calendrier des pannes'}
               className="grid grid-flow-col gap-[3px]"
               style={{ gridTemplateRows: 'repeat(7, minmax(0, 1fr))' }}
             >
@@ -156,14 +167,14 @@ export function CalendarHeatmap({
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-stone-500 dark:text-stone-400">
-          {sum === 0 ? 'Aucune panne sur la période.' : `${fmtIntFR(sum)} panne${sum > 1 ? 's' : ''} sur la période.`}
+          {sum === 0 ? (en ? 'No breakdowns in this period.' : 'Aucune panne sur la période.') : en ? `${fmtIntFR(sum, lang)} breakdown${sum > 1 ? 's' : ''} in this period.` : `${fmtIntFR(sum, lang)} panne${sum > 1 ? 's' : ''} sur la période.`}
         </p>
         <div className="flex items-center gap-1" aria-hidden="true">
-          <span className="mr-0.5 text-[11px] text-stone-500 dark:text-stone-400">Moins</span>
+          <span className="mr-0.5 text-[11px] text-stone-500 dark:text-stone-400">{en ? 'Less' : 'Moins'}</span>
           {HEAT_LEVELS.map((c, i) => (
             <span key={i} className={`h-3 w-3 rounded-[3px] ${c}`} />
           ))}
-          <span className="ml-0.5 text-[11px] text-stone-500 dark:text-stone-400">Plus</span>
+          <span className="ml-0.5 text-[11px] text-stone-500 dark:text-stone-400">{en ? 'More' : 'Plus'}</span>
         </div>
       </div>
     </div>
@@ -179,8 +190,9 @@ export interface TimelineStep {
   done: boolean;
 }
 
-export function IncidentTimeline({ steps }: { steps: TimelineStep[] }) {
+export function IncidentTimeline({ steps, lang }: { steps: TimelineStep[]; lang?: string }) {
   if (steps.length === 0) return null;
+  const en = lang === 'en';
   const currentIdx = steps.findIndex((s) => !s.done);
   return (
     <ol>
@@ -210,12 +222,12 @@ export function IncidentTimeline({ steps }: { steps: TimelineStep[] }) {
                 {s.label}
                 {isCurrent && (
                   <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900 dark:bg-amber-950/60 dark:text-amber-200">
-                    Étape actuelle
+                    {en ? 'Current step' : 'Étape actuelle'}
                   </span>
                 )}
               </p>
               {s.date !== null && s.date !== '' && (
-                <p className="mt-0.5 font-mono text-xs text-stone-500 dark:text-stone-400">{fmtDateFR(s.date)}</p>
+                <p className="mt-0.5 font-mono text-xs text-stone-500 dark:text-stone-400">{fmtDateFR(s.date, lang)}</p>
               )}
             </div>
           </li>
@@ -256,6 +268,7 @@ export function BudgetCompare({
   total,
   currency,
   onSelectSchool,
+  lang,
 }: {
   schools: BudgetSchool[];
   categories: BudgetCategory[];
@@ -263,7 +276,9 @@ export function BudgetCompare({
   currency: string;
   /** Clic sur une école : index dans la liste. */
   onSelectSchool?: (index: number) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   if (schools.length === 0 && categories.length === 0) return null;
   const max = Math.max(0, ...schools.map((s) => s.cost));
   const shown = [...schools].sort((a, b) => b.cost - a.cost);
@@ -276,7 +291,7 @@ export function BudgetCompare({
       {shown.length > 0 && (
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">
-            Dépenses par école
+            {en ? 'Spending per school' : 'Dépenses par école'}
           </p>
           <ul className="space-y-2.5">
             {shown.map((s, i) => {
@@ -286,14 +301,14 @@ export function BudgetCompare({
                   <span className="flex items-baseline justify-between gap-2">
                     <span className="min-w-0 truncate text-sm font-medium">{s.name}</span>
                     <span className="shrink-0 font-mono text-xs font-semibold tabular-nums">
-                      {fmtMoney(s.cost, currency)}
+                      {fmtMoney(s.cost, currency, lang)}
                     </span>
                   </span>
                   <span className="mt-1 block h-2.5 w-full overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800">
                     <span className="block h-full rounded-full bg-teal-600 dark:bg-teal-500" style={{ width: `${pct}%` }} />
                   </span>
                   <span className="mt-0.5 block font-mono text-[11px] text-stone-500 dark:text-stone-400">
-                    {s.incidents === 0 ? 'Aucune panne' : s.incidents === 1 ? '1 panne' : `${fmtIntFR(s.incidents)} pannes`}
+                    {s.incidents === 0 ? (en ? 'No breakdowns' : 'Aucune panne') : s.incidents === 1 ? (en ? '1 breakdown' : '1 panne') : en ? `${fmtIntFR(s.incidents, lang)} breakdowns` : `${fmtIntFR(s.incidents, lang)} pannes`}
                   </span>
                 </>
               );
@@ -304,7 +319,7 @@ export function BudgetCompare({
                     <button
                       type="button"
                       onClick={() => onSelectSchool(origIdx)}
-                      title={`Analyser ${s.name}`}
+                      title={en ? `Analyze ${s.name}` : `Analyser ${s.name}`}
                       className="block w-full rounded-lg text-left transition-[transform] duration-150 ease-out active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100"
                     >
                       {row}
@@ -321,12 +336,12 @@ export function BudgetCompare({
       {categories.length > 0 && (
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">
-            Parts par catégorie
+            {en ? 'Shares by category' : 'Parts par catégorie'}
           </p>
           <div
             className="flex h-3 w-full overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800"
             role="img"
-            aria-label={`Répartition : ${categories.map((c) => `${c.label} ${shareOf(c).toLocaleString(LOCALE, { maximumFractionDigits: 1 })} %`).join(', ')}`}
+            aria-label={en ? `Breakdown: ${categories.map((c) => `${c.label} ${shareOf(c).toLocaleString(localeFor(lang), { maximumFractionDigits: 1 })}%`).join(', ')}` : `Répartition : ${categories.map((c) => `${c.label} ${shareOf(c).toLocaleString(localeFor(lang), { maximumFractionDigits: 1 })} %`).join(', ')}`}
           >
             {categories.map((c) => (
               <span
@@ -342,7 +357,7 @@ export function BudgetCompare({
                 <span aria-hidden="true" className={`h-2.5 w-2.5 shrink-0 rounded-full ${CATEGORY_DOT[c.code] ?? CATEGORY_DOT.unknown}`} />
                 <span className="min-w-0 flex-1 truncate text-stone-600 dark:text-stone-400">{c.label}</span>
                 <span className="shrink-0 font-mono text-xs tabular-nums">
-                  {fmtMoney(c.cost, currency)} · {shareOf(c).toLocaleString(LOCALE, { maximumFractionDigits: 1 })} %
+                  {fmtMoney(c.cost, currency, lang)} · {shareOf(c).toLocaleString(localeFor(lang), { maximumFractionDigits: 1 })} %
                 </span>
               </li>
             ))}
@@ -350,8 +365,8 @@ export function BudgetCompare({
         </div>
       )}
       <p className="border-t border-stone-200/70 pt-2 text-sm dark:border-white/[0.06]">
-        <span className="text-stone-500 dark:text-stone-400">Total : </span>
-        <span className="font-mono font-bold tabular-nums">{fmtMoney(total, currency)}</span>
+        <span className="text-stone-500 dark:text-stone-400">{en ? 'Total: ' : 'Total : '}</span>
+        <span className="font-mono font-bold tabular-nums">{fmtMoney(total, currency, lang)}</span>
       </p>
     </div>
   );

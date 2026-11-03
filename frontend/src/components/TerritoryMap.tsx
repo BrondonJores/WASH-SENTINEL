@@ -58,14 +58,15 @@ function FitBounds({ points }: { points: TerritoryPoint[] }) {
   return null;
 }
 
-const LEGEND = [
-  { key: 'critical', label: 'Critique' },
-  { key: 'high', label: 'Haute' },
-  { key: 'medium', label: 'Moyenne' },
-  { key: 'low', label: 'Basse / OK' },
+const LEGEND: { key: string; fr: string; en: string }[] = [
+  { key: 'critical', fr: 'Critique', en: 'Critical' },
+  { key: 'high', fr: 'Haute', en: 'High' },
+  { key: 'medium', fr: 'Moyenne', en: 'Medium' },
+  { key: 'low', fr: 'Basse / OK', en: 'Low / OK' },
 ];
 
-export function TerritoryLegend() {
+export function TerritoryLegend({ lang }: { lang?: string }) {
+  const en = lang === 'en';
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1">
       {LEGEND.map((l) => (
@@ -75,7 +76,7 @@ export function TerritoryLegend() {
             className="inline-block h-2.5 w-2.5 rounded-full"
             style={{ backgroundColor: urgencyColor(l.key) }}
           />
-          {l.label}
+{en ? l.en : l.fr}
         </span>
       ))}
     </div>
@@ -89,7 +90,8 @@ const OFFLINE_GRID_STYLE: CSSProperties = {
   backgroundSize: '24px 24px',
 };
 
-export function TerritoryMap({ points }: { points: TerritoryPoint[] }) {
+export function TerritoryMap({ points, lang }: { points: TerritoryPoint[]; lang?: string }) {
+  const en = lang === 'en';
   const [isOffline, setIsOffline] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const tileErrorsRef = useRef(0);
@@ -186,7 +188,7 @@ export function TerritoryMap({ points }: { points: TerritoryPoint[] }) {
               <Popup>
                 <strong>{p.name}</strong>
                 <br />
-                {p.district} · {p.openIncidents} incident(s) ouvert(s) · {p.affectedStudents} élèves
+{p.district} · {p.openIncidents} {en ? 'open incident(s)' : 'incident(s) ouvert(s)'} · {p.affectedStudents} {en ? 'pupils' : 'élèves'}
               </Popup>
             </CircleMarker>
           );
@@ -199,14 +201,14 @@ export function TerritoryMap({ points }: { points: TerritoryPoint[] }) {
             role="status"
             className="pointer-events-auto rounded-full border border-amber-300 bg-amber-100 px-3 py-1 text-xs font-medium text-amber-900 shadow dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100"
           >
-            Mode hors-ligne — positions approximatives
+{en ? 'Offline mode — approximate positions' : 'Mode hors-ligne — positions approximatives'}
           </p>
           <button
             type="button"
             onClick={handleRetry}
             className="pointer-events-auto rounded-full border border-stone-300 bg-white px-3 py-1 text-xs font-medium text-stone-800 shadow transition-colors hover:bg-stone-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-stone-500 motion-reduce:transition-none dark:border-stone-600 dark:bg-stone-900 dark:text-stone-100 dark:hover:bg-stone-800"
           >
-            Réessayer
+{en ? 'Retry' : 'Réessayer'}
           </button>
         </div>
       )}

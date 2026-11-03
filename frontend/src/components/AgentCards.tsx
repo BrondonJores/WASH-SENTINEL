@@ -17,19 +17,19 @@ import { DossierView, PosterCard } from './DossierView';
 import type { DeckSlide } from './SlideDeck';
 import type { TerritoryPoint } from './TerritoryMap';
 import type { DetailKind } from './DetailDrawer';
-import { LOCALE } from '../lib/locale';
-import { STATUS_FR, URGENCY_FR, urgencyTone } from '../lib/wash';
+import { localeFor } from '../lib/locale';
+import { STATUS_EN, STATUS_FR, URGENCY_EN, URGENCY_FR, urgencyTone } from '../lib/wash';
 
 // ---------- Helpers défensifs (les observations tools varient) ----------
 
-const fmtInt = (v: unknown): string => {
-  if (typeof v === 'number' && Number.isFinite(v)) return new Intl.NumberFormat(LOCALE).format(Math.round(v));
+const fmtInt = (v: unknown, lang?: string): string => {
+  if (typeof v === 'number' && Number.isFinite(v)) return new Intl.NumberFormat(localeFor(lang)).format(Math.round(v));
   return '—';
 };
 
-const fmtNum1 = (v: unknown): string => {
+const fmtNum1 = (v: unknown, lang?: string): string => {
   if (typeof v === 'number' && Number.isFinite(v))
-    return v.toLocaleString(LOCALE, { maximumFractionDigits: 1 });
+    return v.toLocaleString(localeFor(lang), { maximumFractionDigits: 1 });
   return '—';
 };
 
@@ -52,27 +52,23 @@ const totalAffMax = (d: Record<string, unknown>): number | null =>
       ? d.total_affected_students
       : null;
 
-const fmtDate = (v: unknown): string => {
+const fmtDate = (v: unknown, lang?: string): string => {
   if (typeof v !== 'string' || v === '') return '—';
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
   const d =
     m !== null ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(v);
   return Number.isNaN(d.getTime())
     ? '—'
-    : d.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
+    : d.toLocaleDateString(localeFor(lang), { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 /** Remplace les dates ISO (AAAA-MM-JJ) d'un texte par des dates lisibles. */
-const humanizeDates = (text: string): string =>
-  text.replace(/\d{4}-\d{2}-\d{2}/g, (m) => fmtDate(m));
+const humanizeDates = (text: string, lang?: string): string =>
+  text.replace(/\d{4}-\d{2}-\d{2}/g, (m) => fmtDate(m, lang));
 
 /** Assemble un texte parlé en français simple à partir de morceaux. */
 const speak = (...parts: (string | undefined)[]): string =>
   parts.filter((p): p is string => typeof p === 'string' && p.trim() !== '').join(' ');
-
-/** Convertit un montant en libellé « 12 500 XAF » ; undefined si absent. */
-const fmtCostXAF = (v: unknown): string | undefined =>
-  typeof v === 'number' && Number.isFinite(v) ? `${fmtInt(v)} XAF` : undefined;
 
 const asArray = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 const asRecord = (v: unknown): Record<string, unknown> =>
@@ -98,10 +94,22 @@ const CATEGORY_LABEL: Record<string, string> = {
   handwashing: 'Lavage des mains',
   sewage_drainage: 'Évacuation',
 };
+// Jumeau EN court ('Drainage'), miroir de la divergence volontaire ci-dessus.
+const CATEGORY_LABEL_EN: Record<string, string> = {
+  water_point: 'Water point',
+  toilets_latrines: 'Toilets / latrines',
+  handwashing: 'Handwashing',
+  sewage_drainage: 'Drainage',
+};
 const RECOMMENDATION: Record<string, { label: string; tone: 'danger' | 'warn' | 'success' }> = {
   REPLACE_EQUIPMENT: { label: "Remplacer l'équipement", tone: 'danger' },
   MONITOR_CLOSELY: { label: 'Surveillance renforcée', tone: 'warn' },
   CONTINUE_REPAIR: { label: 'Continuer les réparations', tone: 'success' },
+};
+const RECOMMENDATION_EN: Record<string, { label: string; tone: 'danger' | 'warn' | 'success' }> = {
+  REPLACE_EQUIPMENT: { label: 'Replace the equipment', tone: 'danger' },
+  MONITOR_CLOSELY: { label: 'Enhanced monitoring', tone: 'warn' },
+  CONTINUE_REPAIR: { label: 'Continue repairs', tone: 'success' },
 };
 const VERDICT_STYLE: Record<string, string> = {
   danger: 'bg-red-50 text-red-800 dark:bg-red-950/60 dark:text-red-200',
@@ -162,23 +170,24 @@ function CardShell({
 }
 
 /** Origine d'un coût du neuf : fiche école, médiane référentiel (+ liens), ou non communiqué. */
-function SourceLine({ source, names, urls }: { source: unknown; names: unknown; urls: unknown }) {
+function SourceLine({ source, names, urls, lang }: { source: unknown; names: unknown; urls: unknown; lang?: string }) {
   if (typeof source !== 'string' || source === '') return null;
+  const en = lang === 'en';
   const nameList = asArray<unknown>(names).filter((n): n is string => typeof n === 'string' && n !== '');
   const urlList = asArray<unknown>(urls).filter((u): u is string => typeof u === 'string' && u.startsWith('http'));
   const cited = nameList.length > 0 ? ` (${nameList.slice(0, 2).join(', ')})` : '';
   const label =
     source === 'ecole'
-      ? 'Source : fiche école'
+      ? en ? 'Source: school record' : 'Source : fiche école'
       : source === 'referentiel'
-        ? `Source : médiane référentiel${cited}`
-        : 'Source : non communiqué';
+        ? en ? `Source: reference median${cited}` : `Source : médiane référentiel${cited}`
+        : en ? 'Source: not provided' : 'Source : non communiqué';
   return (
     <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
       {label}
       {urlList.slice(0, 2).map((u) => (
         <a key={u} href={u} target="_blank" rel="noreferrer" className="ml-2 underline">
-          voir
+{en ? 'view' : 'voir'}
         </a>
       ))}
     </p>
@@ -199,11 +208,13 @@ function HeroStat({
   value,
   delta,
   invert = false,
+  lang,
 }: {
   label: string;
   value: string;
   delta?: number | null;
   invert?: boolean;
+  lang?: string;
 }) {
   return (
     <div className="flex items-end justify-between gap-3">
@@ -211,12 +222,12 @@ function HeroStat({
         <p className="text-xs text-stone-500 dark:text-stone-400">{label}</p>
         <p className="mt-1 font-display text-[34px] font-extrabold leading-none tabular-nums">{value}</p>
       </div>
-      {delta !== undefined && delta !== null && <DeltaChip pct={delta} invert={invert} />}
+{delta !== undefined && delta !== null && <DeltaChip pct={delta} invert={invert} lang={lang} />}
     </div>
   );
 }
 
-function DeltaChip({ pct, invert = false }: { pct: number; invert?: boolean }) {
+function DeltaChip({ pct, invert = false, lang }: { pct: number; invert?: boolean; lang?: string }) {
   if (!Number.isFinite(pct)) return null;
   const up = pct >= 0;
   const good = invert ? !up : up;
@@ -234,7 +245,7 @@ function DeltaChip({ pct, invert = false }: { pct: number; invert?: boolean }) {
       {!flat && (
         <span aria-hidden="true">{up ? '▲' : '▼'}</span>
       )}
-      {flat ? 'stable' : `${up ? '+' : ''}${pct.toLocaleString(LOCALE, { maximumFractionDigits: 0 })} %`}
+{flat ? 'stable' : `${up ? '+' : ''}${pct.toLocaleString(localeFor(lang), { maximumFractionDigits: 0 })} %`}
     </span>
   );
 }
@@ -312,8 +323,10 @@ function NeedBar({ value, max, bar = 'bg-teal-600 dark:bg-teal-500' }: { value: 
 /** Délai de retour à « Copier » après un appui réussi. */
 const COPIED_RESET_MS = 1500;
 
-function CopyButton({ value, label = 'Copier' }: { value: string; label?: string }) {
+function CopyButton({ value, label, lang }: { value: string; label?: string; lang?: string }) {
   const [copied, setCopied] = useState(false);
+  const en = lang === 'en';
+  const idle = label ?? (en ? 'Copy' : 'Copier');
   if (value === '') return null;
   return (
     <Button
@@ -328,7 +341,7 @@ function CopyButton({ value, label = 'Copier' }: { value: string; label?: string
       }}
     >
       <Icon name={copied ? 'check' : 'file'} className="h-3.5 w-3.5" />
-      {copied ? 'Copié' : label}
+{copied ? (en ? 'Copied' : 'Copié') : idle}
     </Button>
   );
 }
@@ -362,9 +375,10 @@ const asPhotos = (v: unknown): IncidentPhoto[] => {
   return out;
 };
 
-/** Rangee de miniatures : lazy, alt FR, clic = nouvel onglet. Rien si vide. */
-function IncidentPhotoRow({ photos, label }: { photos: IncidentPhoto[]; label: string }) {
+/** Rangee de miniatures : lazy, alt FR/EN, clic = nouvel onglet. Rien si vide. */
+function IncidentPhotoRow({ photos, label, lang }: { photos: IncidentPhoto[]; label: string; lang?: string }) {
   if (photos.length === 0) return null;
+  const en = lang === 'en';
   return (
     <div className="mt-3">
       <p className="text-[11px] text-stone-500 dark:text-stone-400">Photos ({photos.length})</p>
@@ -376,12 +390,12 @@ function IncidentPhotoRow({ photos, label }: { photos: IncidentPhoto[]; label: s
             target="_blank"
             rel="noreferrer"
             title={p.caption ?? label}
-            aria-label={`Ouvrir la photo ${i + 1} de ${label} dans un nouvel onglet`}
+            aria-label={en ? `Open photo ${i + 1} of ${label} in a new tab` : `Ouvrir la photo ${i + 1} de ${label} dans un nouvel onglet`}
             className="shrink-0 overflow-hidden rounded-lg border border-line transition-[border-color,transform] duration-150 ease-snap hover:border-accent active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
           >
             <img
               src={p.url}
-              alt={`Photo ${i + 1} de ${p.caption ?? label}`}
+              alt={en ? `Photo ${i + 1} of ${p.caption ?? label}` : `Photo ${i + 1} de ${p.caption ?? label}`}
               loading="lazy"
               className="h-16 w-16 object-cover"
             />
@@ -398,11 +412,16 @@ function IncidentPickerCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
+  const statusLabel = en ? STATUS_EN : STATUS_FR;
   const [picked, setPicked] = useState<string | null>(null);
   const candidates = asArray<Record<string, unknown>>(data.candidates);
   const hint = fmtOpt(data.hint);
@@ -418,13 +437,13 @@ function IncidentPickerCard({
       title={title}
       meta={hint === undefined ? countLabel : `« ${hint} » · ${countLabel}`}
       listenText={speak(
-        'Plusieurs incidents sont possibles.',
-        hint !== undefined ? `Tu as dit : ${hint}.` : undefined,
-        'Choisis le bon dans la liste.',
+        en ? 'Several incidents are possible.' : 'Plusieurs incidents sont possibles.',
+        hint !== undefined ? (en ? `You said: ${hint}.` : `Tu as dit : ${hint}.`) : undefined,
+        en ? 'Pick the right one from the list.' : 'Choisis le bon dans la liste.',
       )}
     >
       <p className="mb-3 text-sm text-stone-500 dark:text-stone-400">
-        Plusieurs incidents correspondent. Cliquez sur le bon — école, urgence et élèves aident à trancher.
+{en ? 'Several incidents match. Click the right one — school, urgency and pupils help decide.' : 'Plusieurs incidents correspondent. Cliquez sur le bon — école, urgence et élèves aident à trancher.'}
       </p>
       <ul className="space-y-2">
         {candidates.map((c, i) => {
@@ -451,18 +470,18 @@ function IncidentPickerCard({
                     {fmtText(c.school_name)}{typeof c.district === 'string' && c.district !== '' ? ` · ${c.district}` : ''}
                   </span>
                   <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <Badge tone={urgencyTone(urgency)}>{URGENCY_FR[urgency] ?? urgency}</Badge>
-                    <Badge>{STATUS_FR[String(c.status)] ?? fmtText(c.status)}</Badge>
+                    <Badge tone={urgencyTone(urgency)}>{urgencyLabel[urgency] ?? urgency}</Badge>
+                    <Badge>{statusLabel[String(c.status)] ?? fmtText(c.status)}</Badge>
                     <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{ref}</span>
                   </span>
                 </span>
                 <span className="shrink-0 text-right">
-                  <span className="block font-display text-lg font-extrabold tabular-nums">{fmtInt(c.affected_students)}</span>
-                  <span className="block text-[11px] text-stone-500 dark:text-stone-400">élèves</span>
+                  <span className="block font-display text-lg font-extrabold tabular-nums">{fmtInt(c.affected_students, lang)}</span>
+                  <span className="block text-[11px] text-stone-500 dark:text-stone-400">{en ? 'pupils' : 'élèves'}</span>
                   {isPicked && <Icon name="check" className="ml-auto mt-1 h-4 w-4" />}
                 </span>
               </button>
-              <IncidentPhotoRow photos={asPhotos(c.photos)} label={fmtText(c.title)} />
+              <IncidentPhotoRow photos={asPhotos(c.photos)} label={fmtText(c.title)} lang={lang} />
             </li>
           );
         })}
@@ -476,12 +495,18 @@ function IncidentCard({
   data,
   onAsk,
   onDetail,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
   onDetail?: (kind: DetailKind, id: number) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
+  const statusLabel = en ? STATUS_EN : STATUS_FR;
+  const categoryLabel = en ? CATEGORY_LABEL_EN : CATEGORY_LABEL;
   const urgency = typeof data.urgency === 'string' ? data.urgency : 'medium';
   const priority = typeof data.priority_score === 'number' ? data.priority_score : null;
   const school = fmtOpt(data.school_name);
@@ -493,40 +518,40 @@ function IncidentCard({
       title={title}
       meta={fmtOpt(data.reference_code)}
       listenText={speak(
-        "Détail de l'intervention.",
+        en ? 'Intervention details.' : "Détail de l'intervention.",
         summary,
-        school !== undefined ? `École : ${school}.` : undefined,
+        school !== undefined ? (en ? `School: ${school}.` : `École : ${school}.`) : undefined,
         affected === null
           ? undefined
           : affected === 0
-            ? 'Aucun élève touché.'
+            ? en ? 'No pupils affected.' : 'Aucun élève touché.'
             : affected === 1
-              ? '1 élève touché.'
-              : `${affected} élèves touchés.`,
+              ? en ? '1 pupil affected.' : '1 élève touché.'
+              : en ? `${affected} pupils affected.` : `${affected} élèves touchés.`,
       )}
       actions={
         <>
           {onDetail !== undefined && incidentId !== null && (
             <Button size="sm" onClick={() => onDetail('incident', incidentId)}>
-              Détails
+              {en ? 'Details' : 'Détails'}
             </Button>
           )}
-          <CopyButton value={fmtOpt(data.reference_code) ?? ''} label="Référence" />
+          <CopyButton value={fmtOpt(data.reference_code) ?? ''} label={en ? 'Reference' : 'Référence'} lang={lang} />
         </>
       }
     >
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-xs text-stone-500 dark:text-stone-400">Priorité IA</p>
+          <p className="text-xs text-stone-500 dark:text-stone-400">{en ? 'AI priority' : 'Priorité IA'}</p>
           <p className="mt-1 font-display text-[34px] font-extrabold leading-none tabular-nums">
-            {priority === null ? '—' : fmtNum1(priority)}
+            {priority === null ? '—' : fmtNum1(priority, lang)}
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          <Badge tone={urgencyTone(urgency)}>Urgence {URGENCY_FR[urgency] ?? urgency}</Badge>
-          <Badge>{STATUS_FR[String(data.status)] ?? fmtText(data.status)}</Badge>
+          <Badge tone={urgencyTone(urgency)}>{en ? `${urgencyLabel[urgency] ?? urgency} urgency` : `Urgence ${urgencyLabel[urgency] ?? urgency}`}</Badge>
+          <Badge>{statusLabel[String(data.status)] ?? fmtText(data.status)}</Badge>
           {typeof data.category === 'string' && (
-            <Badge tone="info">{CATEGORY_LABEL[data.category] ?? data.category}</Badge>
+            <Badge tone="info">{categoryLabel[data.category] ?? data.category}</Badge>
           )}
         </div>
       </div>
@@ -537,16 +562,16 @@ function IncidentCard({
       <p className="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400">
         {fmtText(data.school_name)} · {fmtText(data.district)}
       </p>
-      <IncidentPhotoRow photos={asPhotos(data.photos)} label={title} />
+      <IncidentPhotoRow photos={asPhotos(data.photos)} label={title} lang={lang} />
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <Stat label="Élèves affectés" value={fmtInt(data.affected_students)} />
-        <Stat label="Signalé le" value={fmtDate(data.reported_at)} mono={false} />
+        <Stat label={en ? 'Affected pupils' : 'Élèves affectés'} value={fmtInt(data.affected_students, lang)} />
+        <Stat label={en ? 'Reported on' : 'Signalé le'} value={fmtDate(data.reported_at, lang)} mono={false} />
         <Stat
-          label="Catégorie"
+          label={en ? 'Category' : 'Catégorie'}
           value={
             typeof data.category === 'string' && data.category !== ''
-              ? (CATEGORY_LABEL[data.category] ?? data.category)
-              : 'Non précisée'
+              ? (categoryLabel[data.category] ?? data.category)
+              : en ? 'Not specified' : 'Non précisée'
           }
           mono={false}
         />
@@ -555,8 +580,10 @@ function IncidentCard({
         onAsk={onAsk}
         items={
           school !== undefined
-            ? [`Analyser ${school} ?`, `Voir les tendances de ${school}`]
-            : ['Résume la situation du district']
+            ? en
+              ? [`Analyze ${school}?`, `Show trends for ${school}`]
+              : [`Analyser ${school} ?`, `Voir les tendances de ${school}`]
+            : [en ? 'Summarize the district situation' : 'Résume la situation du district']
         }
       />
     </CardShell>
@@ -568,37 +595,41 @@ function RankingCard({
   data,
   onAsk,
   onDetail,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
   onDetail?: (kind: DetailKind, id: number) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
   const ranking = asArray<Record<string, unknown>>(data.ranking);
   const max = Math.max(0, ...ranking.map((r) => (typeof r.need_score === 'number' ? r.need_score : 0)));
   const top = fmtOpt(ranking[0]?.school_name);
   const totalSchools = typeof data.total === 'number' ? data.total : ranking.length;
   const schoolsMeta =
-    totalSchools === 0 ? 'Aucune école' : `${fmtInt(totalSchools)} école${totalSchools > 1 ? 's' : ''}`;
+    totalSchools === 0 ? (en ? 'No schools' : 'Aucune école') : `${fmtInt(totalSchools, lang)} ${en ? `school${totalSchools > 1 ? 's' : ''}` : `école${totalSchools > 1 ? 's' : ''}`}`;
   const rankingInsight = fmtOpt(data.insight) ?? '';
   return (
     <CardShell
       title={title}
       meta={schoolsMeta}
       listenText={speak(
-        'Classement des écoles par besoin.',
+        en ? 'School ranking by need.' : 'Classement des écoles par besoin.',
         rankingInsight !== '' ? rankingInsight : undefined,
-        top !== undefined ? `En premier : ${top}.` : 'Aucune école à classer.',
+        top !== undefined ? (en ? `Top ranked: ${top}.` : `En premier : ${top}.`) : en ? 'No schools to rank.' : 'Aucune école à classer.',
       )}
     >
       <InsightLine text={rankingInsight} />
       {ranking.length === 0 ? (
         <GuideEmpty
-          phrase="Aucune école à classer."
-          conseil="Essaie un autre district, ou regarde les alertes pour choisir une zone."
+          phrase={en ? 'No schools to rank.' : 'Aucune école à classer.'}
+          conseil={en ? 'Try another district, or check the alerts to pick an area.' : 'Essaie un autre district, ou regarde les alertes pour choisir une zone.'}
           actions={[
-            { label: 'Voir un autre district ?', question: 'Voir un autre district ?' },
-            { label: 'Voir les alertes ?', question: 'Voir les alertes du district ?' },
+            { label: en ? 'View another district?' : 'Voir un autre district ?', question: en ? 'View another district?' : 'Voir un autre district ?' },
+            { label: en ? 'View the alerts?' : 'Voir les alertes ?', question: en ? 'View the district alerts?' : 'Voir les alertes du district ?' },
           ]}
           onAsk={onAsk}
         />
@@ -610,10 +641,10 @@ function RankingCard({
             const n = typeof r.open_incidents === 'number' ? r.open_incidents : 0;
             const pupils = affMax(r) ?? 0;
             const oldest = typeof r.oldest_days === 'number' ? r.oldest_days : 0;
-            const incidentsLabel = n === 0 ? 'Aucun incident' : `${fmtInt(n)} incident${n > 1 ? 's' : ''}`;
+            const incidentsLabel = n === 0 ? (en ? 'No incidents' : 'Aucun incident') : `${fmtInt(n, lang)} incident${n > 1 ? 's' : ''}`;
             const pupilsLabel =
-              pupils === 0 ? 'aucun élève' : `${fmtInt(pupils)} élève${pupils > 1 ? 's' : ''}`;
-            const oldestLabel = oldest <= 0 ? "aujourd'hui" : `${fmtInt(oldest)} j`;
+              pupils === 0 ? (en ? 'no pupils' : 'aucun élève') : `${fmtInt(pupils, lang)} ${en ? `pupil${pupils > 1 ? 's' : ''}` : `élève${pupils > 1 ? 's' : ''}`}`;
+            const oldestLabel = oldest <= 0 ? (en ? 'today' : "aujourd'hui") : `${fmtInt(oldest, lang)}${en ? 'd' : ' j'}`;
             const schoolId = typeof r.school_id === 'number' ? r.school_id : null;
             const clickable = onDetail !== undefined && schoolId !== null;
             const rowClass = `flex items-center gap-3 py-2.5 first:pt-0 last:pb-0 ${
@@ -634,10 +665,10 @@ function RankingCard({
                   </span>
                 </span>
                 <span className="flex shrink-0 flex-col items-end gap-1">
-                  <span className="font-display text-lg font-extrabold tabular-nums">{fmtNum1(score)}</span>
+                  <span className="font-display text-lg font-extrabold tabular-nums">{fmtNum1(score, lang)}</span>
                   <span className="inline-flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-400">
                     <UrgencyDot level={urg} />
-                    {URGENCY_FR[urg] ?? urg}
+{urgencyLabel[urg] ?? urg}
                   </span>
                 </span>
               </>
@@ -649,7 +680,7 @@ function RankingCard({
                 onClick={() => {
                   if (schoolId !== null) onDetail?.('school', schoolId);
                 }}
-                title="Voir le détail de l'école"
+                title={en ? 'View school details' : "Voir le détail de l'école"}
                 className={`${rowClass} w-full rounded-lg text-left transition-[background-color,transform] duration-150 ease-snap hover:bg-raised active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100`}
               >
                 {content}
@@ -664,7 +695,7 @@ function RankingCard({
       )}
       <FollowUps
         onAsk={onAsk}
-        items={top !== undefined ? [`Analyser ${top} ?`, 'Voir la carte du territoire'] : ['Voir la carte du territoire']}
+        items={top !== undefined ? (en ? [`Analyze ${top}?`, 'View the territory map'] : [`Analyser ${top} ?`, 'Voir la carte du territoire']) : [en ? 'View the territory map' : 'Voir la carte du territoire']}
       />
     </CardShell>
   );
@@ -674,13 +705,17 @@ function AnalysisCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
   const reco =
-    typeof data.recommendation === 'string' ? RECOMMENDATION[data.recommendation] : undefined;
+    typeof data.recommendation === 'string' ? (en ? RECOMMENDATION_EN : RECOMMENDATION)[data.recommendation] : undefined;
   const ratio = typeof data.repair_ratio_percent === 'number' ? data.repair_ratio_percent : null;
   const open = asArray<Record<string, unknown>>(data.open_incidents);
   const school = fmtOpt(data.school_name);
@@ -690,7 +725,7 @@ function AnalysisCard({
       title={title}
       meta={fmtOpt(data.district)}
       listenText={speak(
-        school !== undefined ? `Analyse de ${school}.` : "Analyse de l'école.",
+        school !== undefined ? (en ? `Analysis of ${school}.` : `Analyse de ${school}.`) : en ? 'Analysis of the school.' : "Analyse de l'école.",
         reco?.label,
         justification,
       )}
@@ -705,14 +740,14 @@ function AnalysisCard({
       )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div>
-          <p className="text-[11px] text-stone-500 dark:text-stone-400">Ratio réparations / neuf</p>
+          <p className="text-[11px] text-stone-500 dark:text-stone-400">{en ? 'Repair vs new ratio' : 'Ratio réparations / neuf'}</p>
           <div className="mt-1">
             {ratio === null ? (
               <p className="font-mono text-sm font-semibold tabular-nums">—</p>
             ) : (
               <ThresholdGauge
                 value={ratio}
-                display={`${fmtNum1(ratio)} %`}
+                display={`${fmtNum1(ratio, lang)} %`}
                 thresholds={[
                   { value: 30, label: '30 %', tone: 'warn' },
                   { value: 55, label: '55 %', tone: 'danger' },
@@ -721,13 +756,13 @@ function AnalysisCard({
             )}
           </div>
         </div>
-        <Stat label="Pannes / an" value={fmtNum1(data.annualized_failure_rate)} />
-        <Stat label="Économies potentielles" value={fmtInt(data.financial_saving_potential)} />
+        <Stat label={en ? 'Breakdowns / year' : 'Pannes / an'} value={fmtNum1(data.annualized_failure_rate, lang)} />
+        <Stat label={en ? 'Potential savings' : 'Économies potentielles'} value={fmtInt(data.financial_saving_potential, lang)} />
         <Stat
-          label="Coût du neuf"
+          label={en ? 'New equipment cost' : 'Coût du neuf'}
           value={
             typeof data.estimated_replacement_cost === 'number'
-              ? `${fmtInt(data.estimated_replacement_cost)} XAF`
+              ? `${fmtInt(data.estimated_replacement_cost, lang)} XAF`
               : '—'
           }
         />
@@ -736,13 +771,14 @@ function AnalysisCard({
         source={data.replacement_source}
         names={data.replacement_source_names}
         urls={data.replacement_source_urls}
+        lang={lang}
       />
       {typeof data.justification === 'string' && data.justification !== '' && (
         <p className="mt-3 text-sm leading-relaxed">{data.justification}</p>
       )}
       {typeof data.suggested_modernization === 'string' && data.suggested_modernization !== '' && (
         <p className="mt-2 text-sm">
-          <span className="font-semibold">Modernisation suggérée : </span>
+          <span className="font-semibold">{en ? 'Suggested modernization: ' : 'Modernisation suggérée : '}</span>
           {data.suggested_modernization}
         </p>
       )}
@@ -754,11 +790,11 @@ function AnalysisCard({
               <div key={String(inc.id ?? i)} className="flex items-center gap-2 py-1.5 text-sm first:pt-0 last:pb-0">
                 <UrgencyDot level={urg} />
                 <span className="w-16 shrink-0 text-xs text-stone-600 dark:text-stone-400">
-                  {URGENCY_FR[urg] ?? urg}
+                  {urgencyLabel[urg] ?? urg}
                 </span>
                 <span className="min-w-0 flex-1 truncate">{fmtText(inc.title)}</span>
                 <span className="shrink-0 font-mono text-xs text-stone-500 dark:text-stone-400">
-                  {fmtInt(inc.affected_students)} élèves
+                  {fmtInt(inc.affected_students, lang)} {en ? 'pupils' : 'élèves'}
                 </span>
               </div>
             );
@@ -769,8 +805,10 @@ function AnalysisCard({
         onAsk={onAsk}
         items={
           school !== undefined
-            ? [`Voir les tendances de ${school}`, 'Préparer un briefing']
-            : ['Préparer un briefing']
+            ? en
+              ? [`Show trends for ${school}`, 'Prepare a briefing']
+              : [`Voir les tendances de ${school}`, 'Préparer un briefing']
+            : [en ? 'Prepare a briefing' : 'Préparer un briefing']
         }
       />
     </CardShell>
@@ -781,11 +819,16 @@ function DistrictCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
+  const categoryLabel = en ? CATEGORY_LABEL_EN : CATEGORY_LABEL;
   const byUrgency = asRecord(data.by_urgency);
   const byCategory = asRecord(data.by_category);
   const schools = asArray<string>(data.schools_involved);
@@ -797,30 +840,30 @@ function DistrictCard({
     <CardShell
       title={title}
       listenText={speak(
-        'Synthèse du district.',
+        en ? 'District summary.' : 'Synthèse du district.',
         districtInsight,
         total === 0
-          ? 'Aucun incident ouvert.'
+          ? en ? 'No open incidents.' : 'Aucun incident ouvert.'
           : total === 1
-            ? '1 incident ouvert.'
-            : `${total} incidents ouverts.`,
-        totalPupils === 0 ? 'Aucun élève touché.' : `${totalPupils} élèves touchés.`,
+            ? en ? '1 open incident.' : '1 incident ouvert.'
+            : en ? `${total} open incidents.` : `${total} incidents ouverts.`,
+        totalPupils === 0 ? (en ? 'No pupils affected.' : 'Aucun élève touché.') : en ? `${totalPupils} pupils affected.` : `${totalPupils} élèves touchés.`,
       )}
     >
       <div className="grid grid-cols-2 gap-3">
-        <HeroStat label="Incidents ouverts" value={fmtInt(data.open_incidents)} />
-        <HeroStat label="Élèves affectés" value={fmtInt(totalAffMax(data))} />
+        <HeroStat label={en ? 'Open incidents' : 'Incidents ouverts'} value={fmtInt(data.open_incidents, lang)} lang={lang} />
+        <HeroStat label={en ? 'Affected pupils' : 'Élèves affectés'} value={fmtInt(totalAffMax(data), lang)} lang={lang} />
       </div>
       <div className="mt-3">
         <InsightLine text={districtInsight ?? ''} />
       </div>
       {total === 0 && (
         <GuideEmpty
-          phrase="Aucun incident ouvert."
-          conseil="Tout est calme ici. Regarde un autre district ou les alertes."
+          phrase={en ? 'No open incidents.' : 'Aucun incident ouvert.'}
+          conseil={en ? 'All quiet here. Check another district or the alerts.' : 'Tout est calme ici. Regarde un autre district ou les alertes.'}
           actions={[
-            { label: 'Voir un autre district ?', question: 'Voir un autre district ?' },
-            { label: 'Voir les alertes ?', question: 'Voir les alertes du district ?' },
+            { label: en ? 'View another district?' : 'Voir un autre district ?', question: en ? 'View another district?' : 'Voir un autre district ?' },
+            { label: en ? 'View the alerts?' : 'Voir les alertes ?', question: en ? 'View the district alerts?' : 'Voir les alertes du district ?' },
           ]}
           onAsk={onAsk}
         />
@@ -831,12 +874,12 @@ function DistrictCard({
             <div key={k} className="flex items-center gap-2">
               <span className="flex w-24 shrink-0 items-center gap-1.5 text-xs text-stone-600 dark:text-stone-400">
                 <UrgencyDot level={k} />
-                {URGENCY_FR[k] ?? k}
+{urgencyLabel[k] ?? k}
               </span>
               <div className="flex-1">
                 <NeedBar value={v} max={Math.max(total, 1)} bar={URGENCY_BAR[k] ?? 'bg-teal-600 dark:bg-teal-500'} />
               </div>
-              <span className="w-8 shrink-0 text-right font-mono text-xs tabular-nums">{fmtInt(v)}</span>
+              <span className="w-8 shrink-0 text-right font-mono text-xs tabular-nums">{fmtInt(v, lang)}</span>
             </div>
           ))}
         </div>
@@ -845,7 +888,7 @@ function DistrictCard({
         <div className="mt-3 flex flex-wrap gap-1.5">
           {Object.entries(byCategory).map(([k, v]) => (
             <Badge key={k} tone="info">
-              {CATEGORY_LABEL[k] ?? k} · {fmtInt(v)}
+{categoryLabel[k] ?? k} · {fmtInt(v, lang)}
             </Badge>
           ))}
         </div>
@@ -859,7 +902,7 @@ function DistrictCard({
       )}
       <FollowUps
         onAsk={onAsk}
-        items={["Quelles écoles ont le plus besoin d'aide ?", 'Voir la carte du territoire']}
+        items={[en ? 'Which schools need the most help?' : "Quelles écoles ont le plus besoin d'aide ?", en ? 'View the territory map' : 'Voir la carte du territoire']}
       />
     </CardShell>
   );
@@ -883,11 +926,12 @@ const trendNum = (v: unknown): number =>
   typeof v === 'number' && Number.isFinite(v) ? v : 0;
 
 /** Entrées anneau urgences depuis by_urgency (optionnel, défensif). */
-function trendUrgencyEntries(data: Record<string, unknown>): DonutEntry[] {
+function trendUrgencyEntries(data: Record<string, unknown>, lang?: string): DonutEntry[] {
+  const urgencyLabel = lang === 'en' ? URGENCY_EN : URGENCY_FR;
   return Object.entries(asRecord(data.by_urgency))
     .filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && (v as number) > 0)
     .map(([k, v]) => ({
-      name: URGENCY_FR[k] ?? k,
+      name: urgencyLabel[k] ?? k,
       value: v as number,
       color: URGENCY_SLICE[k] ?? '#a8a29e',
     }))
@@ -919,13 +963,16 @@ function TrendTabs({
   tabs,
   active,
   onChange,
+  lang,
 }: {
   tabs: { id: TrendViewId; label: string }[];
   active: TrendViewId;
   onChange: (v: TrendViewId) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   return (
-    <div role="tablist" aria-label="Choisir le graphique" className="flex flex-wrap gap-1.5">
+    <div role="tablist" aria-label={en ? 'Choose the chart' : 'Choisir le graphique'} className="flex flex-wrap gap-1.5">
       {tabs.map((t, i) => {
         const selected = t.id === active;
         return (
@@ -955,14 +1002,17 @@ function TrendPeriods({
   current,
   school,
   onAsk,
+  lang,
 }: {
   current: number | null;
   school?: string;
   onAsk: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-xs text-stone-500 dark:text-stone-400">Période :</span>
+      <span className="text-xs text-stone-500 dark:text-stone-400">{en ? 'Period:' : 'Période :'}</span>
       {TREND_PERIODS.map((n) => {
         const selected = current === n;
         return (
@@ -974,8 +1024,8 @@ function TrendPeriods({
             onClick={() =>
               onAsk(
                 school !== undefined
-                  ? `Voir les tendances de ${school} sur ${n} mois`
-                  : `Voir les tendances sur ${n} mois`,
+                  ? en ? `Show trends for ${school} over ${n} months` : `Voir les tendances de ${school} sur ${n} mois`
+                  : en ? `Show trends over ${n} months` : `Voir les tendances sur ${n} mois`,
               )
             }
             className={`rounded-full px-2.5 py-1 text-xs font-medium transition-[transform,opacity] duration-150 ease-snap active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-default ${
@@ -984,7 +1034,7 @@ function TrendPeriods({
                 : 'border border-line bg-card text-ink-soft hover:text-ink'
             }`}
           >
-            {n} mois
+{n} {en ? 'months' : 'mois'}
           </button>
         );
       })}
@@ -996,11 +1046,14 @@ function TrendCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const labels = asArray<unknown>(data.labels).map((l, i) =>
     typeof l === 'string' && l !== '' ? l : `M${i + 1}`,
   );
@@ -1009,7 +1062,7 @@ function TrendCard({
   const palette = ['#0d9488', '#d97706', '#e11d48', '#0284c7'];
   const series: TrendSeries[] = datasets.map((d, i) => ({
     key: `s${i}`,
-    label: typeof d.label === 'string' && d.label !== '' ? d.label : `Série ${i + 1}`,
+    label: typeof d.label === 'string' && d.label !== '' ? d.label : en ? `Series ${i + 1}` : `Série ${i + 1}`,
     kind: d.kind === 'line' ? 'line' : 'bar',
     data: asArray<number>(d.data).map((v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)),
     color: palette[i % palette.length],
@@ -1028,21 +1081,21 @@ function TrendCard({
   const lines = series.filter((s) => s.kind === 'line');
   const byWords = (words: string[]): number[] =>
     series.find((s) => words.some((w) => s.label.toLowerCase().includes(w)))?.data ?? [];
-  const costData = byWords(['coût', 'cout', 'xaf', 'fcfa', 'franc', 'réparation']);
-  const incidentData = byWords(['panne', 'incident']);
-  const daysData = byWords(['jour']);
+  const costData = byWords(['coût', 'cout', 'cost', 'xaf', 'fcfa', 'franc', 'réparation', 'repair']);
+  const incidentData = byWords(['panne', 'incident', 'breakdown', 'failure']);
+  const daysData = byWords(['jour', 'day']);
   const costBars = costData.length > 0 ? costData : costs;
   const incidentBars = incidentData.length > 0 ? incidentData : (lines[0]?.data ?? []);
   const daysBars = daysData.length > 0 ? daysData : (lines[1]?.data ?? []);
   // Enrichissements optionnels (rendu dégradé propre si absents).
-  const urgencyEntries = trendUrgencyEntries(data);
+  const urgencyEntries = trendUrgencyEntries(data, lang);
   const schoolEntries = trendSchoolEntries(data);
   const tabs: { id: TrendViewId; label: string }[] = [
-    { id: 'courbe', label: 'Courbe' },
-    { id: 'couts', label: 'Coûts' },
-    { id: 'pannes', label: 'Pannes' },
-    ...(schoolEntries.length > 0 ? [{ id: 'ecoles' as TrendViewId, label: 'Écoles' }] : []),
-    ...(urgencyEntries.length > 0 ? [{ id: 'urgences' as TrendViewId, label: 'Urgences' }] : []),
+    { id: 'courbe', label: en ? 'Chart' : 'Courbe' },
+    { id: 'couts', label: en ? 'Costs' : 'Coûts' },
+    { id: 'pannes', label: en ? 'Breakdowns' : 'Pannes' },
+    ...(schoolEntries.length > 0 ? [{ id: 'ecoles' as TrendViewId, label: en ? 'Schools' : 'Écoles' }] : []),
+    ...(urgencyEntries.length > 0 ? [{ id: 'urgences' as TrendViewId, label: en ? 'Urgencies' : 'Urgences' }] : []),
   ];
   const [view, setView] = useState<TrendViewId>('courbe');
   const activeView = tabs.some((t) => t.id === view) ? view : 'courbe';
@@ -1050,103 +1103,105 @@ function TrendCard({
   const askMonth = (index: number): void => {
     if (onAsk === undefined) return;
     const label = labels[index] ?? `M${index + 1}`;
-    onAsk(school !== undefined ? `Détail de ${school} en ${label} ?` : `Détail en ${label} ?`);
+    onAsk(school !== undefined ? (en ? `Details for ${school} in ${label}?` : `Détail de ${school} en ${label} ?`) : en ? `Details in ${label}?` : `Détail en ${label} ?`);
   };
   const askSchool = (index: number): void => {
     const entry = schoolEntries[index];
     if (onAsk === undefined || entry === undefined) return;
-    onAsk(`Voir les tendances de ${entry.name} ?`);
+    onAsk(en ? `Show trends for ${entry.name}?` : `Voir les tendances de ${entry.name} ?`);
   };
   const askUrgency = (index: number): void => {
     const entry = urgencyEntries[index];
     if (onAsk === undefined || entry === undefined) return;
     const level = entry.name.toLowerCase();
-    onAsk(school !== undefined ? `Détail des incidents ${level} à ${school} ?` : `Détail des incidents ${level} ?`);
+    onAsk(school !== undefined ? (en ? `Details of ${level} incidents at ${school}?` : `Détail des incidents ${level} à ${school} ?`) : en ? `Details of ${level} incidents?` : `Détail des incidents ${level} ?`);
   };
   // Résumé parlé : « 3 pannes, 50 000 francs, en hausse. »
   const trendDir = typeof figures.trend_direction === 'string' ? figures.trend_direction : 'stable';
-  const spokenTrend = trendDir === 'up' ? 'en hausse' : trendDir === 'down' ? 'en baisse' : 'stable';
-  const spokenMoney = currencyCode === 'XAF' ? 'francs' : currencyCode;
+  const spokenTrend = trendDir === 'up' ? (en ? 'rising' : 'en hausse') : trendDir === 'down' ? (en ? 'falling' : 'en baisse') : 'stable';
+  const spokenMoney = en ? (currencyCode === 'XAF' ? 'CFA francs' : currencyCode) : currencyCode === 'XAF' ? 'francs' : currencyCode;
   const spokenSummary =
     typeof figures.total_incidents === 'number' && typeof figures.total_cost === 'number'
-      ? `${fmtInt(figures.total_incidents)} pannes, ${fmtInt(figures.total_cost)} ${spokenMoney}, ${spokenTrend}.`
+      ? en
+        ? `${fmtInt(figures.total_incidents, lang)} breakdowns, ${fmtInt(figures.total_cost, lang)} ${spokenMoney}, ${spokenTrend}.`
+        : `${fmtInt(figures.total_incidents, lang)} pannes, ${fmtInt(figures.total_cost, lang)} ${spokenMoney}, ${spokenTrend}.`
       : undefined;
   const costOnly: TrendSeries[] = [
-    { key: 'couts', label: `Coût réparations (${currencyCode})`, kind: 'bar', data: costBars, color: '#0d9488' },
+    { key: 'couts', label: en ? `Repair cost (${currencyCode})` : `Coût réparations (${currencyCode})`, kind: 'bar', data: costBars, color: '#0d9488' },
   ];
   const panneSeries: TrendSeries[] = [
-    { key: 'pannes', label: 'Pannes signalées', kind: 'bar', data: incidentBars, color: '#d97706' },
-    { key: 'jours', label: 'Jours sans service', kind: 'bar', data: daysBars, color: '#0284c7' },
+    { key: 'pannes', label: en ? 'Reported breakdowns' : 'Pannes signalées', kind: 'bar', data: incidentBars, color: '#d97706' },
+    { key: 'jours', label: en ? 'Days without service' : 'Jours sans service', kind: 'bar', data: daysBars, color: '#0284c7' },
   ];
   return (
     <CardShell
       title={title}
-      meta={months === null ? undefined : months <= 1 ? '1 mois' : `${fmtInt(months)} mois`}
+      meta={months === null ? undefined : months <= 1 ? (en ? '1 month' : '1 mois') : `${fmtInt(months, lang)} ${en ? 'months' : 'mois'}`}
       listenText={speak(
         months === null
-          ? 'Tendances.'
+          ? en ? 'Trends.' : 'Tendances.'
           : months <= 1
-            ? 'Tendance du mois.'
-            : `Tendances sur ${months} mois.`,
+            ? en ? "This month's trend." : 'Tendance du mois.'
+            : en ? `Trends over ${months} months.` : `Tendances sur ${months} mois.`,
         trendInsight,
-        school !== undefined ? `École : ${school}.` : undefined,
+        school !== undefined ? (en ? `School: ${school}.` : `École : ${school}.`) : undefined,
         spokenSummary,
       )}
     >
       <style>{`@keyframes trend-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}.trend-in{animation:trend-in 180ms cubic-bezier(0.23,1,0.32,1) both}@media (prefers-reduced-motion:reduce){.trend-in{animation:none}}`}</style>
       <div className="flex items-end justify-between gap-3">
-        <HeroStat label={`Coût total${currency}`} value={fmtInt(figures.total_cost)} delta={delta} invert />
+        <HeroStat label={en ? `Total cost${currency}` : `Coût total${currency}`} value={fmtInt(figures.total_cost, lang)} delta={delta} invert lang={lang} />
         <Sparkline data={costs} />
       </div>
       <div className="mt-3">
         <InsightLine text={trendInsight ?? ''} />
       </div>
       <div className="mt-3 grid grid-cols-3 gap-3">
-        <Stat label="Pannes" value={fmtInt(figures.total_incidents)} />
-        <Stat label="Jours sans service" value={fmtInt(figures.total_days_lost)} />
-        <Stat label="Coût / mois" value={fmtInt(figures.avg_cost_per_month)} />
+        <Stat label={en ? 'Breakdowns' : 'Pannes'} value={fmtInt(figures.total_incidents, lang)} />
+        <Stat label={en ? 'Days without service' : 'Jours sans service'} value={fmtInt(figures.total_days_lost, lang)} />
+        <Stat label={en ? 'Cost / month' : 'Coût / mois'} value={fmtInt(figures.avg_cost_per_month, lang)} />
       </div>
       {hasChart ? (
         <div className="mt-3 space-y-3">
-          <TrendTabs tabs={tabs} active={activeView} onChange={setView} />
+          <TrendTabs tabs={tabs} active={activeView} onChange={setView} lang={lang} />
           <div key={activeView} className="trend-in">
             {activeView === 'courbe' && (
-              <TrendChart labels={labels} series={series} onSelect={onAsk === undefined ? undefined : askMonth} />
+              <TrendChart labels={labels} series={series} onSelect={onAsk === undefined ? undefined : askMonth} lang={lang} />
             )}
             {activeView === 'couts' && (
-              <TrendChart labels={labels} series={costOnly} onSelect={onAsk === undefined ? undefined : askMonth} />
+              <TrendChart labels={labels} series={costOnly} onSelect={onAsk === undefined ? undefined : askMonth} lang={lang} />
             )}
             {activeView === 'pannes' && (
-              <TrendChart labels={labels} series={panneSeries} onSelect={onAsk === undefined ? undefined : askMonth} />
+              <TrendChart labels={labels} series={panneSeries} onSelect={onAsk === undefined ? undefined : askMonth} lang={lang} />
             )}
             {activeView === 'ecoles' && (
-              <TrendHBars entries={schoolEntries} unit="pannes" onSelect={onAsk === undefined ? undefined : askSchool} />
+              <TrendHBars entries={schoolEntries} unit={en ? 'breakdowns' : 'pannes'} onSelect={onAsk === undefined ? undefined : askSchool} lang={lang} />
             )}
             {activeView === 'urgences' && (
-              <TrendDonut entries={urgencyEntries} onSelect={onAsk === undefined ? undefined : askUrgency} />
+              <TrendDonut entries={urgencyEntries} onSelect={onAsk === undefined ? undefined : askUrgency} lang={lang} />
             )}
           </div>
           {onAsk !== undefined && (
             <p className="text-xs text-stone-500 dark:text-stone-400">
-              Touchez le graphique pour poser une question sur un mois.
+{en ? 'Tap the chart to ask about a month.' : 'Touchez le graphique pour poser une question sur un mois.'}
             </p>
           )}
-          {onAsk !== undefined && <TrendPeriods current={months} school={school} onAsk={onAsk} />}
+{onAsk !== undefined && <TrendPeriods current={months} school={school} onAsk={onAsk} lang={lang} />}
         </div>
       ) : (
         <div className="mt-3">
           <GuideEmpty
-            phrase="Pas assez de données pour tracer la tendance."
-            conseil="Essaie une période plus longue, ou compare avec une autre école."
+            phrase={en ? 'Not enough data to draw the trend.' : 'Pas assez de données pour tracer la tendance.'}
+            conseil={en ? 'Try a longer period, or compare with another school.' : 'Essaie une période plus longue, ou compare avec une autre école.'}
             actions={[
               {
-                label: 'Voir sur 12 mois ?',
+                label: en ? 'View 12 months?' : 'Voir sur 12 mois ?',
                 question:
                   school !== undefined
-                    ? `Voir les tendances de ${school} sur 12 mois`
-                    : 'Voir les tendances sur 12 mois',
+                    ? en ? `Show trends for ${school} over 12 months` : `Voir les tendances de ${school} sur 12 mois`
+                    : en ? 'Show trends over 12 months' : 'Voir les tendances sur 12 mois',
               },
-              { label: 'Comparer deux écoles ?', question: 'Comparer deux écoles ?' },
+              { label: en ? 'Compare two schools?' : 'Comparer deux écoles ?', question: en ? 'Compare two schools?' : 'Comparer deux écoles ?' },
             ]}
             onAsk={onAsk}
           />
@@ -1156,27 +1211,30 @@ function TrendCard({
         onAsk={onAsk}
         items={
           school !== undefined
-            ? [`Faut-il remplacer à ${school} ?`, 'Comparer avec une autre école']
-            : ['Voir la carte du territoire']
+            ? en
+              ? [`Should equipment be replaced at ${school}?`, 'Compare with another school']
+              : [`Faut-il remplacer à ${school} ?`, 'Comparer avec une autre école']
+            : [en ? 'View the territory map' : 'Voir la carte du territoire']
         }
       />
     </CardShell>
   );
 }
 
-function ConfirmationCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+function ConfirmationCard({ title, data, lang }: { title: string; data: Record<string, unknown>; lang?: string }) {
+  const en = lang === 'en';
   const matched = asRecord(data.matched_school);
   const description = typeof data.description === 'string' ? data.description : undefined;
   const matchedName = fmtOpt(matched.school_name);
   return (
     <CardShell
       title={title}
-      meta="Brouillon"
-      actions={data.needs_confirmation === true ? <Badge tone="warn">Confirmation requise</Badge> : undefined}
+      meta={en ? 'Draft' : 'Brouillon'}
+      actions={data.needs_confirmation === true ? <Badge tone="warn">{en ? 'Confirmation required' : 'Confirmation requise'}</Badge> : undefined}
       listenText={speak(
-        'Vérifie ce brouillon.',
+        en ? 'Check this draft.' : 'Vérifie ce brouillon.',
         description,
-        matchedName !== undefined ? `École : ${matchedName}.` : undefined,
+        matchedName !== undefined ? (en ? `School: ${matchedName}.` : `École : ${matchedName}.`) : undefined,
       )}
     >
       {description !== undefined && (
@@ -1184,7 +1242,7 @@ function ConfirmationCard({ title, data }: { title: string; data: Record<string,
       )}
       {Object.keys(matched).length > 0 && (
         <p className="mt-2 text-sm">
-          <span className="text-stone-500 dark:text-stone-400">École détectée : </span>
+          <span className="text-stone-500 dark:text-stone-400">{en ? 'Detected school: ' : 'École détectée : '}</span>
           <span className="font-medium">{fmtText(matched.school_name)}</span>{' '}
           <span className="font-mono text-xs text-stone-500 dark:text-stone-400">
             #{fmtText(matched.school_id)}
@@ -1192,13 +1250,14 @@ function ConfirmationCard({ title, data }: { title: string; data: Record<string,
         </p>
       )}
       <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-        Brouillon uniquement — le dépôt effectif arrive avec la page Signalements, aucun ticket créé.
+{en ? 'Draft only — actual filing comes with the Reports page, no ticket created.' : 'Brouillon uniquement — le dépôt effectif arrive avec la page Signalements, aucun ticket créé.'}
       </p>
     </CardShell>
   );
 }
 
-function PhotoCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+function PhotoCard({ title, data, lang }: { title: string; data: Record<string, unknown>; lang?: string }) {
+  const en = lang === 'en';
   const unavailable = data.vision_unavailable === true;
   const wash = data.is_wash_related === true;
   const infra = fmtOpt(data.infrastructure_detected);
@@ -1206,11 +1265,11 @@ function PhotoCard({ title, data }: { title: string; data: Record<string, unknow
   const notes = typeof data.technician_notes === 'string' ? data.technician_notes : undefined;
   const next = typeof data.next_action === 'string' ? data.next_action : undefined;
   const badge = unavailable ? (
-    <Badge tone="neutral">Vision indisponible</Badge>
+    <Badge tone="neutral">{en ? 'Vision unavailable' : 'Vision indisponible'}</Badge>
   ) : wash ? (
     <Badge tone="success">Infrastructure WASH</Badge>
   ) : (
-    <Badge tone="warn">Hors sujet WASH</Badge>
+    <Badge tone="warn">{en ? 'Not WASH-related' : 'Hors sujet WASH'}</Badge>
   );
   return (
     <CardShell
@@ -1218,28 +1277,28 @@ function PhotoCard({ title, data }: { title: string; data: Record<string, unknow
       meta="Photo"
       actions={badge}
       listenText={speak(
-        'Analyse de la photo.',
-        infra !== undefined ? `Élément : ${infra}.` : undefined,
-        score !== undefined && !unavailable ? `Sévérité visuelle : ${score} sur 100.` : undefined,
+        en ? 'Photo analysis.' : 'Analyse de la photo.',
+        infra !== undefined ? (en ? `Item: ${infra}.` : `Élément : ${infra}.`) : undefined,
+        score !== undefined && !unavailable ? (en ? `Visual severity: ${score} out of 100.` : `Sévérité visuelle : ${score} sur 100.`) : undefined,
         notes,
       )}
     >
       {infra !== undefined && (
         <p className="text-sm">
-          <span className="text-stone-500 dark:text-stone-400">Élément détecté : </span>
+          <span className="text-stone-500 dark:text-stone-400">{en ? 'Detected item: ' : 'Élément détecté : '}</span>
           <span className="font-medium">{infra}</span>
         </p>
       )}
       {score !== undefined && !unavailable && (
         <p className="mt-2 text-sm">
-          <span className="text-stone-500 dark:text-stone-400">Sévérité visuelle : </span>
+          <span className="text-stone-500 dark:text-stone-400">{en ? 'Visual severity: ' : 'Sévérité visuelle : '}</span>
           <span className="font-medium">{score}/100</span>
         </p>
       )}
       {notes !== undefined && <p className="mt-2 text-sm leading-relaxed">{notes}</p>}
       {next !== undefined && (
         <p className="mt-2 text-sm">
-          <span className="text-stone-500 dark:text-stone-400">Prochaine étape : </span>
+          <span className="text-stone-500 dark:text-stone-400">{en ? 'Next step: ' : 'Prochaine étape : '}</span>
           {next}
         </p>
       )}
@@ -1252,12 +1311,15 @@ function ActionConfirmationCard({
   data,
   onAsk,
   onAppend,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
   onAppend?: (content: string, cards?: AgentCard[]) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1280,7 +1342,7 @@ function ActionConfirmationCard({
       onAppend?.(res.result.summary, [
         {
           type: 'action_result',
-          title: kind === 'confirm' ? 'Résultat de la validation' : 'Proposition annulée',
+          title: kind === 'confirm' ? (en ? 'Validation result' : 'Résultat de la validation') : en ? 'Proposal cancelled' : 'Proposition annulée',
           data: { ...res.result },
         },
       ]);
@@ -1294,7 +1356,7 @@ function ActionConfirmationCard({
           setOutcome(e.guidanceStatus);
         }
       } else {
-        setError('Erreur réseau.');
+        setError(en ? 'Network error.' : 'Erreur réseau.');
       }
     } finally {
       setBusy(false);
@@ -1304,7 +1366,7 @@ function ActionConfirmationCard({
   const expiry = (() => {
     if (typeof data.expires_at !== 'string' || data.expires_at === '') return null;
     const d = new Date(data.expires_at);
-    return Number.isNaN(d.getTime()) ? null : d.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
+    return Number.isNaN(d.getTime()) ? null : d.toLocaleTimeString(localeFor(lang), { hour: '2-digit', minute: '2-digit' });
   })();
 
   const recapText =
@@ -1324,32 +1386,32 @@ function ActionConfirmationCard({
   const retryPrompt =
     typeof guidance?.prompt === 'string' && guidance.prompt !== '' ? guidance.prompt : null;
   const retryLabel =
-    typeof guidance?.label === 'string' && guidance.label !== '' ? guidance.label : 'Refaire la demande';
+    typeof guidance?.label === 'string' && guidance.label !== '' ? guidance.label : en ? 'Retry the request' : 'Refaire la demande';
   const ask = onAsk;
   return (
     <CardShell
       title={title}
-      meta="À valider"
+      meta={en ? 'To confirm' : 'À valider'}
       actions={
         outcome === 'confirmed' ? (
-          <Badge tone="success">Confirmé</Badge>
+          <Badge tone="success">{en ? 'Confirmed' : 'Confirmé'}</Badge>
         ) : outcome === 'cancelled' ? (
-          <Badge tone="neutral">Annulé</Badge>
+          <Badge tone="neutral">{en ? 'Cancelled' : 'Annulé'}</Badge>
         ) : outcome === 'already_confirmed' ? (
-          <Badge tone="success">Déjà enregistré</Badge>
+          <Badge tone="success">{en ? 'Already recorded' : 'Déjà enregistré'}</Badge>
         ) : outcome === 'expired' ? (
-          <Badge tone="neutral">Expiré</Badge>
+          <Badge tone="neutral">{en ? 'Expired' : 'Expiré'}</Badge>
         ) : outcome === 'conflict' ? (
-          <Badge tone="neutral">Déjà traité</Badge>
+          <Badge tone="neutral">{en ? 'Already handled' : 'Déjà traité'}</Badge>
         ) : outcome === 'forbidden' ? (
-          <Badge tone="danger">Refusé</Badge>
+          <Badge tone="danger">{en ? 'Refused' : 'Refusé'}</Badge>
         ) : outcome !== null ? (
-          <Badge tone="neutral">Terminé</Badge>
+          <Badge tone="neutral">{en ? 'Done' : 'Terminé'}</Badge>
         ) : (
-          <Badge tone="warn">Confirmation requise</Badge>
+          <Badge tone="warn">{en ? 'Confirmation required' : 'Confirmation requise'}</Badge>
         )
       }
-      listenText={speak('Confirme ton choix.', recapText !== '' ? recapText : undefined)}
+      listenText={speak(en ? 'Confirm your choice.' : 'Confirme ton choix.', recapText !== '' ? recapText : undefined)}
     >
       <dl className="space-y-1.5">
         {rows.map((r, i) => {
@@ -1367,22 +1429,22 @@ function ActionConfirmationCard({
       )}
       {expiry && outcome === null && (
         <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-          Expire à {expiry} — sans validation, rien ne sera créé.
+{en ? `Expires at ${expiry} — without confirmation, nothing will be created.` : `Expire à ${expiry} — sans validation, rien ne sera créé.`}
         </p>
       )}
       {loginRequired && (
         <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-          Connectez-vous pour valider cette proposition.
+{en ? 'Log in to confirm this proposal.' : 'Connectez-vous pour valider cette proposition.'}
         </p>
       )}
       {notPermitted && (
         <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-          {fmtText(data.permission_error) !== '—' ? fmtText(data.permission_error) : "Votre rôle ne permet pas cette action."}
+{fmtText(data.permission_error) !== '—' ? fmtText(data.permission_error) : en ? 'Your role does not allow this action.' : "Votre rôle ne permet pas cette action."}
         </p>
       )}
       {invalid && (
         <p className="mt-2 text-sm text-red-700 dark:text-red-400">
-          Proposition incomplète — précisez les éléments manquants dans le chat.
+{en ? 'Incomplete proposal — specify the missing items in the chat.' : 'Proposition incomplète — précisez les éléments manquants dans le chat.'}
         </p>
       )}
       {error && <p className="mt-2 text-sm text-red-700 dark:text-red-400">{error}</p>}
@@ -1396,10 +1458,10 @@ function ActionConfirmationCard({
       {!terminal && proposalId !== null && (
         <div className="mt-3 flex gap-2">
           <Button variant="primary" size="sm" disabled={busy} onClick={() => void run('confirm')}>
-            {busy ? 'En cours…' : 'Confirmer'}
+{busy ? (en ? 'Working…' : 'En cours…') : en ? 'Confirm' : 'Confirmer'}
           </Button>
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => void run('cancel')}>
-            Annuler
+{en ? 'Cancel' : 'Annuler'}
           </Button>
         </div>
       )}
@@ -1407,25 +1469,26 @@ function ActionConfirmationCard({
   );
 }
 
-function ActionResultCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+function ActionResultCard({ title, data, lang }: { title: string; data: Record<string, unknown>; lang?: string }) {
+  const en = lang === 'en';
   const status = typeof data.status === 'string' ? data.status : 'confirmed';
   const resultSummary = typeof data.summary === 'string' ? data.summary : undefined;
   return (
     <CardShell
       title={title}
-      meta="Résultat"
+      meta={en ? 'Result' : 'Résultat'}
       listenText={speak(title, resultSummary)}
       actions={
         status === 'confirmed' ? (
-          <Badge tone="success">Exécuté</Badge>
+          <Badge tone="success">{en ? 'Done' : 'Exécuté'}</Badge>
         ) : status === 'cancelled' ? (
-          <Badge tone="neutral">Annulé</Badge>
+          <Badge tone="neutral">{en ? 'Cancelled' : 'Annulé'}</Badge>
         ) : (
-          <Badge tone="danger">Erreur</Badge>
+          <Badge tone="danger">{en ? 'Error' : 'Erreur'}</Badge>
         )
       }
     >
-      <p className="text-sm leading-relaxed">{resultSummary ?? 'Terminé.'}</p>
+      <p className="text-sm leading-relaxed">{resultSummary ?? (en ? 'Done.' : 'Terminé.')}</p>
       {typeof data.reference_code === 'string' && data.reference_code !== '' && (
         <p className="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400">{data.reference_code}</p>
       )}
@@ -1433,14 +1496,15 @@ function ActionResultCard({ title, data }: { title: string; data: Record<string,
   );
 }
 
-function GenericCard({ card }: { card: AgentCard }) {
+function GenericCard({ card, lang }: { card: AgentCard; lang?: string }) {
+  const en = lang === 'en';
   const data = asRecord(card.data);
   const insight =
     fmtOpt(data.insight) ?? fmtOpt(data.summary) ?? fmtOpt(data.description) ?? fmtOpt(data.message);
   const text =
     insight !== undefined
-      ? humanizeDates(insight)
-      : "Le résultat est prêt. Appuie sur Écouter pour l'entendre, ou demande un résumé.";
+      ? humanizeDates(insight, lang)
+      : en ? 'The result is ready. Tap Listen to hear it, or ask for a summary.' : "Le résultat est prêt. Appuie sur Écouter pour l'entendre, ou demande un résumé.";
   return (
     <CardShell title={card.title} listenText={speak(card.title, text)}>
       <p className="text-sm leading-relaxed">{text}</p>
@@ -1454,11 +1518,14 @@ function TerritoryMapCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const schools = asArray<unknown>(data.schools);
   const missing = asArray<unknown>(data.missing_gps)
     .map((m) => fmtOpt(m))
@@ -1471,7 +1538,7 @@ function TerritoryMapCard({
     if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
     points.push({
       key: `s${i}`,
-      name: typeof rec.school_name === 'string' ? rec.school_name : `École ${i + 1}`,
+      name: typeof rec.school_name === 'string' ? rec.school_name : en ? `School ${i + 1}` : `École ${i + 1}`,
       district: typeof rec.district === 'string' ? rec.district : '',
       lat,
       lng,
@@ -1485,36 +1552,36 @@ function TerritoryMapCard({
   return (
     <CardShell
       title={title}
-      meta={points.length === 0 ? undefined : points.length === 1 ? '1 école' : `${points.length} écoles`}
+      meta={points.length === 0 ? undefined : points.length === 1 ? (en ? '1 school' : '1 école') : en ? `${points.length} schools` : `${points.length} écoles`}
       listenText={speak(
-        'Carte du territoire.',
+        en ? 'Territory map.' : 'Carte du territoire.',
         territoryInsight !== '' ? territoryInsight : undefined,
-        district !== undefined ? `District : ${district}.` : undefined,
+        district !== undefined ? (en ? `District: ${district}.` : `District : ${district}.`) : undefined,
         points.length === 0
-          ? 'Aucune école sur la carte.'
+          ? en ? 'No schools on the map.' : 'Aucune école sur la carte.'
           : points.length === 1
-            ? '1 école sur la carte.'
-            : `${points.length} écoles sur la carte.`,
+            ? en ? '1 school on the map.' : '1 école sur la carte.'
+            : en ? `${points.length} schools on the map.` : `${points.length} écoles sur la carte.`,
       )}
     >
       <InsightLine text={territoryInsight} />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Écoles géolocalisées" value={fmtInt(data.total)} />
-        <Stat label="Incidents ouverts" value={fmtInt(data.open_incidents)} />
+        <Stat label={en ? 'Geolocated schools' : 'Écoles géolocalisées'} value={fmtInt(data.total, lang)} />
+        <Stat label={en ? 'Open incidents' : 'Incidents ouverts'} value={fmtInt(data.open_incidents, lang)} />
       </div>
       <div className="mt-3">
-        <TerritoryLegend />
+        <TerritoryLegend lang={lang} />
       </div>
       <div className="mt-3">
         {points.length > 0 ? (
-          <TerritoryMap points={points} />
+          <TerritoryMap points={points} lang={lang} />
         ) : (
           <GuideEmpty
-            phrase="Aucune école géolocalisée pour ce territoire."
-            conseil="Vérifie le nom du district, ou regarde les écoles qui ont le plus besoin d’aide."
+            phrase={en ? 'No geolocated schools for this territory.' : 'Aucune école géolocalisée pour ce territoire.'}
+            conseil={en ? 'Check the district name, or look at the schools that need the most help.' : 'Vérifie le nom du district, ou regarde les écoles qui ont le plus besoin d’aide.'}
             actions={[
-              { label: 'Voir un autre district ?', question: 'Voir un autre district ?' },
-              { label: 'Quelles écoles aider ?', question: "Quelles écoles ont le plus besoin d'aide ?" },
+              { label: en ? 'View another district?' : 'Voir un autre district ?', question: en ? 'View another district?' : 'Voir un autre district ?' },
+              { label: en ? 'Which schools to help?' : 'Quelles écoles aider ?', question: en ? 'Which schools need the most help?' : "Quelles écoles ont le plus besoin d'aide ?" },
             ]}
             onAsk={onAsk}
           />
@@ -1522,21 +1589,22 @@ function TerritoryMapCard({
       </div>
       {missing.length > 0 && (
         <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-          Sans GPS : {missing.join(', ')}
+{en ? 'Without GPS: ' : 'Sans GPS : '}{missing.join(', ')}
         </p>
       )}
       <FollowUps
         onAsk={onAsk}
         items={[
-          district !== undefined ? `Préparer un briefing ${district}` : 'Préparer un briefing',
-          "Quelles écoles ont le plus besoin d'aide ?",
+          district !== undefined ? (en ? `Prepare a ${district} briefing` : `Préparer un briefing ${district}`) : en ? 'Prepare a briefing' : 'Préparer un briefing',
+          en ? 'Which schools need the most help?' : "Quelles écoles ont le plus besoin d'aide ?",
         ]}
       />
     </CardShell>
   );
 }
 
-function BriefingDeckCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+function BriefingDeckCard({ title, data, lang }: { title: string; data: Record<string, unknown>; lang?: string }) {
+  const en = lang === 'en';
   const slides: DeckSlide[] = [];
   asArray<unknown>(data.slides).forEach((s) => {
     const rec = asRecord(s);
@@ -1552,7 +1620,7 @@ function BriefingDeckCard({ title, data }: { title: string; data: Record<string,
       .filter((st) => st.label !== '' || st.value !== '');
     slides.push({
       kind,
-      title: fmtOpt(rec.title) ?? 'Sans titre',
+      title: fmtOpt(rec.title) ?? (en ? 'Untitled' : 'Sans titre'),
       subtitle: fmtOpt(rec.subtitle),
       lines,
       stats,
@@ -1565,158 +1633,39 @@ function BriefingDeckCard({ title, data }: { title: string; data: Record<string,
       title={title}
       meta={slides.length <= 1 ? '1 page' : `${slides.length} pages`}
       listenText={speak(
-        'Briefing prêt.',
+        en ? 'Briefing ready.' : 'Briefing prêt.',
         slides.length <= 1 ? '1 page.' : `${slides.length} pages.`,
-        `Première page : ${slides[0].title}.`,
+        en ? `First page: ${slides[0].title}.` : `Première page : ${slides[0].title}.`,
       )}
     >
-      <SlideDeck slides={slides} />
+      <SlideDeck slides={slides} lang={lang} />
     </CardShell>
   );
 }
 
-function MaintenanceLogsCard({
-  title,
-  data,
-  onAsk,
-}: {
-  title: string;
-  data: Record<string, unknown>;
-  onAsk?: (q: string) => void;
-}) {
-  const items = asArray<Record<string, unknown>>(data.items);
-  const total =
-    typeof data.total === 'number' && Number.isFinite(data.total) ? Math.max(0, Math.round(data.total)) : items.length;
-  const empty = data.is_empty === true || items.length === 0;
-  const dayLabel = fmtDate(data.date);
-  const displayTitle = dayLabel === '—' ? title : `Interventions du ${dayLabel}`;
-  const insight = humanizeDates(fmtOpt(data.insight) ?? '');
-  const filters = asRecord(data.applied_filters);
-  const unknownSchool =
-    filters.school_matched === false &&
-    typeof filters.school_raw === 'string' &&
-    filters.school_raw.trim() !== ''
-      ? filters.school_raw.trim()
-      : undefined;
-  const schoolWarning =
-    unknownSchool !== undefined ? `École « ${unknownSchool} » non reconnue — filtre ignoré.` : undefined;
-
-  if (empty) {
-    const phrase = 'Aucune intervention ce jour-là.';
-    return (
-      <CardShell
-        title={displayTitle}
-        listenText={speak(
-          phrase,
-          dayLabel === '—' ? undefined : `Jour demandé : ${dayLabel}.`,
-          schoolWarning,
-          'Essaie hier ou cette semaine.',
-        )}
-      >
-        <GuideEmpty
-          phrase={phrase}
-          conseil={
-            schoolWarning !== undefined
-              ? `${schoolWarning} Essaie hier ou cette semaine.`
-              : dayLabel !== '—'
-                ? `${dayLabel} — essaie hier ou cette semaine.`
-                : 'Essaie hier ou cette semaine.'
-          }
-          actions={[
-            { label: 'Voir hier ?', question: 'Interventions réalisées hier ?' },
-            { label: 'Voir la semaine ?', question: 'Interventions réalisées cette semaine ?' },
-          ]}
-          onAsk={onAsk}
-        />
-      </CardShell>
-    );
-  }
-
-  const rest = Math.max(0, total - items.length);
-  return (
-    <CardShell
-      title={displayTitle}
-      listenText={speak(
-        total <= 1 ? '1 intervention ce jour-là.' : `${total} interventions ce jour-là.`,
-        insight !== '' ? insight : undefined,
-        schoolWarning,
-      )}
-    >
-      <HeroStat
-        label={total <= 1 ? 'Intervention ce jour-là' : 'Interventions ce jour-là'}
-        value={fmtInt(total)}
-      />
-      {insight !== '' && (
-        <div className="mt-3">
-          <InsightLine text={insight} />
-        </div>
-      )}
-      {schoolWarning !== undefined && (
-        <p className="mb-3 text-sm text-amber-700 dark:text-amber-400">{schoolWarning}</p>
-      )}
-      <ul className="divide-y divide-stone-200 dark:divide-stone-800">
-        {items.map((it, i) => {
-          const logSchool = fmtOpt(it.school_name) ?? 'École non précisée';
-          const ref = fmtOpt(it.incident_ref);
-          const logTitle = fmtOpt(it.incident_title);
-          const cost = fmtCostXAF(it.cost_amount);
-          const notes = fmtOpt(it.notes);
-          const when = fmtDate(it.created_at);
-          return (
-            <li key={String(it.id ?? it.incident_id ?? i)} className="flex gap-3 py-3 first:pt-0 last:pb-0">
-              <span
-                aria-hidden="true"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-teal-700/10 text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
-              >
-                <Icon name="school" className="h-4 w-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold leading-snug">{logSchool}</p>
-                {logTitle !== undefined && (
-                  <p className="mt-0.5 text-sm leading-snug text-stone-600 dark:text-stone-400">{logTitle}</p>
-                )}
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {ref !== undefined && <Badge>{ref}</Badge>}
-                  {cost !== undefined && <Badge tone="info">{cost}</Badge>}
-                  {when !== '—' && (
-                    <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{when}</span>
-                  )}
-                </div>
-                {notes !== undefined && (
-                  <p className="mt-1.5 text-sm leading-relaxed">{notes}</p>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      {rest > 0 && (
-        <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-          {rest === 1 ? '+ 1 autre intervention' : `+ ${rest} autres interventions`}
-        </p>
-      )}
-      <FollowUps onAsk={onAsk} items={['Interventions réalisées hier ?', 'Interventions réalisées cette semaine ?']} />
-    </CardShell>
-  );
-}
-
-/** Liste des signalements déclarés par les écoles (list_incidents). Miroir de MaintenanceLogsCard : même coquille, mêmes relances date, badges urgence/statut par ligne. */
+/** Liste des signalements déclarés par les écoles (list_incidents + maintenance_logs, même coquille : relances date, badges urgence/statut par ligne). */
 function IncidentListCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
+  const statusLabel = en ? STATUS_EN : STATUS_FR;
   const items = asArray<Record<string, unknown>>(data.items);
   const total =
     typeof data.total === 'number' && Number.isFinite(data.total) ? Math.max(0, Math.round(data.total)) : items.length;
   const empty = data.is_empty === true || items.length === 0;
-  const dayLabel = fmtDate(data.date);
-  const displayTitle = dayLabel === '—' ? title : `Signalements du ${dayLabel}`;
-  const insight = humanizeDates(fmtOpt(data.insight) ?? '');
+  const dayLabel = fmtDate(data.date, lang);
+  const displayTitle =
+    dayLabel === '—' ? title : en ? `Reports of ${dayLabel}` : `Signalements du ${dayLabel}`;
+  const insight = humanizeDates(fmtOpt(data.insight) ?? '', lang);
   const filters = asRecord(data.applied_filters);
   const unknownSchool =
     filters.school_matched === false &&
@@ -1725,32 +1674,40 @@ function IncidentListCard({
       ? filters.school_raw.trim()
       : undefined;
   const schoolWarning =
-    unknownSchool !== undefined ? `École « ${unknownSchool} » non reconnue — filtre ignoré.` : undefined;
+    unknownSchool !== undefined
+      ? en
+        ? `School "${unknownSchool}" not recognized — filter ignored.`
+        : `École « ${unknownSchool} » non reconnue — filtre ignoré.`
+      : undefined;
+  const tryHint = en ? 'Try yesterday or this week.' : 'Essaie hier ou cette semaine.';
+  const relabels = en
+    ? { yesterday: 'See yesterday?', week: 'See the week?', qYesterday: 'Reports filed yesterday?', qWeek: 'Reports filed this week?' }
+    : { yesterday: 'Voir hier ?', week: 'Voir la semaine ?', qYesterday: 'Signalements déclarés hier ?', qWeek: 'Signalements déclarés cette semaine ?' };
 
   if (empty) {
-    const phrase = 'Aucun signalement ce jour-là.';
+    const phrase = en ? 'No reports that day.' : 'Aucun signalement ce jour-là.';
     return (
       <CardShell
         title={displayTitle}
         listenText={speak(
           phrase,
-          dayLabel === '—' ? undefined : `Jour demandé : ${dayLabel}.`,
+          dayLabel === '—' ? undefined : en ? `Requested day: ${dayLabel}.` : `Jour demandé : ${dayLabel}.`,
           schoolWarning,
-          'Essaie hier ou cette semaine.',
+          tryHint,
         )}
       >
         <GuideEmpty
           phrase={phrase}
           conseil={
             schoolWarning !== undefined
-              ? `${schoolWarning} Essaie hier ou cette semaine.`
+              ? `${schoolWarning} ${tryHint}`
               : dayLabel !== '—'
-                ? `${dayLabel} — essaie hier ou cette semaine.`
-                : 'Essaie hier ou cette semaine.'
+                ? `${dayLabel} — ${en ? 'try yesterday or this week.' : 'essaie hier ou cette semaine.'}`
+                : tryHint
           }
           actions={[
-            { label: 'Voir hier ?', question: 'Signalements déclarés hier ?' },
-            { label: 'Voir la semaine ?', question: 'Signalements déclarés cette semaine ?' },
+            { label: relabels.yesterday, question: relabels.qYesterday },
+            { label: relabels.week, question: relabels.qWeek },
           ]}
           onAsk={onAsk}
         />
@@ -1763,14 +1720,14 @@ function IncidentListCard({
     <CardShell
       title={displayTitle}
       listenText={speak(
-        total <= 1 ? '1 signalement ce jour-là.' : `${total} signalements ce jour-là.`,
+        total <= 1 ? (en ? '1 report that day.' : '1 signalement ce jour-là.') : en ? `${total} reports that day.` : `${total} signalements ce jour-là.`,
         insight !== '' ? insight : undefined,
         schoolWarning,
       )}
     >
       <HeroStat
-        label={total <= 1 ? 'Signalement ce jour-là' : 'Signalements ce jour-là'}
-        value={fmtInt(total)}
+        label={total <= 1 ? (en ? 'Report that day' : 'Signalement ce jour-là') : en ? 'Reports that day' : 'Signalements ce jour-là'}
+        value={fmtInt(total, lang)}
       />
       {insight !== '' && (
         <div className="mt-3">
@@ -1782,12 +1739,15 @@ function IncidentListCard({
       )}
       <ul className="divide-y divide-stone-200 dark:divide-stone-800">
         {items.map((it, i) => {
-          const school = fmtOpt(it.school_name) ?? 'École non précisée';
+          const school = fmtOpt(it.school_name) ?? (en ? 'School not specified' : 'École non précisée');
           const ref = fmtOpt(it.reference_code);
           const itemTitle = fmtOpt(it.title);
           const urgency = typeof it.urgency === 'string' ? it.urgency : 'medium';
           const status = fmtOpt(it.status);
           const affected = typeof it.affected_students === 'number' ? it.affected_students : undefined;
+          const pupils = affected !== undefined && affected > 0
+            ? (en ? `${affected} ${affected > 1 ? 'pupils' : 'pupil'}` : `${affected} élève${affected > 1 ? 's' : ''}`)
+            : undefined;
           return (
             <li key={String(it.id ?? ref ?? i)} className="flex gap-3 py-3 first:pt-0 last:pb-0">
               <span className="pt-1.5">
@@ -1800,11 +1760,11 @@ function IncidentListCard({
                 )}
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {ref !== undefined && <Badge>{ref}</Badge>}
-                  <Badge tone={urgencyTone(urgency)}>{URGENCY_FR[urgency] ?? urgency}</Badge>
-                  {status !== undefined && <Badge tone="info">{STATUS_FR[status] ?? status}</Badge>}
-                  {affected !== undefined && affected > 0 && (
+                  <Badge tone={urgencyTone(urgency)}>{urgencyLabel[urgency] ?? urgency}</Badge>
+                  {status !== undefined && <Badge tone="info">{statusLabel[status] ?? status}</Badge>}
+                  {pupils !== undefined && (
                     <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">
-                      {affected} élève{affected > 1 ? 's' : ''}
+                      {pupils}
                     </span>
                   )}
                 </div>
@@ -1815,10 +1775,10 @@ function IncidentListCard({
       </ul>
       {rest > 0 && (
         <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-          {rest === 1 ? '+ 1 autre signalement' : `+ ${rest} autres signalements`}
+          {rest === 1 ? (en ? '+ 1 other report' : '+ 1 autre signalement') : en ? `+ ${rest} other reports` : `+ ${rest} autres signalements`}
         </p>
       )}
-      <FollowUps onAsk={onAsk} items={['Signalements déclarés hier ?', 'Signalements déclarés cette semaine ?']} />
+      <FollowUps onAsk={onAsk} items={[relabels.qYesterday, relabels.qWeek]} />
     </CardShell>
   );
 }
@@ -1833,11 +1793,14 @@ function HeatmapCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const days: HeatmapDay[] = [];
   for (const d of asArray<unknown>(data.days)) {
     const rec = asRecord(d);
@@ -1858,33 +1821,35 @@ function HeatmapCard({
   return (
     <CardShell
       title={title}
-      meta={start !== undefined && end !== undefined ? `Du ${fmtDate(start)} au ${fmtDate(end)}` : undefined}
+      meta={start !== undefined && end !== undefined ? (en ? `From ${fmtDate(start, lang)} to ${fmtDate(end, lang)}` : `Du ${fmtDate(start, lang)} au ${fmtDate(end, lang)}`) : undefined}
       listenText={speak(
-        'Calendrier des pannes.',
+        en ? 'Breakdown calendar.' : 'Calendrier des pannes.',
         total === 0
-          ? 'Aucune panne sur la période.'
+          ? en ? 'No breakdowns in this period.' : 'Aucune panne sur la période.'
           : total === 1
-            ? '1 panne sur la période.'
-            : `${fmtInt(total)} pannes sur la période.`,
-        total > 0 && peak.count > 0 ? `Jour le plus chargé : le ${fmtDate(peak.date)}, ${fmtInt(peak.count)} panne${peak.count > 1 ? 's' : ''}.` : undefined,
+            ? en ? '1 breakdown in this period.' : '1 panne sur la période.'
+            : en ? `${fmtInt(total, lang)} breakdowns in this period.` : `${fmtInt(total, lang)} pannes sur la période.`,
+        total > 0 && peak.count > 0 ? (en ? `Busiest day: ${fmtDate(peak.date, lang)}, ${fmtInt(peak.count, lang)} breakdown${peak.count > 1 ? 's' : ''}.` : `Jour le plus chargé : le ${fmtDate(peak.date, lang)}, ${fmtInt(peak.count, lang)} panne${peak.count > 1 ? 's' : ''}.`) : undefined,
       )}
     >
       <CalendarHeatmap
         days={days}
         total={total}
-        onSelect={onAsk === undefined ? undefined : (date) => onAsk(`Que s'est-il passé le ${fmtDate(date)} ?`)}
+        onSelect={onAsk === undefined ? undefined : (date) => onAsk(en ? `What happened on ${fmtDate(date, lang)}?` : `Que s'est-il passé le ${fmtDate(date, lang)} ?`)}
+        lang={lang}
       />
       {onAsk !== undefined && (
         <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">
-          Touchez un jour pour poser une question dessus.
+{en ? 'Tap a day to ask about it.' : 'Touchez un jour pour poser une question dessus.'}
         </p>
       )}
-      <FollowUps onAsk={onAsk} items={['Voir les tendances sur 6 mois', 'Voir la carte du territoire']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'Show trends over 6 months' : 'Voir les tendances sur 6 mois', en ? 'View the territory map' : 'Voir la carte du territoire']} />
     </CardShell>
   );
 }
 
-function TimelineCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+function TimelineCard({ title, data, lang }: { title: string; data: Record<string, unknown>; lang?: string }) {
+  const en = lang === 'en';
   const steps: TimelineStep[] = [];
   for (const s of asArray<unknown>(data.timeline)) {
     const rec = asRecord(s);
@@ -1903,12 +1868,12 @@ function TimelineCard({ title, data }: { title: string; data: Record<string, unk
       title={title}
       meta={fmtOpt(data.reference_code)}
       listenText={speak(
-        "Suivi de l'incident.",
-        current !== undefined ? `Étape actuelle : ${current}.` : 'Toutes les étapes sont faites.',
-        `${doneCount} étape${doneCount > 1 ? 's' : ''} sur ${steps.length} faite${doneCount > 1 ? 's' : ''}.`,
+        en ? 'Incident tracking.' : "Suivi de l'incident.",
+        current !== undefined ? (en ? `Current step: ${current}.` : `Étape actuelle : ${current}.`) : en ? 'All steps are done.' : 'Toutes les étapes sont faites.',
+        en ? `${doneCount} of ${steps.length} steps done.` : `${doneCount} étape${doneCount > 1 ? 's' : ''} sur ${steps.length} faite${doneCount > 1 ? 's' : ''}.`,
       )}
     >
-      <IncidentTimeline steps={steps} />
+      <IncidentTimeline steps={steps} lang={lang} />
     </CardShell>
   );
 }
@@ -1917,16 +1882,24 @@ const BUDGET_CATEGORY_LABEL: Record<string, string> = {
   ...CATEGORY_LABEL,
   unknown: 'Autre',
 };
+const BUDGET_CATEGORY_LABEL_EN: Record<string, string> = {
+  ...CATEGORY_LABEL_EN,
+  unknown: 'Other',
+};
 
 function BudgetCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
+  const budgetLabel = en ? BUDGET_CATEGORY_LABEL_EN : BUDGET_CATEGORY_LABEL;
   const schools: BudgetSchool[] = [];
   for (const e of asArray<unknown>(data.ecoles)) {
     const rec = asRecord(e);
@@ -1945,7 +1918,7 @@ function BudgetCard({
     if (typeof v !== 'number' || !Number.isFinite(v)) continue;
     categories.push({
       code,
-      label: BUDGET_CATEGORY_LABEL[code] ?? code,
+      label: budgetLabel[code] ?? code,
       cost: Math.max(0, v),
       share: Math.max(0, vizNum(shares[code])),
     });
@@ -1958,15 +1931,15 @@ function BudgetCard({
   const currency = fmtOpt(data.currency) ?? 'XAF';
   if (schools.length === 0 && categories.length === 0) return null;
   const top = [...schools].sort((a, b) => b.cost - a.cost)[0];
-  const spokenMoney = currency === 'XAF' ? 'francs' : currency;
+  const spokenMoney = en ? (currency === 'XAF' ? 'CFA francs' : currency) : currency === 'XAF' ? 'francs' : currency;
   return (
     <CardShell
       title={title}
       meta={fmtOpt(data.district)}
       listenText={speak(
-        'Comparaison des budgets réparations.',
-        `Total : ${fmtInt(total)} ${spokenMoney}.`,
-        top !== undefined ? `L'école la plus chère : ${top.name}, ${fmtInt(top.cost)} ${spokenMoney}.` : undefined,
+        en ? 'Repair budget comparison.' : 'Comparaison des budgets réparations.',
+        en ? `Total: ${fmtInt(total, lang)} ${spokenMoney}.` : `Total : ${fmtInt(total, lang)} ${spokenMoney}.`,
+        top !== undefined ? (en ? `Most expensive school: ${top.name}, ${fmtInt(top.cost, lang)} ${spokenMoney}.` : `L'école la plus chère : ${top.name}, ${fmtInt(top.cost, lang)} ${spokenMoney}.`) : undefined,
       )}
     >
       <BudgetCompare
@@ -1979,28 +1952,30 @@ function BudgetCard({
             ? undefined
             : (i) => {
                 const s = schools[i];
-                if (s !== undefined) onAsk(`Analyser ${s.name} ?`);
+                if (s !== undefined) onAsk(en ? `Analyze ${s.name}?` : `Analyser ${s.name} ?`);
               }
         }
+        lang={lang}
       />
       <FollowUps
         onAsk={onAsk}
-        items={top !== undefined ? [`Analyser ${top.name} ?`, 'Voir les tendances sur 6 mois'] : ['Voir les tendances sur 6 mois']}
+        items={top !== undefined ? (en ? [`Analyze ${top.name}?`, 'Show trends over 6 months'] : [`Analyser ${top.name} ?`, 'Voir les tendances sur 6 mois']) : [en ? 'Show trends over 6 months' : 'Voir les tendances sur 6 mois']}
       />
     </CardShell>
   );
 }
 
-function CapabilitiesCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function CapabilitiesCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const items = asArray<Record<string, unknown>>(data.items);
   if (items.length === 0) return null;
   const insight = fmtOpt(data.insight) ?? '';
   return (
-    <CardShell title={title} listenText={speak(insight, 'Voici des exemples de questions à me poser.')}>
+    <CardShell title={title} listenText={speak(insight, en ? 'Here are some example questions to ask me.' : 'Voici des exemples de questions à me poser.')}>
       <InsightLine text={insight} />
       <ol className="space-y-2">
         {items.map((it, i) => {
-          const capability = fmtOpt(it.capability) ?? `Capacité ${i + 1}`;
+          const capability = fmtOpt(it.capability) ?? (en ? `Capability ${i + 1}` : `Capacité ${i + 1}`);
           const exemple = fmtOpt(it.exemple);
           return (
             <li key={`${capability}-${i}`} className="flex items-start gap-3">
@@ -2029,19 +2004,20 @@ function CapabilitiesCard({ title, data, onAsk }: { title: string; data: Record<
   );
 }
 
-function DistrictAlertsCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function DistrictAlertsCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const alerts = asArray<Record<string, unknown>>(data.alerts);
   const insight = fmtOpt(data.insight) ?? '';
   if (alerts.length === 0) {
     return (
-      <CardShell title={title} listenText={speak(insight === '' ? 'Aucune alerte sur ce district. Tout est calme.' : insight)}>
+      <CardShell title={title} listenText={speak(insight === '' ? (en ? 'No alerts in this district. All quiet.' : 'Aucune alerte sur ce district. Tout est calme.') : insight)}>
         <InsightLine text={insight} />
         <GuideEmpty
-          phrase="Aucune alerte."
-          conseil="Tout est calme sur ce district."
+          phrase={en ? 'No alerts.' : 'Aucune alerte.'}
+          conseil={en ? 'All quiet in this district.' : 'Tout est calme sur ce district.'}
           actions={[
-            { label: 'Voir un autre district ?', question: 'Voir un autre district ?' },
-            { label: 'Quelles écoles aider ?', question: "Quelles écoles ont le plus besoin d'aide ?" },
+            { label: en ? 'View another district?' : 'Voir un autre district ?', question: en ? 'View another district?' : 'Voir un autre district ?' },
+            { label: en ? 'Which schools to help?' : 'Quelles écoles aider ?', question: en ? 'Which schools need the most help?' : "Quelles écoles ont le plus besoin d'aide ?" },
           ]}
           onAsk={onAsk}
         />
@@ -2051,8 +2027,8 @@ function DistrictAlertsCard({ title, data, onAsk }: { title: string; data: Recor
   return (
     <CardShell
       title={title}
-      meta={`${alerts.length} alerte${alerts.length > 1 ? 's' : ''}`}
-      listenText={speak(insight, `${alerts.length} alertes à traiter.`)}
+      meta={en ? `${alerts.length} alert${alerts.length > 1 ? 's' : ''}` : `${alerts.length} alerte${alerts.length > 1 ? 's' : ''}`}
+      listenText={speak(insight, en ? `${alerts.length} alerts to handle.` : `${alerts.length} alertes à traiter.`)}
     >
       <InsightLine text={insight} />
       <ul className="space-y-2">
@@ -2061,7 +2037,7 @@ function DistrictAlertsCard({ title, data, onAsk }: { title: string; data: Recor
             <UrgencyDot level={fmtOpt(a.urgency) ?? fmtOpt(a.severity) ?? fmtOpt(a.level) ?? 'medium'} />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold leading-snug">
-                {fmtOpt(a.title) ?? fmtOpt(a.label) ?? fmtOpt(a.message) ?? `Alerte ${i + 1}`}
+{fmtOpt(a.title) ?? fmtOpt(a.label) ?? fmtOpt(a.message) ?? (en ? `Alert ${i + 1}` : `Alerte ${i + 1}`)}
               </p>
               {(fmtOpt(a.school_name) ?? fmtOpt(a.school) ?? fmtOpt(a.district) ?? fmtOpt(a.reference_code)) !== undefined && (
                 <p className="mt-0.5 font-mono text-[11px] text-stone-500 dark:text-stone-400">
@@ -2077,24 +2053,25 @@ function DistrictAlertsCard({ title, data, onAsk }: { title: string; data: Recor
           </li>
         ))}
       </ul>
-      <FollowUps onAsk={onAsk} items={['Qui envoyer sur place ?', 'Voir les détails du premier incident']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'Who to send on site?' : 'Qui envoyer sur place ?', en ? 'View the first incident details' : 'Voir les détails du premier incident']} />
     </CardShell>
   );
 }
 
-function EpidemicAlertsCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function EpidemicAlertsCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const clusters = asArray<Record<string, unknown>>(data.clusters);
   const insight = fmtOpt(data.insight) ?? '';
   if (clusters.length === 0) {
     return (
-      <CardShell title={title} listenText={speak(insight === '' ? 'Aucun foyer sanitaire détecté. La veille continue.' : insight)}>
+      <CardShell title={title} listenText={speak(insight === '' ? (en ? 'No health clusters detected. Monitoring continues.' : 'Aucun foyer sanitaire détecté. La veille continue.') : insight)}>
         <InsightLine text={insight} />
         <GuideEmpty
-          phrase="Aucun foyer détecté."
-          conseil="La veille sanitaire continue."
+          phrase={en ? 'No clusters detected.' : 'Aucun foyer détecté.'}
+          conseil={en ? 'Health monitoring continues.' : 'La veille sanitaire continue.'}
           actions={[
-            { label: 'Voir les alertes ?', question: 'Voir les alertes du district ?' },
-            { label: 'Voir les incidents ?', question: 'Voir les incidents ouverts' },
+            { label: en ? 'View the alerts?' : 'Voir les alertes ?', question: en ? 'View the district alerts?' : 'Voir les alertes du district ?' },
+            { label: en ? 'View the incidents?' : 'Voir les incidents ?', question: en ? 'View open incidents' : 'Voir les incidents ouverts' },
           ]}
           onAsk={onAsk}
         />
@@ -2104,8 +2081,8 @@ function EpidemicAlertsCard({ title, data, onAsk }: { title: string; data: Recor
   return (
     <CardShell
       title={title}
-      meta={`${clusters.length} foyer${clusters.length > 1 ? 's' : ''}`}
-      listenText={speak(insight, 'Attention, des foyers sanitaires sont suspectés.')}
+      meta={en ? `${clusters.length} cluster${clusters.length > 1 ? 's' : ''}` : `${clusters.length} foyer${clusters.length > 1 ? 's' : ''}`}
+      listenText={speak(insight, en ? 'Warning, suspected health clusters.' : 'Attention, des foyers sanitaires sont suspectés.')}
     >
       <InsightLine text={insight} />
       <ul className="space-y-3">
@@ -2116,16 +2093,16 @@ function EpidemicAlertsCard({ title, data, onAsk }: { title: string; data: Recor
             <li key={i} className="rounded-lg bg-red-50/60 p-3 dark:bg-red-950/20">
               <div className="flex items-center gap-2">
                 <UrgencyDot level="critical" />
-                <p className="text-sm font-bold">{fmtOpt(c.district) ?? fmtOpt(c.title) ?? `Foyer ${i + 1}`}</p>
+                <p className="text-sm font-bold">{fmtOpt(c.district) ?? fmtOpt(c.title) ?? (en ? `Cluster ${i + 1}` : `Foyer ${i + 1}`)}</p>
                 {fmtOpt(c.risk_level) !== undefined && (
                   <span className="ml-auto rounded-full bg-red-700 px-2 py-0.5 text-[11px] font-bold text-white dark:bg-red-400 dark:text-red-950">
-                    risque {fmtOpt(c.risk_level)}
+{en ? 'risk' : 'risque'} {fmtOpt(c.risk_level)}
                   </span>
                 )}
               </div>
               {(typeof c.school_count === 'number' || typeof c.incident_count === 'number') && (
                 <p className="mt-1 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-                  {[typeof c.school_count === 'number' ? `${c.school_count} école${c.school_count > 1 ? 's' : ''}` : undefined, typeof c.incident_count === 'number' ? `${c.incident_count} incident${c.incident_count > 1 ? 's' : ''}` : undefined].filter((s) => s !== undefined).join(' · ')}
+                  {[typeof c.school_count === 'number' ? (en ? `${c.school_count} school${c.school_count > 1 ? 's' : ''}` : `${c.school_count} école${c.school_count > 1 ? 's' : ''}`) : undefined, typeof c.incident_count === 'number' ? `${c.incident_count} incident${c.incident_count > 1 ? 's' : ''}` : undefined].filter((s) => s !== undefined).join(' · ')}
                 </p>
               )}
               {schools.length > 0 && <p className="mt-1 text-[13px] text-stone-600 dark:text-stone-400">{schools.join(' · ')}</p>}
@@ -2143,23 +2120,25 @@ function EpidemicAlertsCard({ title, data, onAsk }: { title: string; data: Recor
           );
         })}
       </ul>
-      <FollowUps onAsk={onAsk} items={['Qui envoyer sur place ?', 'Voir les incidents ouverts']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'Who to send on site?' : 'Qui envoyer sur place ?', en ? 'View open incidents' : 'Voir les incidents ouverts']} />
     </CardShell>
   );
 }
 
-function tourFallback(t: Record<string, unknown>): string {
+function tourFallback(t: Record<string, unknown>, lang?: string): string {
+  const en = lang === 'en';
   const aff = affMax(t);
   const parts = [
     typeof t.open_incidents === 'number' ? `${t.open_incidents} incident${t.open_incidents > 1 ? 's' : ''}` : undefined,
-    aff !== null ? `${fmtInt(aff)} élèves` : undefined,
-    fmtOpt(t.max_urgency) !== undefined ? `urgence ${fmtOpt(t.max_urgency)}` : undefined,
+    aff !== null ? `${fmtInt(aff, lang)} ${en ? 'pupils' : 'élèves'}` : undefined,
+    fmtOpt(t.max_urgency) !== undefined ? (en ? `urgency ${fmtOpt(t.max_urgency)}` : `urgence ${fmtOpt(t.max_urgency)}`) : undefined,
   ].filter((s): s is string => s !== undefined);
   if (parts.length > 0) return parts.join(' · ');
   return fmtOpt(t.district) ?? '';
 }
 
-function MaintenanceTeamCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function MaintenanceTeamCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const workload = asArray<Record<string, unknown>>(data.workload);
   const tour = asArray<Record<string, unknown>>(data.suggested_tour ?? data.tour);
   const insight = fmtOpt(data.insight) ?? '';
@@ -2175,14 +2154,14 @@ function MaintenanceTeamCard({ title, data, onAsk }: { title: string; data: Reco
               <p className="mt-0.5 font-display text-xl font-extrabold tabular-nums">
                 {typeof w.open_incidents === 'number' ? w.open_incidents : typeof w.open === 'number' ? w.open : typeof w.incidents === 'number' ? w.incidents : '—'}
               </p>
-              <p className="text-[11px] text-stone-500 dark:text-stone-400">incident(s) ouvert(s)</p>
+              <p className="text-[11px] text-stone-500 dark:text-stone-400">{en ? 'open incident(s)' : 'incident(s) ouvert(s)'}</p>
             </div>
           ))}
         </div>
       )}
       {tour.length > 0 && (
         <div>
-          <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400">Tournée suggérée</p>
+          <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400">{en ? 'Suggested route' : 'Tournée suggérée'}</p>
           <ol className="space-y-1.5">
             {tour.map((t, i) => (
               <li key={i} className="flex items-start gap-2.5">
@@ -2190,9 +2169,9 @@ function MaintenanceTeamCard({ title, data, onAsk }: { title: string; data: Reco
                   {typeof t.order === 'number' ? t.order : typeof t.step === 'number' ? t.step : i + 1}
                 </span>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold leading-snug">{fmtOpt(t.school_name) ?? fmtOpt(t.school) ?? fmtOpt(t.name) ?? `Étape ${i + 1}`}</p>
+                  <p className="text-sm font-semibold leading-snug">{fmtOpt(t.school_name) ?? fmtOpt(t.school) ?? fmtOpt(t.name) ?? (en ? `Step ${i + 1}` : `Étape ${i + 1}`)}</p>
                   <p className="text-[13px] text-stone-500 dark:text-stone-400">
-                    {fmtOpt(t.reason) ?? fmtOpt(t.why) ?? tourFallback(t)}
+                    {fmtOpt(t.reason) ?? fmtOpt(t.why) ?? tourFallback(t, lang)}
                   </p>
                 </div>
               </li>
@@ -2200,12 +2179,13 @@ function MaintenanceTeamCard({ title, data, onAsk }: { title: string; data: Reco
           </ol>
         </div>
       )}
-      <FollowUps onAsk={onAsk} items={['Voir les missions passées ?', 'Quelles écoles ont le plus besoin d’aide ?']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'View past missions?' : 'Voir les missions passées ?', en ? 'Which schools need the most help?' : 'Quelles écoles ont le plus besoin d’aide ?']} />
     </CardShell>
   );
 }
 
-function CompareSchoolsCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function CompareSchoolsCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const columns = asArray<Record<string, unknown>>(data.columns);
   const verdict = fmtOpt(data.verdict) ?? '';
   const unresolved = asArray<unknown>(data.unresolved).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
@@ -2214,7 +2194,7 @@ function CompareSchoolsCard({ title, data, onAsk }: { title: string; data: Recor
   const cell = (c: Record<string, unknown>, keys: string[]): string => {
     for (const k of keys) {
       const v = c[k];
-      if (typeof v === 'number' && Number.isFinite(v)) return fmtInt(v);
+      if (typeof v === 'number' && Number.isFinite(v)) return fmtInt(v, lang);
     }
     return '—';
   };
@@ -2225,17 +2205,17 @@ function CompareSchoolsCard({ title, data, onAsk }: { title: string; data: Recor
         <table className="w-full min-w-[420px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-stone-200 dark:border-white/10">
-              <th className="py-1.5 pr-2 text-left text-[11px] font-semibold text-stone-500 dark:text-stone-400">École</th>
-              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">Ouverts</th>
-              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">Élèves</th>
-              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">Interv.</th>
-              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">Coût XAF</th>
+              <th className="py-1.5 pr-2 text-left text-[11px] font-semibold text-stone-500 dark:text-stone-400">{en ? 'School' : 'École'}</th>
+              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">{en ? 'Open' : 'Ouverts'}</th>
+              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">{en ? 'Pupils' : 'Élèves'}</th>
+              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">{en ? 'Visits' : 'Interv.'}</th>
+              <th className="px-2 py-1.5 text-right font-mono text-[11px] text-stone-500 dark:text-stone-400">{en ? 'Cost XAF' : 'Coût XAF'}</th>
             </tr>
           </thead>
           <tbody>
             {columns.map((c, i) => (
               <tr key={i} className="border-b border-stone-100 last:border-0 dark:border-white/[0.05]">
-                <td className="py-1.5 pr-2 font-semibold leading-snug">{fmtOpt(c.school_name) ?? fmtOpt(c.school) ?? fmtOpt(c.name) ?? `École ${i + 1}`}</td>
+                <td className="py-1.5 pr-2 font-semibold leading-snug">{fmtOpt(c.school_name) ?? fmtOpt(c.school) ?? fmtOpt(c.name) ?? (en ? `School ${i + 1}` : `École ${i + 1}`)}</td>
                 <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['open', 'incidents', 'open_incidents'])}</td>
                 <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['affected_students_max', 'affected', 'students', 'affected_students'])}</td>
                 <td className="px-2 py-1.5 text-right font-mono tabular-nums">{cell(c, ['logs', 'interventions', 'logs_count'])}</td>
@@ -2249,9 +2229,9 @@ function CompareSchoolsCard({ title, data, onAsk }: { title: string; data: Recor
         <p className="mt-3 rounded-lg bg-teal-700/[0.07] p-2.5 text-sm font-medium leading-relaxed dark:bg-teal-300/10">› {verdict}</p>
       )}
       {unresolved.length > 0 && (
-        <p className="mt-2 text-[13px] text-amber-700 dark:text-amber-400">Non reconnue(s) : {unresolved.join(', ')}.</p>
+        <p className="mt-2 text-[13px] text-amber-700 dark:text-amber-400">{en ? 'Unrecognized: ' : 'Non reconnue(s) : '}{unresolved.join(', ')}.</p>
       )}
-      <FollowUps onAsk={onAsk} items={verdict !== '' ? ['Pourquoi ce verdict ?', 'Voir les tendances sur 6 mois'] : ['Voir les tendances sur 6 mois']} />
+      <FollowUps onAsk={onAsk} items={verdict !== '' ? (en ? ['Why this verdict?', 'Show trends over 6 months'] : ['Pourquoi ce verdict ?', 'Voir les tendances sur 6 mois']) : [en ? 'Show trends over 6 months' : 'Voir les tendances sur 6 mois']} />
     </CardShell>
   );
 }
@@ -2265,19 +2245,30 @@ const FIGURE_LABELS: Record<string, string> = {
   repair_ratio_percent: 'Ratio réparations (%)',
   schools: 'Écoles',
 };
+const FIGURE_LABELS_EN: Record<string, string> = {
+  incident_count: 'Incidents analyzed',
+  open_incidents: 'Open incidents',
+  total_repair_cost: 'Repair cost (XAF)',
+  total_days_without_service: 'Days without service',
+  estimated_replacement_cost: 'Replacement cost (XAF)',
+  repair_ratio_percent: 'Repair ratio (%)',
+  schools: 'Schools',
+};
 
-function CopilotAnswerCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function CopilotAnswerCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
+  const figureLabel = en ? FIGURE_LABELS_EN : FIGURE_LABELS;
   const recommendation = fmtOpt(data.recommendation_label) ?? fmtOpt(data.recommendation) ?? '';
   const insight = fmtOpt(data.insight) ?? '';
   const rawFigures = data.figures ?? data.chiffres;
   const figures: Array<{ label: string; value: string }> = Array.isArray(rawFigures)
     ? asArray<Record<string, unknown>>(rawFigures).map((f, i) => ({
-        label: fmtOpt(f.label) ?? `Chiffre ${i + 1}`,
-        value: typeof f.value === 'number' ? fmtInt(f.value) : fmtOpt(f.value) ?? '—',
+        label: fmtOpt(f.label) ?? (en ? `Figure ${i + 1}` : `Chiffre ${i + 1}`),
+        value: typeof f.value === 'number' ? fmtInt(f.value, lang) : fmtOpt(f.value) ?? '—',
       }))
     : Object.entries(asRecord(rawFigures)).map(([k, v]) => ({
-        label: FIGURE_LABELS[k] ?? k.replace(/_/g, ' '),
-        value: typeof v === 'number' ? fmtInt(v) : fmtOpt(v) ?? '—',
+        label: figureLabel[k] ?? k.replace(/_/g, ' '),
+        value: typeof v === 'number' ? fmtInt(v, lang) : fmtOpt(v) ?? '—',
       }));
   if (insight === '' && recommendation === '') return null;
   return (
@@ -2293,25 +2284,26 @@ function CopilotAnswerCard({ title, data, onAsk }: { title: string; data: Record
       {recommendation !== '' && (
         <p className="rounded-lg bg-teal-700/[0.07] p-2.5 text-sm font-medium leading-relaxed dark:bg-teal-300/10">› {recommendation}</p>
       )}
-      <FollowUps onAsk={onAsk} items={['Explique-moi pourquoi ?', 'Que faire en premier ?']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'Explain why?' : 'Explique-moi pourquoi ?', en ? 'What should I do first?' : 'Que faire en premier ?']} />
     </CardShell>
   );
 }
 
-function MissionTimelineCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function MissionTimelineCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const items = asArray<Record<string, unknown>>(data.items);
   const totals = asRecord(data.totals);
   const insight = fmtOpt(data.insight) ?? '';
   if (items.length === 0) {
     return (
-      <CardShell title={title} listenText={speak(insight === '' ? 'Aucune mission sur cette période.' : insight)}>
+      <CardShell title={title} listenText={speak(insight === '' ? (en ? 'No missions in this period.' : 'Aucune mission sur cette période.') : insight)}>
         <InsightLine text={insight} />
         <GuideEmpty
-          phrase="Aucune mission sur cette période."
-          conseil="Essaie une période plus longue."
+          phrase={en ? 'No missions in this period.' : 'Aucune mission sur cette période.'}
+          conseil={en ? 'Try a longer period.' : 'Essaie une période plus longue.'}
           actions={[
-            { label: 'Voir plus long ?', question: 'Voir une période plus longue ?' },
-            { label: 'Qui envoyer ?', question: 'Qui envoyer sur place ?' },
+            { label: en ? 'View longer?' : 'Voir plus long ?', question: en ? 'View a longer period?' : 'Voir une période plus longue ?' },
+            { label: en ? 'Who to send?' : 'Qui envoyer ?', question: en ? 'Who to send on site?' : 'Qui envoyer sur place ?' },
           ]}
           onAsk={onAsk}
         />
@@ -2323,9 +2315,9 @@ function MissionTimelineCard({ title, data, onAsk }: { title: string; data: Reco
     const missions = totals.missions ?? totals.count;
     const schools = totals.schools ?? totals.schools_visited;
     const cost = totals.cost ?? totals.cost_total;
-    if (typeof missions === 'number') parts.push(`${fmtInt(missions)} mission${missions > 1 ? 's' : ''}`);
-    if (typeof schools === 'number') parts.push(`${fmtInt(schools)} école${schools > 1 ? 's' : ''}`);
-    if (typeof cost === 'number') parts.push(`${fmtInt(cost)} XAF`);
+    if (typeof missions === 'number') parts.push(`${fmtInt(missions, lang)} mission${missions > 1 ? 's' : ''}`);
+    if (typeof schools === 'number') parts.push(en ? `${fmtInt(schools, lang)} school${schools > 1 ? 's' : ''}` : `${fmtInt(schools, lang)} école${schools > 1 ? 's' : ''}`);
+    if (typeof cost === 'number') parts.push(`${fmtInt(cost, lang)} XAF`);
     return parts.length > 0 ? parts.join(' · ') : undefined;
   })();
   return (
@@ -2335,25 +2327,25 @@ function MissionTimelineCard({ title, data, onAsk }: { title: string; data: Reco
         {items.map((it, i) => (
           <li key={i} className="relative">
             <span aria-hidden="true" className="absolute -left-[23px] top-1 h-2.5 w-2.5 rounded-full bg-teal-700 dark:bg-teal-300" />
-            <p className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{fmtDate(fmtOpt(it.date) ?? fmtOpt(it.day))}</p>
+            <p className="font-mono text-[11px] text-stone-500 dark:text-stone-400">{fmtDate(fmtOpt(it.date) ?? fmtOpt(it.day), lang)}</p>
             <p className="text-sm font-semibold leading-snug">{fmtOpt(it.school) ?? fmtOpt(it.name) ?? `Mission ${i + 1}`}</p>
             {(fmtOpt(it.action) ?? fmtOpt(it.label) ?? fmtOpt(it.notes)) !== undefined && (
               <p className="text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(it.action) ?? fmtOpt(it.label) ?? fmtOpt(it.notes)}</p>
             )}
             {(typeof it.cost === 'number' || typeof it.cost_amount === 'number') && (
               <p className="mt-0.5 font-mono text-[11px] text-stone-500 dark:text-stone-400">
-                {fmtInt((typeof it.cost === 'number' ? it.cost : it.cost_amount) as number)} XAF
+                {fmtInt((typeof it.cost === 'number' ? it.cost : it.cost_amount) as number, lang)} XAF
               </p>
             )}
           </li>
         ))}
       </ol>
-      <FollowUps onAsk={onAsk} items={['Voir une période plus longue ?', 'Comparer les budgets ?']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'View a longer period?' : 'Voir une période plus longue ?', en ? 'Compare budgets?' : 'Comparer les budgets ?']} />
     </CardShell>
   );
 }
 
-function DocumentBriefingCard({ title, data }: { title: string; data: Record<string, unknown> }) {
+function DocumentBriefingCard({ title, data, lang }: { title: string; data: Record<string, unknown>; lang?: string }) {
   const sections = asArray<Record<string, unknown>>(data.sections);
   const rawSlides = asArray<Record<string, unknown>>(data.slides);
   const insight = fmtOpt(data.insight) ?? '';
@@ -2364,7 +2356,7 @@ function DocumentBriefingCard({ title, data }: { title: string; data: Record<str
         subtitle: fmtOpt(s.subtitle),
         lines: asArray<unknown>(s.bullets ?? s.lines).map((b) => (typeof b === 'string' ? b : '')).filter((b) => b !== ''),
         stats: asArray<Record<string, unknown>>(s.stats)
-          .map((st) => ({ label: fmtOpt(st.label) ?? '', value: fmtOpt(st.value) ?? (typeof st.value === 'number' ? fmtInt(st.value) : '') }))
+          .map((st) => ({ label: fmtOpt(st.label) ?? '', value: fmtOpt(st.value) ?? (typeof st.value === 'number' ? fmtInt(st.value, lang) : '') }))
           .filter((st) => st.label !== ''),
         note: fmtOpt(s.note),
       }))
@@ -2383,7 +2375,7 @@ function DocumentBriefingCard({ title, data }: { title: string; data: Record<str
     <CardShell title={title} listenText={speak(insight)}>
       <InsightLine text={insight} />
       {slides.length > 0 ? (
-        <SlideDeck slides={slides} />
+        <SlideDeck slides={slides} lang={lang} />
       ) : (
         <div className="space-y-3">
           {sections.map((s, i) => (
@@ -2407,24 +2399,33 @@ const CHANTIER_LABELS: Record<string, string> = {
   cost_amount: 'Coût (XAF)',
   notes: 'Notes',
 };
+const CHANTIER_LABELS_EN: Record<string, string> = {
+  incident: 'Incident',
+  progress_percent: 'Progress',
+  step: 'Step',
+  cost_amount: 'Cost (XAF)',
+  notes: 'Notes',
+};
 
-function ChantierDossierCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function ChantierDossierCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const fields = asRecord(data.fields);
   const missingLabels = asArray<unknown>(data.missing_labels).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
   const questions = asArray<unknown>(data.questions).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
   const ready = data.ready === true || data.complete === true;
   const insight = fmtOpt(data.insight) ?? '';
   const recap = fmtOpt(data.recap);
-  const entries = Object.entries(CHANTIER_LABELS)
-    .map(([k, label]) => ({ label, value: fields[k] }))
+  const chantierLabel = en ? CHANTIER_LABELS_EN : CHANTIER_LABELS;
+  const entries = Object.entries(chantierLabel)
+    .map(([k, label]) => ({ key: k, label, value: fields[k] }))
     .filter((e) => e.value !== undefined && e.value !== null && e.value !== '');
   if (entries.length === 0 && questions.length === 0) return null;
   const progress = typeof fields.progress_percent === 'number' ? Math.max(0, Math.min(100, fields.progress_percent)) : undefined;
   return (
     <CardShell
       title={title}
-      meta={ready ? 'Dossier prêt' : 'En cours'}
-      listenText={speak(insight, recap, ready ? 'Le dossier est prêt à valider.' : undefined)}
+      meta={ready ? (en ? 'File ready' : 'Dossier prêt') : en ? 'In progress' : 'En cours'}
+      listenText={speak(insight, recap, ready ? (en ? 'The file is ready to confirm.' : 'Le dossier est prêt à valider.') : undefined)}
     >
       <InsightLine text={insight} />
       {progress !== undefined && (
@@ -2432,15 +2433,15 @@ function ChantierDossierCard({ title, data, onAsk }: { title: string; data: Reco
           <div className="h-2 overflow-hidden rounded-full bg-stone-200 dark:bg-white/10">
             <div className="h-full rounded-full bg-teal-700 transition-[width] dark:bg-teal-400" style={{ width: `${progress}%` }} />
           </div>
-          <p className="mt-1 font-mono text-[11px] text-stone-500 dark:text-stone-400">{progress} % d'avancement</p>
+          <p className="mt-1 font-mono text-[11px] text-stone-500 dark:text-stone-400">{en ? `${progress}% complete` : `${progress} % d'avancement`}</p>
         </div>
       )}
       <dl className="space-y-1.5">
-        {entries.filter((e) => e.label !== 'Avancement').map((e) => (
+{entries.filter((e) => e.key !== 'progress_percent').map((e) => (
           <div key={e.label} className="flex items-baseline justify-between gap-3 text-sm">
             <dt className="shrink-0 text-[11px] font-semibold text-stone-500 dark:text-stone-400">{e.label}</dt>
             <dd className="text-right font-medium leading-snug">
-              {typeof e.value === 'number' ? fmtInt(e.value) : String(e.value)}
+              {typeof e.value === 'number' ? fmtInt(e.value, lang) : String(e.value)}
             </dd>
           </div>
         ))}
@@ -2448,7 +2449,7 @@ function ChantierDossierCard({ title, data, onAsk }: { title: string; data: Reco
       {missingLabels.length > 0 && (
         <div className="mt-2.5 flex flex-wrap gap-1">
           {missingLabels.map((m) => (
-            <span key={m} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">manque : {m}</span>
+            <span key={m} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">{en ? 'missing: ' : 'manque : '}{m}</span>
           ))}
         </div>
       )}
@@ -2477,8 +2478,16 @@ const INTERVENTION_LABELS: Record<string, string> = {
   budget_xaf: 'Budget (XAF)',
   team: 'Équipe',
 };
+const INTERVENTION_LABELS_EN: Record<string, string> = {
+  incident_label: 'Incident',
+  school_name: 'School',
+  date_label: 'Planned date',
+  budget_xaf: 'Budget (XAF)',
+  team: 'Team',
+};
 
-function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function InterventionPrepCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const fields = asRecord(data.fields);
   const strList = (v: unknown): string[] => asArray<unknown>(v).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
   const missingLabels = strList(data.missing_labels);
@@ -2494,7 +2503,8 @@ function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Rec
   const tools = strList(kit.required_tools);
   const safety = strList(kit.immediate_safety_measures);
   const duration = fmtOpt(kit.estimated_intervention_time);
-  const entries = Object.entries(INTERVENTION_LABELS)
+  const interventionLabel = en ? INTERVENTION_LABELS_EN : INTERVENTION_LABELS;
+  const entries = Object.entries(interventionLabel)
     .map(([k, label]) => ({ label, value: fields[k] }))
     .filter((e) => e.value !== undefined && e.value !== null && e.value !== '');
   if (entries.length === 0 && questions.length === 0) return null;
@@ -2502,7 +2512,7 @@ function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Rec
   return (
     <CardShell
       title={title}
-      meta={ready ? 'Dossier prêt' : 'En préparation'}
+      meta={ready ? (en ? 'File ready' : 'Dossier prêt') : en ? 'In preparation' : 'En préparation'}
       listenText={speak(insight, budgetVerdict, reco)}
     >
       <InsightLine text={insight} />
@@ -2511,7 +2521,7 @@ function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Rec
           <div key={e.label} className="flex items-baseline justify-between gap-3 text-sm">
             <dt className="shrink-0 text-[11px] font-semibold text-stone-500 dark:text-stone-400">{e.label}</dt>
             <dd className="text-right font-medium leading-snug">
-              {typeof e.value === 'number' ? `${fmtInt(e.value)}${e.label.includes('XAF') ? ' XAF' : ''}` : String(e.value)}
+              {typeof e.value === 'number' ? `${fmtInt(e.value, lang)}${e.label.includes('XAF') ? ' XAF' : ''}` : String(e.value)}
             </dd>
           </div>
         ))}
@@ -2526,19 +2536,20 @@ function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Rec
         source={verdictFigures.replacement_source}
         names={verdictFigures.replacement_source_names}
         urls={verdictFigures.replacement_source_urls}
+        lang={lang}
       />
       {(spares.length > 0 || tools.length > 0) && (
         <div className="mt-2.5 rounded-lg border border-line p-2.5">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400">Kit réparation{duration !== undefined ? ` · ${duration}` : ''}</p>
-          {spares.length > 0 && <p className="mt-1 text-[13px] leading-relaxed"><span className="font-semibold">Pièces : </span>{spares.join(', ')}</p>}
-          {tools.length > 0 && <p className="mt-0.5 text-[13px] leading-relaxed"><span className="font-semibold">Outils : </span>{tools.join(', ')}</p>}
-          {safety.length > 0 && <p className="mt-0.5 text-[13px] leading-relaxed"><span className="font-semibold">Sécurité : </span>{safety.join(', ')}</p>}
+          <p className="text-[11px] font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400">{en ? 'Repair kit' : 'Kit réparation'}{duration !== undefined ? ` · ${duration}` : ''}</p>
+          {spares.length > 0 && <p className="mt-1 text-[13px] leading-relaxed"><span className="font-semibold">{en ? 'Parts: ' : 'Pièces : '}</span>{spares.join(', ')}</p>}
+          {tools.length > 0 && <p className="mt-0.5 text-[13px] leading-relaxed"><span className="font-semibold">{en ? 'Tools: ' : 'Outils : '}</span>{tools.join(', ')}</p>}
+          {safety.length > 0 && <p className="mt-0.5 text-[13px] leading-relaxed"><span className="font-semibold">{en ? 'Safety: ' : 'Sécurité : '}</span>{safety.join(', ')}</p>}
         </div>
       )}
       {missingLabels.length > 0 && (
         <div className="mt-2.5 flex flex-wrap gap-1">
           {missingLabels.map((m) => (
-            <span key={m} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">manque : {m}</span>
+            <span key={m} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">{en ? 'missing: ' : 'manque : '}{m}</span>
           ))}
         </div>
       )}
@@ -2548,10 +2559,10 @@ function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Rec
             <button
               key={c}
               type="button"
-              onClick={() => onAsk(`Confier à ${c}`)}
+              onClick={() => onAsk(en ? `Assign to ${c}` : `Confier à ${c}`)}
               className="rounded-lg border border-line bg-card px-3 py-2 text-left text-sm transition-[border-color] hover:border-accent"
             >
-              Confier à {c}
+{en ? 'Assign to ' : 'Confier à '}{c}
             </button>
           ))}
         </div>
@@ -2570,12 +2581,13 @@ function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Rec
           ))}
         </div>
       )}
-      <FollowUps onAsk={onAsk} items={['Voir les tendances ?', 'Préparer un briefing ?']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'View trends?' : 'Voir les tendances ?', en ? 'Prepare a briefing?' : 'Préparer un briefing ?']} />
     </CardShell>
   );
 }
 
-function SaisieAssisteeCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function SaisieAssisteeCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const question = fmtOpt(data.question) ?? '';
   const options = asArray<unknown>(data.options).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
   const progress = typeof data.progress_percent === 'number' ? Math.max(0, Math.min(100, Math.round(data.progress_percent))) : 0;
@@ -2584,7 +2596,7 @@ function SaisieAssisteeCard({ title, data, onAsk }: { title: string; data: Recor
   const insight = fmtOpt(data.insight) ?? '';
   if (question === '' && options.length === 0) return null;
   return (
-    <CardShell title={title} meta={`${progress} %`} listenText={speak(question, options.length > 0 ? `Choix possibles : ${options.join(', ')}.` : undefined)}>
+    <CardShell title={title} meta={`${progress} %`} listenText={speak(question, options.length > 0 ? (en ? `Possible choices: ${options.join(', ')}.` : `Choix possibles : ${options.join(', ')}.`) : undefined)}>
       <div className="mb-3 h-2 overflow-hidden rounded-full bg-stone-200 dark:bg-white/10">
         <div className="h-full rounded-full bg-teal-700 transition-[width] dark:bg-teal-400" style={{ width: `${progress}%` }} />
       </div>
@@ -2618,7 +2630,10 @@ function SaisieAssisteeCard({ title, data, onAsk }: { title: string; data: Recor
   );
 }
 
-function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function OfflineQueueCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
+  const urgencyLabel = en ? URGENCY_EN : URGENCY_FR;
+  const categoryLabel = en ? CATEGORY_LABEL_EN : CATEGORY_LABEL;
   const pending = asArray<Record<string, unknown>>(data.pending);
   const count = typeof data.count === 'number' ? data.count : pending.length;
   const online = data.online === true;
@@ -2627,26 +2642,26 @@ function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<
   return (
     <CardShell
       title={title}
-      meta={online ? 'En ligne' : 'Hors ligne'}
-      listenText={speak(insight, count === 0 ? 'Aucun signalement en attente.' : `${count} signalement${count > 1 ? 's' : ''} en attente de synchronisation.`)}
+      meta={online ? (en ? 'Online' : 'En ligne') : en ? 'Offline' : 'Hors ligne'}
+      listenText={speak(insight, count === 0 ? (en ? 'No reports pending.' : 'Aucun signalement en attente.') : en ? `${count} report${count > 1 ? 's' : ''} pending sync.` : `${count} signalement${count > 1 ? 's' : ''} en attente de synchronisation.`)}
     >
       <InsightLine text={insight} />
       <div className="mb-3 flex items-center gap-2">
         <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${online ? 'bg-teal-700/10 text-teal-800 dark:bg-teal-300/15 dark:text-teal-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200'}`}>
           <span aria-hidden="true" className={`h-2 w-2 rounded-full ${online ? 'bg-teal-600 dark:bg-teal-300' : 'bg-amber-500'}`} />
-          {online ? 'Connecté' : 'Hors ligne'}
+{online ? (en ? 'Connected' : 'Connecté') : en ? 'Offline' : 'Hors ligne'}
         </span>
         <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">
-          {count} en attente{lastSync !== undefined ? ` · synchro : ${lastSync}` : ''}
+{count} {en ? 'pending' : 'en attente'}{lastSync !== undefined ? (en ? ` · last sync: ${lastSync}` : ` · synchro : ${lastSync}`) : ''}
         </span>
       </div>
       {pending.length === 0 ? (
         <GuideEmpty
-          phrase="File vide."
-          conseil="Rien à synchroniser. Tes signalements partiront tout seuls quand tu seras en ligne."
+          phrase={en ? 'Queue empty.' : 'File vide.'}
+          conseil={en ? 'Nothing to sync. Your reports will send automatically when you are back online.' : 'Rien à synchroniser. Tes signalements partiront tout seuls quand tu seras en ligne.'}
           actions={[
-            { label: 'Voir les incidents ?', question: 'Voir les incidents ouverts ?' },
-            { label: 'Remplir un signalement ?', question: 'Aide-moi à remplir un signalement' },
+            { label: en ? 'View the incidents?' : 'Voir les incidents ?', question: en ? 'View open incidents?' : 'Voir les incidents ouverts ?' },
+            { label: en ? 'File a report?' : 'Remplir un signalement ?', question: en ? 'Help me file a report' : 'Aide-moi à remplir un signalement' },
           ]}
           onAsk={onAsk}
         />
@@ -2659,14 +2674,14 @@ function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<
               <li key={i} className="flex items-start gap-2.5 border-b border-stone-200/60 pb-2 last:border-0 last:pb-0 dark:border-white/[0.06]">
                 <UrgencyDot level={urg} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold leading-snug">{fmtOpt(p.school) ?? fmtOpt(p.school_name) ?? `Signalement ${i + 1}`}</p>
+                  <p className="text-sm font-semibold leading-snug">{fmtOpt(p.school) ?? fmtOpt(p.school_name) ?? (en ? `Report ${i + 1}` : `Signalement ${i + 1}`)}</p>
                   {(fmtOpt(p.summary) ?? fmtOpt(p.title)) !== undefined && (
                     <p className="mt-0.5 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(p.summary) ?? fmtOpt(p.title)}</p>
                   )}
                   <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <Badge tone={urgencyTone(urg)}>{URGENCY_FR[urg] ?? urg}</Badge>
+                    <Badge tone={urgencyTone(urg)}>{urgencyLabel[urg] ?? urg}</Badge>
                     {cat !== undefined && (
-                      <Badge>{CATEGORY_LABEL[cat] ?? cat}</Badge>
+                      <Badge>{categoryLabel[cat] ?? cat}</Badge>
                     )}
                   </span>
                   <p className="mt-0.5 font-mono text-[11px] text-stone-500 dark:text-stone-400">
@@ -2679,25 +2694,26 @@ function OfflineQueueCard({ title, data, onAsk }: { title: string; data: Record<
         </ul>
       )}
       {pending.length > 0 && (
-        <FollowUps onAsk={onAsk} items={['Voir les incidents ouverts ?', 'Aide-moi à remplir un signalement']} />
+        <FollowUps onAsk={onAsk} items={[en ? 'View open incidents?' : 'Voir les incidents ouverts ?', en ? 'Help me file a report' : 'Aide-moi à remplir un signalement']} />
       )}
     </CardShell>
   );
 }
 
-function RelancesCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function RelancesCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const items = asArray<Record<string, unknown>>(data.items);
   const insight = fmtOpt(data.insight) ?? '';
   if (items.length === 0) {
     return (
-      <CardShell title={title} listenText={speak(insight === '' ? 'Aucun incident dormant. Tout est suivi.' : insight)}>
+      <CardShell title={title} listenText={speak(insight === '' ? (en ? 'No dormant incidents. Everything is tracked.' : 'Aucun incident dormant. Tout est suivi.') : insight)}>
         <InsightLine text={insight} />
         <GuideEmpty
-          phrase="Aucun incident dormant."
-          conseil="Tout est suivi."
+          phrase={en ? 'No dormant incidents.' : 'Aucun incident dormant.'}
+          conseil={en ? 'Everything is tracked.' : 'Tout est suivi.'}
           actions={[
-            { label: 'Voir les incidents ?', question: 'Voir les incidents ouverts ?' },
-            { label: 'Voir les alertes ?', question: 'Voir les alertes du district ?' },
+            { label: en ? 'View the incidents?' : 'Voir les incidents ?', question: en ? 'View open incidents?' : 'Voir les incidents ouverts ?' },
+            { label: en ? 'View the alerts?' : 'Voir les alertes ?', question: en ? 'View the district alerts?' : 'Voir les alertes du district ?' },
           ]}
           onAsk={onAsk}
         />
@@ -2707,18 +2723,18 @@ function RelancesCard({ title, data, onAsk }: { title: string; data: Record<stri
   return (
     <CardShell
       title={title}
-      meta={`${items.length} à relancer`}
-      listenText={speak(insight, `${items.length} incidents sans nouvelles à relancer.`)}
+      meta={en ? `${items.length} to follow up` : `${items.length} à relancer`}
+      listenText={speak(insight, en ? `${items.length} incidents without news to follow up.` : `${items.length} incidents sans nouvelles à relancer.`)}
     >
       <InsightLine text={insight} />
       <ul className="space-y-3">
         {items.map((it, i) => (
           <li key={i} className="rounded-lg bg-stone-100/70 p-3 dark:bg-white/[0.04]">
             <div className="flex items-center gap-2">
-              <p className="text-sm font-bold">{fmtOpt(it.school_name) ?? fmtOpt(it.school) ?? `École ${i + 1}`}</p>
+              <p className="text-sm font-bold">{fmtOpt(it.school_name) ?? fmtOpt(it.school) ?? (en ? `School ${i + 1}` : `École ${i + 1}`)}</p>
               {typeof it.days_idle === 'number' && (
                 <span className="ml-auto shrink-0 rounded-full bg-amber-100 px-2 py-0.5 font-mono text-[11px] font-bold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">
-                  {it.days_idle} j sans nouvelles
+{it.days_idle}{en ? 'd without news' : ' j sans nouvelles'}
                 </span>
               )}
             </div>
@@ -2731,12 +2747,13 @@ function RelancesCard({ title, data, onAsk }: { title: string; data: Record<stri
           </li>
         ))}
       </ul>
-      <FollowUps onAsk={onAsk} items={['Qui envoyer sur place ?', 'Voir les missions passées ?']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'Who to send on site?' : 'Qui envoyer sur place ?', en ? 'View past missions?' : 'Voir les missions passées ?']} />
     </CardShell>
   );
 }
 
-function ObservatoireCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function ObservatoireCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const totals = asRecord(data.totals);
   const byDistrict = asArray<Record<string, unknown>>(data.by_district);
   const byUrgency = asArray<Record<string, unknown>>(data.by_urgency);
@@ -2750,13 +2767,13 @@ function ObservatoireCard({ title, data, onAsk }: { title: string; data: Record<
     <CardShell title={title} listenText={speak(insight)}>
       <InsightLine text={insight} />
       <div className="mb-3 flex items-end justify-between gap-3">
-        <HeroStat label="Incidents ouverts" value={openCount !== undefined ? fmtInt(openCount) : '—'} />
+        <HeroStat label={en ? 'Open incidents' : 'Incidents ouverts'} value={openCount !== undefined ? fmtInt(openCount, lang) : '—'} lang={lang} />
         {trendCounts.length >= 2 && <Sparkline data={trendCounts} />}
       </div>
       <div className="mb-3 grid grid-cols-3 gap-2">
-        <Stat label="Écoles suivies" value={typeof totals.schools === 'number' ? fmtInt(totals.schools) : '—'} />
-        <Stat label="Élèves affectés" value={typeof totals.affected_students === 'number' ? fmtInt(totals.affected_students) : '—'} />
-        <Stat label="Critiques" value={typeof totals.critical === 'number' ? fmtInt(totals.critical) : '—'} />
+        <Stat label={en ? 'Tracked schools' : 'Écoles suivies'} value={typeof totals.schools === 'number' ? fmtInt(totals.schools, lang) : '—'} />
+        <Stat label={en ? 'Affected pupils' : 'Élèves affectés'} value={typeof totals.affected_students === 'number' ? fmtInt(totals.affected_students, lang) : '—'} />
+        <Stat label={en ? 'Critical' : 'Critiques'} value={typeof totals.critical === 'number' ? fmtInt(totals.critical, lang) : '—'} />
       </div>
       {byDistrict.length > 0 && (
         <div className="mb-2 space-y-1.5">
@@ -2786,7 +2803,7 @@ function ObservatoireCard({ title, data, onAsk }: { title: string; data: Record<
           ))}
         </div>
       )}
-      <FollowUps onAsk={onAsk} items={['Quelles écoles ont le plus besoin d’aide ?', 'Voir les alertes du district ?']} />
+      <FollowUps onAsk={onAsk} items={[en ? 'Which schools need the most help?' : 'Quelles écoles ont le plus besoin d’aide ?', en ? 'View the district alerts?' : 'Voir les alertes du district ?']} />
     </CardShell>
   );
 }
@@ -2832,7 +2849,8 @@ function GuidanceCard({ title, data, onAsk }: { title: string; data: Record<stri
   );
 }
 
-function PlaceSuggestionsCard({ title, data, onAsk }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void }) {
+function PlaceSuggestionsCard({ title, data, onAsk, lang }: { title: string; data: Record<string, unknown>; onAsk?: (q: string) => void; lang?: string }) {
+  const en = lang === 'en';
   const suggestions = asArray<Record<string, unknown>>(data.suggestions);
   const ecoles = asArray<unknown>(data.ecoles_sample).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
   const districts = asArray<unknown>(data.districts_sample).map((s) => (typeof s === 'string' ? s : '')).filter((s) => s !== '');
@@ -2844,7 +2862,7 @@ function PlaceSuggestionsCard({ title, data, onAsk }: { title: string; data: Rec
       {suggestions.length > 0 && (
         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
           {suggestions.map((s, i) => {
-            const label = fmtOpt(s.label) ?? `Lieu ${i + 1}`;
+            const label = fmtOpt(s.label) ?? (en ? `Place ${i + 1}` : `Lieu ${i + 1}`);
             const question = fmtOpt(s.question);
             return (
               <button
@@ -2857,7 +2875,7 @@ function PlaceSuggestionsCard({ title, data, onAsk }: { title: string; data: Rec
                 {label}
                 {fmtOpt(s.kind) !== undefined && (
                   <span className="ml-1.5 font-mono text-[11px] font-normal text-stone-500 dark:text-stone-400">
-                    {s.kind === 'district' ? 'district' : 'école'}
+{s.kind === 'district' ? 'district' : en ? 'school' : 'école'}
                   </span>
                 )}
               </button>
@@ -2867,99 +2885,99 @@ function PlaceSuggestionsCard({ title, data, onAsk }: { title: string; data: Rec
       )}
       {(ecoles.length > 0 || districts.length > 0) && (
         <p className="mt-2.5 text-[13px] leading-relaxed text-stone-500 dark:text-stone-400">
-          {districts.length > 0 && <>Districts suivis : {districts.join(', ')}. </>}
-          {ecoles.length > 0 && <>Écoles : {ecoles.join(' · ')}.</>}
+          {districts.length > 0 && <>{en ? 'Tracked districts: ' : 'Districts suivis : '}{districts.join(', ')}. </>}
+          {ecoles.length > 0 && <>{en ? 'Schools: ' : 'Écoles : '}{ecoles.join(' · ')}.</>}
         </p>
       )}
     </CardShell>
   );
 }
 
-function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void }) {
+function AgentCardViewInner({ card, onAsk, onAppend, onDetail, lang }: { card: AgentCard; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void; lang?: string }) {
   const data = asRecord(card.data);
   switch (card.type) {
     case 'incident_detail':
-      return <IncidentCard title={card.title} data={data} onAsk={onAsk} onDetail={onDetail} />;
+      return <IncidentCard title={card.title} data={data} onAsk={onAsk} onDetail={onDetail} lang={lang} />;
     case 'school_ranking':
-      return <RankingCard title={card.title} data={data} onAsk={onAsk} onDetail={onDetail} />;
+      return <RankingCard title={card.title} data={data} onAsk={onAsk} onDetail={onDetail} lang={lang} />;
     case 'school_analysis':
-      return <AnalysisCard title={card.title} data={data} onAsk={onAsk} />;
+      return <AnalysisCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'district_summary':
-      return <DistrictCard title={card.title} data={data} onAsk={onAsk} />;
+      return <DistrictCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'trend_chart':
-      return <TrendCard title={card.title} data={data} onAsk={onAsk} />;
+      return <TrendCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'photo_analysis':
-      return <PhotoCard title={card.title} data={data} />;
+      return <PhotoCard title={card.title} data={data} lang={lang} />;
     case 'report_confirmation':
-      return <ConfirmationCard title={card.title} data={data} />;
+      return <ConfirmationCard title={card.title} data={data} lang={lang} />;
     case 'action_confirmation':
-      return <ActionConfirmationCard title={card.title} data={data} onAsk={onAsk} onAppend={onAppend} />;
+      return <ActionConfirmationCard title={card.title} data={data} onAsk={onAsk} onAppend={onAppend} lang={lang} />;
     case 'action_result':
-      return <ActionResultCard title={card.title} data={data} />;
+      return <ActionResultCard title={card.title} data={data} lang={lang} />;
     case 'incident_picker':
-      return <IncidentPickerCard title={card.title} data={data} onAsk={onAsk} />;
+      return <IncidentPickerCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'territory_map':
-      return <TerritoryMapCard title={card.title} data={data} onAsk={onAsk} />;
+      return <TerritoryMapCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'briefing_deck':
-      return <BriefingDeckCard title={card.title} data={data} />;
+      return <BriefingDeckCard title={card.title} data={data} lang={lang} />;
     case 'maintenance_logs':
           case 'incident_list':
-      return <IncidentListCard title={card.title} data={data} onAsk={onAsk} />;
+      return <IncidentListCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'calendar_heatmap':
-      return <HeatmapCard title={card.title} data={data} onAsk={onAsk} />;
+      return <HeatmapCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'incident_timeline':
-      return <TimelineCard title={card.title} data={data} />;
+      return <TimelineCard title={card.title} data={data} lang={lang} />;
     case 'budget_compare':
-      return <BudgetCard title={card.title} data={data} onAsk={onAsk} />;
+      return <BudgetCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'capabilities_list':
-      return <CapabilitiesCard title={card.title} data={data} onAsk={onAsk} />;
+      return <CapabilitiesCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'district_alerts':
-      return <DistrictAlertsCard title={card.title} data={data} onAsk={onAsk} />;
+      return <DistrictAlertsCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'epidemic_alerts':
-      return <EpidemicAlertsCard title={card.title} data={data} onAsk={onAsk} />;
+      return <EpidemicAlertsCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'maintenance_team':
-      return <MaintenanceTeamCard title={card.title} data={data} onAsk={onAsk} />;
+      return <MaintenanceTeamCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'compare_schools':
-      return <CompareSchoolsCard title={card.title} data={data} onAsk={onAsk} />;
+      return <CompareSchoolsCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'copilot_answer':
-      return <CopilotAnswerCard title={card.title} data={data} onAsk={onAsk} />;
+      return <CopilotAnswerCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'mission_timeline':
-      return <MissionTimelineCard title={card.title} data={data} onAsk={onAsk} />;
+      return <MissionTimelineCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'document_briefing':
-      return <DocumentBriefingCard title={card.title} data={data} />;
+      return <DocumentBriefingCard title={card.title} data={data} lang={lang} />;
     case 'chantier_dossier':
-      return <ChantierDossierCard title={card.title} data={data} onAsk={onAsk} />;
+      return <ChantierDossierCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'saisie_assistee':
-      return <SaisieAssisteeCard title={card.title} data={data} onAsk={onAsk} />;
+      return <SaisieAssisteeCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'offline_queue':
-      return <OfflineQueueCard title={card.title} data={data} onAsk={onAsk} />;
+      return <OfflineQueueCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'relances':
-      return <RelancesCard title={card.title} data={data} onAsk={onAsk} />;
+      return <RelancesCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'observatoire':
-      return <ObservatoireCard title={card.title} data={data} onAsk={onAsk} />;
+      return <ObservatoireCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'guidance':
       return <GuidanceCard title={card.title} data={data} onAsk={onAsk} />;
     case 'place_suggestions':
-      return <PlaceSuggestionsCard title={card.title} data={data} onAsk={onAsk} />;
+      return <PlaceSuggestionsCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'poster':
-      return <PosterCard title={card.title} data={data} onAsk={onAsk} />;
+      return <PosterCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'dossier_report':
-      return <DossierView title={card.title} data={data} onAsk={onAsk} />;
+      return <DossierView title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     case 'intervention_prep':
-      return <InterventionPrepCard title={card.title} data={data} onAsk={onAsk} />;
+      return <InterventionPrepCard title={card.title} data={data} onAsk={onAsk} lang={lang} />;
     default:
-      return <GenericCard card={card} />;
+      return <GenericCard card={card} lang={lang} />;
   }
 }
 
 export const AgentCardView = memo(AgentCardViewInner);
 
-export function AgentCardList({ cards, onAsk, onAppend, onDetail }: { cards: AgentCard[]; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void }) {
+export function AgentCardList({ cards, onAsk, onAppend, onDetail, lang }: { cards: AgentCard[]; onAsk?: (q: string) => void; onAppend?: (content: string, cards?: AgentCard[]) => void; onDetail?: (kind: DetailKind, id: number) => void; lang?: string }) {
   if (cards.length === 0) return null;
   return (
     <div className="space-y-3 pt-1">
       {cards.map((c, i) => (
-        <AgentCardView key={`${c.type}-${i}`} card={c} onAsk={onAsk} onAppend={onAppend} onDetail={onDetail} />
+        <AgentCardView key={`${c.type}-${i}`} card={c} onAsk={onAsk} onAppend={onAppend} onDetail={onDetail} lang={lang} />
       ))}
     </div>
   );

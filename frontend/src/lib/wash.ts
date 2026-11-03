@@ -20,6 +20,22 @@ export const URGENCY_FR: Record<string, string> = {
   critical: 'Critique',
 };
 
+export const STATUS_EN: Record<string, string> = {
+  reported: 'Reported',
+  triaged: 'Triaged',
+  assigned: 'Assigned',
+  in_progress: 'In progress',
+  resolved: 'Resolved',
+  closed: 'Closed',
+};
+
+export const URGENCY_EN: Record<string, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  critical: 'Critical',
+};
+
 export const CATEGORY_FR: Record<string, string> = {
   water_point: "Point d'eau",
   toilets_latrines: 'Toilettes / latrines',
@@ -32,6 +48,20 @@ export const CHANNEL_FR: Record<string, string> = {
   text: 'Texte',
   photo: 'Photo',
   webrtc_call: 'Appel',
+};
+
+export const CATEGORY_EN: Record<string, string> = {
+  water_point: 'Water point',
+  toilets_latrines: 'Toilets / latrines',
+  handwashing: 'Handwashing',
+  sewage_drainage: 'Drainage / sewage',
+};
+
+export const CHANNEL_EN: Record<string, string> = {
+  voice: 'Voice',
+  text: 'Text',
+  photo: 'Photo',
+  webrtc_call: 'Call',
 };
 
 export type Tone = 'neutral' | 'accent' | 'success' | 'warn' | 'danger' | 'info';

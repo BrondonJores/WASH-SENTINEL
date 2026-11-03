@@ -100,11 +100,14 @@ export function PosterCard({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const imageUrl = httpUrl(data.image_url);
   const caption = fmtOpt(data.caption);
   const note = fmtOpt(data.note);
@@ -118,9 +121,9 @@ export function PosterCard({
       </div>
       {imageUrl === undefined ? (
         <GuideEmpty
-          phrase="Affiche indisponible pour le moment."
-          conseil={note ?? "L'image n'a pas pu être préparée : demandez une nouvelle affiche."}
-          actions={[{ label: 'Demander une affiche', question: 'Génère une affiche pour ce dossier' }]}
+          phrase={en ? 'Poster unavailable for now.' : 'Affiche indisponible pour le moment.'}
+          conseil={note ?? (en ? 'The image could not be prepared: request a new poster.' : "L'image n'a pas pu être préparée : demandez une nouvelle affiche.")}
+          actions={[{ label: en ? 'Request a poster' : 'Demander une affiche', question: en ? 'Generate a poster for this case file' : 'Génère une affiche pour ce dossier' }]}
           onAsk={onAsk}
         />
       ) : (
@@ -129,7 +132,7 @@ export function PosterCard({
             href={imageUrl}
             target="_blank"
             rel="noreferrer"
-            aria-label={`Ouvrir l'affiche ${caption ?? title} dans un nouvel onglet`}
+            aria-label={en ? `Open the poster ${caption ?? title} in a new tab` : `Ouvrir l'affiche ${caption ?? title} dans un nouvel onglet`}
             className="block overflow-hidden rounded-xl border border-line transition-[border-color] duration-150 ease-snap hover:border-accent"
           >
             <img
@@ -148,10 +151,10 @@ export function PosterCard({
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" onClick={() => downloadUrl(imageUrl, 'affiche.png')}>
               <Icon name="file" className="h-3.5 w-3.5" />
-              Télécharger
+              {en ? 'Download' : 'Télécharger'}
             </Button>
             <Button size="sm" onClick={() => window.open(imageUrl, '_blank', 'noopener')}>
-              Ouvrir dans un nouvel onglet
+{en ? 'Open in a new tab' : 'Ouvrir dans un nouvel onglet'}
             </Button>
           </div>
         </>
@@ -202,11 +205,14 @@ export function DossierView({
   title,
   data,
   onAsk,
+  lang,
 }: {
   title: string;
   data: Record<string, unknown>;
   onAsk?: (q: string) => void;
+  lang?: string;
 }) {
+  const en = lang === 'en';
   const subject = fmtOpt(data.subject);
   const period = fmtOpt(data.period);
   const sections = asArray<unknown>(data.sections);
@@ -224,12 +230,12 @@ export function DossierView({
       </div>
       <div className="no-print mb-4 flex flex-wrap gap-2">
         <Button size="sm" variant="primary" onClick={() => window.print()}>
-          Imprimer le rapport
+{en ? 'Print the report' : 'Imprimer le rapport'}
         </Button>
         {posterUrl !== undefined && (
           <Button size="sm" onClick={() => downloadUrl(posterUrl, 'affiche.png')}>
             <Icon name="file" className="h-3.5 w-3.5" />
-            Télécharger l&apos;affiche
+{en ? 'Download the poster' : 'Télécharger l’affiche'}
           </Button>
         )}
       </div>
@@ -238,9 +244,9 @@ export function DossierView({
       )}
       {sections.length === 0 ? (
         <GuideEmpty
-          phrase="Rapport vide pour le moment."
-          conseil="Le moteur n'a pas renvoyé de sections : précisez le sujet et la période, par exemple « Dossier Mvila, janvier à mars »."
-          actions={[{ label: 'Préciser ma demande', question: 'Prépare un dossier décideur : quel sujet et quelle période ?' }]}
+          phrase={en ? 'Empty report for now.' : 'Rapport vide pour le moment.'}
+          conseil={en ? 'The engine returned no sections: specify the subject and period, e.g. “Mvila case file, January to March”.' : "Le moteur n'a pas renvoyé de sections : précisez le sujet et la période, par exemple « Dossier Mvila, janvier à mars »."}
+          actions={[{ label: en ? 'Refine my request' : 'Préciser ma demande', question: en ? 'Prepare a decision brief: which subject and period?' : 'Prépare un dossier décideur : quel sujet et quelle période ?' }]}
           onAsk={onAsk}
         />
       ) : (
@@ -267,7 +273,7 @@ export function DossierView({
                       >
                         <img
                           src={fig.url}
-                          alt={fig.caption ?? `Illustration ${j + 1} de ${heading ?? title}`}
+                          alt={fig.caption ?? (en ? `Illustration ${j + 1} of ${heading ?? title}` : `Illustration ${j + 1} de ${heading ?? title}`)}
                           loading="lazy"
                           className="max-h-56 w-full object-contain bg-stone-100 dark:bg-stone-900"
                         />
