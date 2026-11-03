@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from ..schemas import AgentCard
-from ..tool_consts import INCIDENT_FUZZY_MIN_RATIO
+from ..tool_consts import INCIDENT_FUZZY_MIN_RATIO, tool_lang
 from .copilot_answer import execute as copilot_execute
 
 TOOL_NAME = "prepare_intervention"
@@ -99,9 +99,27 @@ _SLOT_QUESTIONS = {
     "team": "Quelle équipe doit intervenir ?",
 }
 
+_SLOT_LABELS_EN = {
+    "incident": "the targeted existing incident (title or reference)",
+    "date": "the planned date (tomorrow, DD/MM/YYYY)",
+    "budget_xaf": "the allocated budget in XAF",
+    "team": "the team that will intervene",
+}
+
+_SLOT_QUESTIONS_EN = {
+    "incident": "Which existing incident should be repaired (title or reference)?",
+    "date": "For which date should the intervention be planned?",
+    "budget_xaf": "Which budget do you allocate (in XAF)?",
+    "team": "Which team should intervene?",
+}
+
 _MONTHS_FR = (
     "janvier", "février", "mars", "avril", "mai", "juin", "juillet",
     "août", "septembre", "octobre", "novembre", "décembre",
+)
+_MONTHS_EN = (
+    "January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December",
 )
 
 _BUDGET_CURRENCY_RE = re.compile(
@@ -168,9 +186,15 @@ def parse_date(raw: Any, today: date) -> date | None:
         return None
     if "apres-demain" in text or "apres demain" in text:
         return today + timedelta(days=2)
+    if "day after tomorrow" in text:
+        return today + timedelta(days=2)
     if "demain" in text or "lendemain" in text:
         return today + timedelta(days=1)
+    if "tomorrow" in text:
+        return today + timedelta(days=1)
     if "aujourd" in text:
+        return today
+    if "today" in text:
         return today
     match = _DATE_NUM_RE.search(str(raw or ""))
     if match:
@@ -207,8 +231,10 @@ def parse_date(raw: Any, today: date) -> date | None:
     return None
 
 
-def date_label_fr(day: date) -> str:
-    return f"{day.day} {_MONTHS_FR[day.month - 1]} {day.year}"
+def date_label_fr(day: date, lang: str = "fr") -> str:
+    """Libellé date « 3 novembre 2026 » / « 3 November 2026 » (défaut fr)."""
+    months = _MONTHS_EN if str(lang or "fr").lower().startswith("en") else _MONTHS_FR
+    return f"{day.day} {months[day.month - 1]} {day.year}"
 
 
 def _fmt_xaf(value: Any) -> str:
@@ -356,13 +382,17 @@ def _school_of(context: dict[str, Any], school_hint: Any,
     return None
 
 
-def _verdict_source_suffix(figures: dict[str, Any]) -> str:
+def _verdict_source_suffix(figures: dict[str, Any], lang: str = "fr") -> str:
     """Suffixe d'origine du coût du neuf (« , source : … » ou vide)."""
+    use_en = str(lang or "fr").lower().startswith("en")
     source = str((figures or {}).get("replacement_source") or "")
     if source == "ecole":
-        return ", source : fiche école"
+        return ", source: school record" if use_en else ", source : fiche école"
     if source == "referentiel":
         names = (figures or {}).get("replacement_source_names") or []
+        if use_en:
+            cited = ", ".join(names[:2]) if names else "national reference"
+            return f", reference median ({cited})"
         cited = ", ".join(names[:2]) if names else "référentiel national"
         return f", médiane référentiel ({cited})"
     return ""
@@ -382,6 +412,8 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             args = {}
         if not isinstance(context, dict):
             context = {}
+        lang = tool_lang(context)
+        use_en = lang == "en"
         today = _today(args)
         pool = _open_incidents(context)
 
@@ -433,21 +465,32 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             replacement = 0.0
         if budget is not None:
             if replacement > 0:
-                cited = _verdict_source_suffix(figures)
+                cited = _verdict_source_suffix(figures, lang)
                 if budget >= replacement:
                     budget_verdict = (
-                        f"Budget {_fmt_xaf(budget)} XAF : couvre même un remplacement "
-                        f"(~{_fmt_xaf(replacement)} XAF{cited}).")
+                        (f"Budget {_fmt_xaf(budget)} XAF: even covers a replacement "
+                         f"(~{_fmt_xaf(replacement)} XAF{cited}).")
+                        if use_en else
+                        (f"Budget {_fmt_xaf(budget)} XAF : couvre même un remplacement "
+                         f"(~{_fmt_xaf(replacement)} XAF{cited})."))
                 elif (verdict or {}).get("recommendation") == "REPLACE":
                     budget_verdict = (
-                        f"Budget {_fmt_xaf(budget)} XAF insuffisant pour le remplacement "
-                        f"recommandé (~{_fmt_xaf(replacement)} XAF{cited}) : couvre une réparation "
-                        "d'attente, pas le neuf.")
+                        (f"Budget {_fmt_xaf(budget)} XAF too low for the recommended "
+                         f"replacement (~{_fmt_xaf(replacement)} XAF{cited}): covers a "
+                         "stopgap repair, not new equipment.")
+                        if use_en else
+                        (f"Budget {_fmt_xaf(budget)} XAF insuffisant pour le remplacement "
+                         f"recommandé (~{_fmt_xaf(replacement)} XAF{cited}) : couvre une réparation "
+                         "d'attente, pas le neuf."))
                 else:
                     budget_verdict = (
-                        f"Budget {_fmt_xaf(budget)} XAF enregistré pour la réparation.")
+                        (f"Budget {_fmt_xaf(budget)} XAF recorded for the repair.")
+                        if use_en else
+                        (f"Budget {_fmt_xaf(budget)} XAF enregistré pour la réparation."))
             else:
-                budget_verdict = f"Budget {_fmt_xaf(budget)} XAF enregistré."
+                budget_verdict = ((f"Budget {_fmt_xaf(budget)} XAF recorded.")
+                                  if use_en else
+                                  (f"Budget {_fmt_xaf(budget)} XAF enregistré."))
 
         label = None
         if incident is not None:
@@ -461,7 +504,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             "school_name": school_name,
             "district": district,
             "date": planned.isoformat() if planned else None,
-            "date_label": date_label_fr(planned) if planned else None,
+            "date_label": date_label_fr(planned, lang) if planned else None,
             "budget_xaf": budget,
             "team": team,
         }
@@ -470,8 +513,10 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                    or (slot == "date" and planned is None)
                    or (slot == "budget_xaf" and budget is None)
                    or (slot == "team" and not team)]
-        labels = [_SLOT_LABELS[m] for m in missing]
-        questions = [_SLOT_QUESTIONS[m] for m in missing[:2]]
+        slot_labels = _SLOT_LABELS_EN if use_en else _SLOT_LABELS
+        slot_questions = _SLOT_QUESTIONS_EN if use_en else _SLOT_QUESTIONS
+        labels = [slot_labels[m] for m in missing]
+        questions = [slot_questions[m] for m in missing[:2]]
         ready = not missing
 
         team_pool = [i for i in pool
@@ -479,25 +524,43 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         team_choices = _team_choices(context, team_pool, district)
         if team_choices and "team" in missing:
             # La question propose les équipes au lieu de rester vide.
-            suggest = (f"Quelle équipe doit intervenir "
-                       f"({', '.join(team_choices[:3])}) ?")
-            questions = [suggest if q == _SLOT_QUESTIONS["team"] else q
+            suggest = ((f"Which team should intervene "
+                        f"({', '.join(team_choices[:3])})?")
+                       if use_en else
+                       (f"Quelle équipe doit intervenir "
+                        f"({', '.join(team_choices[:3])}) ?"))
+            questions = [suggest if q == slot_questions["team"] else q
                          for q in questions]
 
-        rows = [f"{k} : {v}" for k, v in
-                (("Incident", label), ("École", school_name),
-                 ("Date", fields["date_label"]), ("Budget (XAF)", budget),
-                 ("Équipe", team)) if v is not None]
-        recap = "Préparation d'intervention\n" + "\n".join(rows)
-        if labels:
-            recap += "\nManquant : " + ", ".join(labels) + "."
+        if use_en:
+            rows = [f"{k}: {v}" for k, v in
+                    (("Incident", label), ("School", school_name),
+                     ("Date", fields["date_label"]), ("Budget (XAF)", budget),
+                     ("Team", team)) if v is not None]
+            recap = "Intervention preparation\n" + "\n".join(rows)
+            if labels:
+                recap += "\nMissing: " + ", ".join(labels) + "."
+        else:
+            rows = [f"{k} : {v}" for k, v in
+                    (("Incident", label), ("École", school_name),
+                     ("Date", fields["date_label"]), ("Budget (XAF)", budget),
+                     ("Équipe", team)) if v is not None]
+            recap = "Préparation d'intervention\n" + "\n".join(rows)
+            if labels:
+                recap += "\nManquant : " + ", ".join(labels) + "."
 
         if ready:
-            insight = (f"Intervention prête : {label}, le {fields['date_label']}, "
-                       f"budget {_fmt_xaf(budget)} XAF, équipe {team}.")
+            insight = ((f"Intervention ready: {label}, on {fields['date_label']}, "
+                        f"budget {_fmt_xaf(budget)} XAF, team {team}.")
+                       if use_en else
+                       (f"Intervention prête : {label}, le {fields['date_label']}, "
+                        f"budget {_fmt_xaf(budget)} XAF, équipe {team}."))
         else:
-            insight = ("Préparation partielle (rien n'est enregistré) — "
-                       f"manque : {', '.join(labels)}.")
+            insight = ((f"Partial preparation (nothing recorded) — "
+                        f"missing: {', '.join(labels)}.")
+                       if use_en else
+                       ("Préparation partielle (rien n'est enregistré) — "
+                        f"manque : {', '.join(labels)}."))
         if budget_verdict:
             insight += f" {budget_verdict}"
 
@@ -537,7 +600,8 @@ def _build_intervention_prep_card(obs: dict[str, Any]) -> AgentCard | None:
     has_value = any(v is not None and v != "" for v in fields.values())
     if not has_value and not obs.get("missing") and not obs.get("questions"):
         return None
-    title = "Préparation d'intervention"
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
+    title = "Intervention preparation" if use_en else "Préparation d'intervention"
     if fields.get("incident_label"):
         title = f"Intervention — {fields['incident_label']}"
     return AgentCard(type="intervention_prep", title=title, data=obs)

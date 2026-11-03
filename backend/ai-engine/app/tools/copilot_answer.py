@@ -26,6 +26,7 @@ from ..replacement_cost import (
     resolve_replacement_cost as _shared_resolve,
 )
 from ..schemas import AgentCard
+from ..tool_consts import tool_lang
 
 TOOL_NAME = "copilot_answer"
 
@@ -93,6 +94,13 @@ _RECO_LABELS = {
     "MONITOR": "renforcer la surveillance de l'équipement",
     "MAINTAIN": "poursuivre la maintenance courante",
     "PRIORITIZE": "traiter l'école la plus touchée en priorité",
+}
+
+_RECO_LABELS_EN = {
+    "REPLACE": "plan the equipment replacement",
+    "MONITOR": "increase equipment monitoring",
+    "MAINTAIN": "continue routine maintenance",
+    "PRIORITIZE": "treat the hardest-hit school first",
 }
 
 # --- LOT 3 : constantes locales (valeurs historiques inchangées) ---
@@ -241,10 +249,33 @@ def _advise_school(
     ratio = round(cost / replacement * 100.0, 1) if replacement > 0 else 0.0
     opened = _open_count_for(context, school.get("school_id"))
     reco = _recommend(count, ratio, days)
-    label = _RECO_LABELS[reco]
+    use_en = tool_lang(context) == "en"
+    label = (_RECO_LABELS_EN if use_en else _RECO_LABELS)[reco]
 
-    if topic == "budget":
-        envelope = max(replacement, cost * BUDGET_REPLACE_MARGIN) if reco == "REPLACE" else max(cost * BUDGET_MAINTAIN_FRACTION, BUDGET_MIN_ENVELOPE_XAF)
+    envelope = max(replacement, cost * BUDGET_REPLACE_MARGIN) if reco == "REPLACE" else max(cost * BUDGET_MAINTAIN_FRACTION, BUDGET_MIN_ENVELOPE_XAF)
+    if topic == "budget" and use_en:
+        insight = (
+            f"{name} cumulates {_fmt_xaf(cost)} XAF in spending for {count} breakdowns, "
+            f"i.e. {ratio}% of the cost of new equipment ({_fmt_xaf(replacement)} XAF). "
+            f"I advise provisioning about {_fmt_xaf(envelope)} XAF for this site. "
+            f"Recommendation: {label}."
+        )
+    elif topic == "recurrence" and use_en:
+        insight = (
+            f"{name} suffers repeated breakdowns: {count} breakdowns and {days} days "
+            f"without service in total, including {opened} incidents still open. "
+            f"With {count} breakdowns (threshold of {DECISION_REPLACE_MIN_INCIDENTS} reached: {('yes' if count >= DECISION_REPLACE_MIN_INCIDENTS else 'no')}), "
+            f"repeated fixes cost more than a lasting solution. "
+            f"Recommendation: {label}."
+        )
+    elif use_en:
+        insight = (
+            f"{name}: {count} breakdowns, {_fmt_xaf(cost)} XAF spent and {days} days "
+            f"without service, with {opened} incidents still open. "
+            f"The spending / new equipment ratio reaches {ratio}%. "
+            f"Recommendation: {label}."
+        )
+    elif topic == "budget":
         insight = (
             f"{name} cumule {_fmt_xaf(cost)} XAF de dépenses pour {count} pannes, "
             f"soit {ratio} % du coût d'un équipement neuf ({_fmt_xaf(replacement)} XAF). "
@@ -267,16 +298,29 @@ def _advise_school(
             f"Recommandation : {label}."
         )
     if replacement_source == REPLACEMENT_SOURCE_REFERENTIEL:
-        cited = ", ".join(replacement_names[:2]) if replacement_names else "référentiel national"
-        insight += (
-            f" Coût d'un équipement neuf estimé via le référentiel national "
-            f"(médiane {_fmt_xaf(replacement)} XAF, sources : {cited})."
-        )
+        if use_en:
+            cited = ", ".join(replacement_names[:2]) if replacement_names else "national reference"
+            insight += (
+                f" New equipment cost estimated via the national reference "
+                f"(median {_fmt_xaf(replacement)} XAF, sources: {cited})."
+            )
+        else:
+            cited = ", ".join(replacement_names[:2]) if replacement_names else "référentiel national"
+            insight += (
+                f" Coût d'un équipement neuf estimé via le référentiel national "
+                f"(médiane {_fmt_xaf(replacement)} XAF, sources : {cited})."
+            )
     elif replacement_source == REPLACEMENT_SOURCE_ECOLE:
-        insight += (
-            f" Coût du neuf déclaré dans la fiche école "
-            f"({_fmt_xaf(replacement)} XAF)."
-        )
+        if use_en:
+            insight += (
+                f" New cost declared in the school record "
+                f"({_fmt_xaf(replacement)} XAF)."
+            )
+        else:
+            insight += (
+                f" Coût du neuf déclaré dans la fiche école "
+                f"({_fmt_xaf(replacement)} XAF)."
+            )
     return {
         "insight": insight,
         "recommendation": reco,
@@ -308,27 +352,49 @@ def _advise_global(question_norm: str, context: dict[str, Any]) -> dict[str, Any
     top_name = str(top.get("school_name")) if top else None
     topic = _detect_topic(question_norm)
 
-    first = (
-        f"Sur {len(schools)} écoles suivies, {len(opened)} incidents restent ouverts "
-        f"pour {_fmt_xaf(total_cost)} XAF de dépenses cumulées et {total_days} jours sans service."
-    )
-    if top is not None and _as_int(top.get("incident_count")) > 0:
-        second = (
-            f"Le site le plus touché est {top_name} "
-            f"({_as_int(top.get('incident_count'))} pannes, "
-            f"{_fmt_xaf(_as_float(top.get('total_repair_cost')))} XAF)."
+    use_en = tool_lang(context) == "en"
+    if use_en:
+        first = (
+            f"Across {len(schools)} tracked schools, {len(opened)} incidents remain open "
+            f"for {_fmt_xaf(total_cost)} XAF in cumulative spending and {total_days} days without service."
         )
     else:
-        second = "Aucun site ne concentre les pannes pour le moment."
-    third = (
-        "Je conseille de flécher le prochain budget vers ce site avant tout."
-        if top_name
-        else "Je conseille de garder une enveloppe de maintenance préventive."
-    )
+        first = (
+            f"Sur {len(schools)} écoles suivies, {len(opened)} incidents restent ouverts "
+            f"pour {_fmt_xaf(total_cost)} XAF de dépenses cumulées et {total_days} jours sans service."
+        )
+    if top is not None and _as_int(top.get("incident_count")) > 0:
+        if use_en:
+            second = (
+                f"The hardest-hit site is {top_name} "
+                f"({_as_int(top.get('incident_count'))} breakdowns, "
+                f"{_fmt_xaf(_as_float(top.get('total_repair_cost')))} XAF)."
+            )
+        else:
+            second = (
+                f"Le site le plus touché est {top_name} "
+                f"({_as_int(top.get('incident_count'))} pannes, "
+                f"{_fmt_xaf(_as_float(top.get('total_repair_cost')))} XAF)."
+            )
+    else:
+        second = ("No site concentrates breakdowns for now."
+                  if use_en else "Aucun site ne concentre les pannes pour le moment.")
+    if use_en:
+        third = (
+            "I advise directing the next budget to this site first."
+            if top_name
+            else "I advise keeping a preventive maintenance envelope."
+        )
+    else:
+        third = (
+            "Je conseille de flécher le prochain budget vers ce site avant tout."
+            if top_name
+            else "Je conseille de garder une enveloppe de maintenance préventive."
+        )
     return {
         "insight": f"{first} {second} {third}",
         "recommendation": "PRIORITIZE",
-        "recommendation_label": _RECO_LABELS["PRIORITIZE"],
+        "recommendation_label": (_RECO_LABELS_EN if use_en else _RECO_LABELS)["PRIORITIZE"],
         "topic": topic,
         "school_id": None,
         "school_name": None,
@@ -345,10 +411,15 @@ def _advise_global(question_norm: str, context: dict[str, Any]) -> dict[str, Any
 def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Conseil stratégique déterministe : école citée + sujet + chiffres."""
     try:
+        use_en = tool_lang(context if isinstance(context, dict) else {})
         if not isinstance(args, dict) or not isinstance(context, dict):
-            return {"error": "Arguments ou contexte invalide."}
+            return {"error": ("Invalid arguments or context."
+                              if use_en else "Arguments ou contexte invalide.")}
         question = str((args or {}).get("question") or "").strip()
         if not question:
+            if use_en:
+                return {"error": ("Missing question: specify your need "
+                                  '(e.g. "Which budget for Douala schools?").')}
             return {
                 "error": (
                     "Question manquante : précisez votre besoin "
@@ -361,7 +432,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             return _advise_school(school, _detect_topic(question_norm), context)
         return _advise_global(question_norm, context)
     except Exception as exc:  # contrat : jamais d'exception vers la boucle
-        return {"error": f"copilot_answer indisponible : {exc}"}
+        return {"error": f"copilot_answer unavailable: {exc}"}
 
 
 def _build_copilot_answer_card(obs: dict[str, Any]) -> AgentCard | None:
@@ -371,9 +442,11 @@ def _build_copilot_answer_card(obs: dict[str, Any]) -> AgentCard | None:
         return None
     if not obs.get("insight") or not obs.get("recommendation"):
         return None
-    title = "Conseil Copilote"
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
+    title = "Copilot Advice" if use_en else "Conseil Copilote"
     if obs.get("school_name"):
-        title = f"Conseil — {obs.get('school_name')}"
+        title = (f"Advice — {obs.get('school_name')}" if use_en
+                 else f"Conseil — {obs.get('school_name')}")
     return AgentCard(
         type="copilot_answer",
         title=title,

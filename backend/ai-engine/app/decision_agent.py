@@ -71,13 +71,16 @@ class DecisionAgent:
         self.llm = llm
 
     @staticmethod
-    def evaluate_school_equipment(school: SchoolMaintenanceHistory) -> ReplaceVsRepairAnalysis:
+    def evaluate_school_equipment(school: SchoolMaintenanceHistory,
+                                  lang: str = "fr") -> ReplaceVsRepairAnalysis:
         """
         Matrice d'arbitrage financier et opérationnel : Réparer vs Remplacer.
         Calcule le ratio Capex/Opex et la criticité du service. Coût du neuf
         à 0 (non communiqué) : ratio None, verdict sur fréquence et jours
         sans service seuls, textes sans affirmation monétaire.
+        lang="en" : justification, économie et suggestion en anglais.
         """
+        use_en = str(lang or "fr").strip().lower().startswith("en")
         known_cost = school.estimated_replacement_cost > 0
         repl_cost = max(school.estimated_replacement_cost, 1.0)
         ratio: float | None = (
@@ -90,57 +93,98 @@ class DecisionAgent:
 
         ratio_replace = ratio is not None and ratio >= DECISION_REPLACE_MIN_RATIO_PCT
         ratio_monitor = ratio is not None and ratio >= DECISION_MONITOR_MIN_RATIO_PCT
-        unknown_note = (" Coût d'un équipement neuf non communiqué : renseignez "
-                        "la fiche école pour un arbitrage financier complet.")
+        unknown_note = (" New equipment cost not provided: fill in the school "
+                        "record for a full financial arbitration."
+                        if use_en else
+                        (" Coût d'un équipement neuf non communiqué : renseignez "
+                         "la fiche école pour un arbitrage financier complet."))
 
         # Règle d'arbitrage
         if ratio_replace or school.incident_count >= DECISION_REPLACE_MIN_INCIDENTS or school.total_days_without_service >= DECISION_REPLACE_MIN_DAYS_OFF:
             recommendation = "REPLACE_EQUIPMENT"
             if ratio is None:
-                saving_text = ("Économie non chiffrable sans le coût du neuf ; "
-                               "stopper les réparations à répétition reste recommandé.")
+                saving_text = ("Savings cannot be estimated without the new cost; "
+                               "stopping repeated repairs is still recommended."
+                               if use_en else
+                               ("Économie non chiffrable sans le coût du neuf ; "
+                                "stopper les réparations à répétition reste recommandé."))
                 justification = (
-                    f"L'école {school.school_name} subit {school.incident_count} pannes. "
-                    f"Avec {school.total_days_without_service} jours cumulés sans eau potable, "
-                    f"la maintenance corrective permanente appelle un remplacement pérenne."
-                    f"{unknown_note}"
+                    (f"{school.school_name} suffers {school.incident_count} breakdowns. "
+                     f"With {school.total_days_without_service} days without safe water, "
+                     f"permanent corrective maintenance calls for a lasting replacement."
+                     f"{unknown_note}")
+                    if use_en else
+                    (f"L'école {school.school_name} subit {school.incident_count} pannes. "
+                     f"Avec {school.total_days_without_service} jours cumulés sans eau potable, "
+                     f"la maintenance corrective permanente appelle un remplacement pérenne."
+                     f"{unknown_note}")
                 )
             else:
-                saving_text = f"Économie estimée à {int(school.total_repair_cost * DECISION_REPAIR_SAVING_RATIO):,} FCFA sur les {DECISION_SAVING_HORIZON_MONTHS} prochains mois en stoppant les réparations à répétition."
-                justification = (
-                    f"L'école {school.school_name} a déjà dépensé {ratio}% de la valeur d'une installation neuve en réparations ({school.incident_count} pannes subies). "
-                    f"Avec {school.total_days_without_service} jours cumulés sans eau potable, la maintenance corrective permanente coûte plus cher qu'un remplacement pérenne."
-                )
-            suggested = "Remplacement par un système de pompage solaire immergé avec cuve tampon surélevée (Garantie 10 ans, maintenance minimale)."
+                if use_en:
+                    saving_text = (f"Estimated savings of {int(school.total_repair_cost * DECISION_REPAIR_SAVING_RATIO):,} XAF over the next {DECISION_SAVING_HORIZON_MONTHS} months by stopping repeated repairs.")
+                    justification = (
+                        f"{school.school_name} already spent {ratio}% of a new installation's value on repairs ({school.incident_count} breakdowns). "
+                        f"With {school.total_days_without_service} days without safe water, permanent corrective maintenance costs more than a lasting replacement."
+                    )
+                else:
+                    saving_text = f"Économie estimée à {int(school.total_repair_cost * DECISION_REPAIR_SAVING_RATIO):,} FCFA sur les {DECISION_SAVING_HORIZON_MONTHS} prochains mois en stoppant les réparations à répétition."
+                    justification = (
+                        f"L'école {school.school_name} a déjà dépensé {ratio}% de la valeur d'une installation neuve en réparations ({school.incident_count} pannes subies). "
+                        f"Avec {school.total_days_without_service} jours cumulés sans eau potable, la maintenance corrective permanente coûte plus cher qu'un remplacement pérenne."
+                    )
+            suggested = ("Replacement with a submerged solar pumping system and elevated buffer tank (10-year warranty, minimal maintenance)."
+                         if use_en else
+                         "Remplacement par un système de pompage solaire immergé avec cuve tampon surélevée (Garantie 10 ans, maintenance minimale).")
         elif ratio_monitor or school.incident_count >= DECISION_MONITOR_MIN_INCIDENTS:
             recommendation = "MONITOR_CLOSELY"
-            saving_text = "Optimisation possible par un contrat de maintenance préventive semestrielle."
+            saving_text = ("Possible optimization through a half-yearly preventive maintenance contract."
+                             if use_en else
+                             "Optimisation possible par un contrat de maintenance préventive semestrielle.")
             if ratio is None:
                 justification = (
-                    f"L'infrastructure montre des signes d'usure précoce ({school.incident_count} pannes). "
-                    f"Remplacement non urgent mais surveillance accrue nécessaire."
-                    f"{unknown_note}"
+                    (f"The infrastructure shows early wear ({school.incident_count} breakdowns). "
+                     f"Replacement not urgent but closer monitoring needed."
+                     f"{unknown_note}")
+                    if use_en else
+                    (f"L'infrastructure montre des signes d'usure précoce ({school.incident_count} pannes). "
+                     f"Remplacement non urgent mais surveillance accrue nécessaire."
+                     f"{unknown_note}")
                 )
             else:
                 justification = (
-                    f"L'infrastructure montre des signes d'usure précoce ({school.incident_count} pannes). "
-                    f"Le coût cumulé atteint {ratio}% du remplacement. Remplacement non urgent mais surveillance accrue nécessaire."
+                    (f"The infrastructure shows early wear ({school.incident_count} breakdowns). "
+                     f"Cumulative cost reaches {ratio}% of replacement. Replacement not urgent but closer monitoring needed.")
+                    if use_en else
+                    (f"L'infrastructure montre des signes d'usure précoce ({school.incident_count} pannes). "
+                     f"Le coût cumulé atteint {ratio}% du remplacement. Remplacement non urgent mais surveillance accrue nécessaire.")
                 )
-            suggested = "Rénovation ciblée des pièces d'usure (crépine, joints) et mise en place d'un comité de gestion scolaire local."
+            suggested = ("Targeted renovation of wear parts (strainer, seals) and setup of a local school management committee."
+                         if use_en else
+                         "Rénovation ciblée des pièces d'usure (crépine, joints) et mise en place d'un comité de gestion scolaire local.")
         else:
             recommendation = "CONTINUE_REPAIR"
-            saving_text = "Maintien de l'équipement actuel économiquement optimal."
+            saving_text = ("Keeping the current equipment is economically optimal."
+                             if use_en else
+                             "Maintien de l'équipement actuel économiquement optimal.")
             if ratio is None:
                 justification = (
-                    f"Équipement fiable ({school.incident_count} panne(s) seulement). "
-                    f"Arbitrage financier impossible sans le coût du neuf."
-                    f"{unknown_note}"
+                    (f"Reliable equipment (only {school.incident_count} breakdown(s)). "
+                     f"Financial arbitration impossible without the new cost."
+                     f"{unknown_note}")
+                    if use_en else
+                    (f"Équipement fiable ({school.incident_count} panne(s) seulement). "
+                     f"Arbitrage financier impossible sans le coût du neuf."
+                     f"{unknown_note}")
                 )
             else:
                 justification = (
-                    f"Équipement fiable ({school.incident_count} panne(s) seulement). Coût de maintenance très inférieur au remplacement ({ratio}%)."
+                    (f"Reliable equipment (only {school.incident_count} breakdown(s)). Maintenance cost far below replacement ({ratio}%).")
+                    if use_en else
+                    (f"Équipement fiable ({school.incident_count} panne(s) seulement). Coût de maintenance très inférieur au remplacement ({ratio}%).")
                 )
-            suggested = "Maintenance courante et graissage périodique."
+            suggested = ("Routine maintenance and periodic servicing."
+                         if use_en else
+                         "Maintenance courante et graissage périodique.")
 
         return ReplaceVsRepairAnalysis(
             school_name=school.school_name,

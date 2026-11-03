@@ -106,6 +106,12 @@ class NeedsClarificationTest(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertIsNone(needs_clarification(message, CTX))
 
+    def test_singular_need_help_not_intercepted(self) -> None:
+        for message in ("Quelle école a besoin d'aide ?",
+                        "Quelle école a besoin d’aide ?"):
+            with self.subTest(message=message):
+                self.assertIsNone(needs_clarification(message, CTX))
+
     def test_resolved_scope_not_intercepted(self) -> None:
         for message in ("Compare Ngok et Bonanjo",
                         "Résume le district de Mvila",

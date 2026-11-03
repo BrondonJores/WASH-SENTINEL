@@ -985,3 +985,76 @@ class ListIncidentsTest(unittest.TestCase):
         cards = AgentLoop._build_cards(loop, [("list_incidents", obs)])
         self.assertEqual(len(cards), 1)
         self.assertEqual(cards[0].type, "incident_list")
+
+
+class DayCardsBilingualTest(unittest.IsolatedAsyncioTestCase):
+    """Cartes du jour bilingues : question EN -> carte EN (jamais de FR codé en dur)."""
+
+    EN_CTX = {**ListIncidentsTest.INCIDENT_CONTEXT, "lang": "en"}
+
+    def test_incidents_insight_en(self) -> None:
+        res = TOOL_EXECUTORS["list_incidents"]({"date": "2026-10-31"}, self.EN_CTX)
+        self.assertEqual(
+            res["insight"],
+            "2 reports on 2026-10-31: École Publique de Bonanjo, École Rurale de Ngok.")
+
+    def test_incidents_empty_en(self) -> None:
+        res = TOOL_EXECUTORS["list_incidents"]({"date": "2026-10-29"}, self.EN_CTX)
+        self.assertEqual(res["insight"], "No reports on 2026-10-29.")
+
+    def test_logs_insight_en(self) -> None:
+        ctx = {**ListMaintenanceLogsTest.LOG_CONTEXT, "lang": "en"}
+        res = TOOL_EXECUTORS["list_maintenance_logs"]({"date": "2026-10-31"}, ctx)
+        self.assertEqual(
+            res["insight"],
+            "2 logged interventions on 2026-10-31: École Publique de Bonanjo, "
+            "École Rurale de Ngok.")
+
+    def test_unknown_school_prefix_en(self) -> None:
+        res = TOOL_EXECUTORS["list_incidents"](
+            {"date": "2026-10-31", "school": "Nowhere"}, self.EN_CTX)
+        self.assertTrue(res["insight"].startswith(
+            "School Nowhere not recognized — filter ignored. "))
+
+    async def test_english_question_returns_english_card(self) -> None:
+        from tests.test_agent_loop import StubLLM, _call
+        from app.agent_loop import AgentLoop
+        from app.schemas import AgentChatRequest, AgentContext
+        script = [
+            _call("list_incidents", {"date": "2026-10-31"}),
+            {"raw": {"role": "assistant", "content": "2 reports."},
+             "content": "2 reports.", "tool_calls": []},
+        ]
+        req = AgentChatRequest(
+            message="Show me today's incident reports.",
+            context=AgentContext(
+                schools=list(ListIncidentsTest.INCIDENT_CONTEXT["schools"]),
+                incidents=list(ListIncidentsTest.INCIDENT_CONTEXT["incidents"])))
+        from datetime import date as _date
+        res = await AgentLoop(StubLLM(script)).chat(req, today=_date(2026, 10, 31))
+        self.assertEqual(res.lang, "en")
+        self.assertIn("list_incidents", res.tools_executed)
+        card = next(c for c in res.cards if c.type == "incident_list")
+        self.assertTrue(card.title.startswith("Filed reports — 2026-10-31"))
+        self.assertTrue((card.data.get("insight") or "").startswith("2 reports on"))
+
+    async def test_french_question_returns_french_card(self) -> None:
+        from tests.test_agent_loop import StubLLM, _call
+        from app.agent_loop import AgentLoop
+        from app.schemas import AgentChatRequest, AgentContext
+        script = [
+            _call("list_incidents", {"date": "2026-10-31"}),
+            {"raw": {"role": "assistant", "content": "2 signalements."},
+             "content": "2 signalements.", "tool_calls": []},
+        ]
+        req = AgentChatRequest(
+            message="Donne moi les signalements d'aujourd'hui stp",
+            context=AgentContext(
+                schools=list(ListIncidentsTest.INCIDENT_CONTEXT["schools"]),
+                incidents=list(ListIncidentsTest.INCIDENT_CONTEXT["incidents"])))
+        from datetime import date as _date
+        res = await AgentLoop(StubLLM(script)).chat(req, today=_date(2026, 10, 31))
+        self.assertEqual(res.lang, "fr")
+        card = next(c for c in res.cards if c.type == "incident_list")
+        self.assertTrue(card.title.startswith("Signalements déclarés — 2026-10-31"))
+        self.assertTrue((card.data.get("insight") or "").startswith("2 signalements le"))

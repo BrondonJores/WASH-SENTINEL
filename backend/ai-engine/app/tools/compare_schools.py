@@ -10,6 +10,7 @@ import unicodedata
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import tool_lang
 
 TOOL_NAME = "compare_schools"
 
@@ -111,27 +112,38 @@ def _need_score(open_incidents: int, critical: int, affected: int,
     )
 
 
-def _why(column: dict[str, Any]) -> str:
-    """Raison du verdict : 2 premiers facteurs non nuls, en français."""
+def _why(column: dict[str, Any], lang: str = "fr") -> str:
+    """Raison du verdict : 2 premiers facteurs non nuls (défaut français)."""
+    use_en = str(lang or "fr").lower().startswith("en")
     parts: list[str] = []
     n_open = int(column.get("open_incidents", 0) or 0)
     n_crit = int(column.get("critical_incidents", 0) or 0)
     if n_open:
-        part = f"{n_open} incident{'s' if n_open > 1 else ''} ouvert{'s' if n_open > 1 else ''}"
-        if n_crit:
-            part += f" dont {n_crit} critique{'s' if n_crit > 1 else ''}"
+        if use_en:
+            part = f"{n_open} open incident{'s' if n_open > 1 else ''}"
+            if n_crit:
+                part += f" including {n_crit} critical"
+        else:
+            part = f"{n_open} incident{'s' if n_open > 1 else ''} ouvert{'s' if n_open > 1 else ''}"
+            if n_crit:
+                part += f" dont {n_crit} critique{'s' if n_crit > 1 else ''}"
         parts.append(part)
     affected = int(column.get("affected_students", 0) or 0)
     if affected:
-        parts.append(f"{affected} élèves affectés")
+        parts.append(f"{affected} pupils affected" if use_en else f"{affected} élèves affectés")
     cost = float(column.get("total_cost_XAF", 0) or 0)
     if cost:
-        parts.append(f"{cost:,.0f} XAF de réparations".replace(",", " "))
+        if use_en:
+            parts.append(f"{cost:,.0f} XAF in repairs")
+        else:
+            parts.append(f"{cost:,.0f} XAF de réparations".replace(",", " "))
     days = int(column.get("days_without_service", 0) or 0)
     if days:
-        parts.append(f"{days} jour{'s' if days > 1 else ''} sans service")
+        parts.append(f"{days} day{'s' if days > 1 else ''} without service"
+                     if use_en else
+                     f"{days} jour{'s' if days > 1 else ''} sans service")
     if not parts:
-        return "aucune panne ouverte ni coût signalé"
+        return "no open breakdown or reported cost" if use_en else "aucune panne ouverte ni coût signalé"
     return ", ".join(parts[:2])
 
 
@@ -143,12 +155,19 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
 
 def _execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    use_en = tool_lang(context) == "en"
     raw = args.get("schools")
     if not isinstance(raw, list):
-        return {"error": "Précisez au moins 2 écoles à comparer : {'schools': ['École A', 'École B']}."}
+        err = ("Name at least 2 schools to compare: {'schools': ['School A', 'School B']}."
+               if use_en else
+               "Précisez au moins 2 écoles à comparer : {'schools': ['École A', 'École B']}.")
+        return {"error": err}
     queries = [q for q in (str(r).strip() for r in raw) if q]
     if len(queries) < 2:
-        return {"error": "Précisez au moins 2 écoles à comparer : {'schools': ['École A', 'École B']}."}
+        err = ("Name at least 2 schools to compare: {'schools': ['School A', 'School B']}."
+               if use_en else
+               "Précisez au moins 2 écoles à comparer : {'schools': ['École A', 'École B']}.")
+        return {"error": err}
 
     schools = [s for s in context.get("schools", []) if isinstance(s, dict)]
     incidents = [i for i in context.get("incidents", []) if isinstance(i, dict)]
@@ -192,22 +211,33 @@ def _execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
     if len(columns) < 2:
         known = ", ".join(str(s.get("school_name", "?")) for s in schools[:10])
-        return {
-            "error": (
+        if use_en:
+            err = (
+                f"Comparison impossible: {len(columns)} school(s) recognized, 2 needed. "
+                f"Not found: {', '.join(unresolved) or '—'}. "
+                f"Valid schools: {known or 'no school in context'}."
+            )
+        else:
+            err = (
                 f"Comparaison impossible : {len(columns)} école(s) reconnue(s), il en faut 2. "
                 f"Introuvables : {', '.join(unresolved) or '—'}. "
                 f"Écoles valides : {known or 'aucune école dans le contexte'}."
-            ),
-            "unresolved": unresolved,
-        }
+            )
+        return {"error": err, "unresolved": unresolved}
 
     winner = max(range(len(columns)), key=lambda k: columns[k]["need_score"])
     top = columns[winner]
+    lang = "en" if use_en else "fr"
     names = " vs ".join(c["school_name"] for c in columns)
-    verdict = f"{top['school_name']} — {_why(top)}."
-    suffix = f" (introuvables : {', '.join(unresolved)})" if unresolved else ""
+    verdict = f"{top['school_name']} — {_why(top, lang)}."
+    if use_en:
+        suffix = f" (not found: {', '.join(unresolved)})" if unresolved else ""
+        insight = f"Comparing {names}: {verdict}{suffix}"
+    else:
+        suffix = f" (introuvables : {', '.join(unresolved)})" if unresolved else ""
+        insight = f"Comparaison {names} : {verdict}{suffix}"
     return {
-        "insight": f"Comparaison {names} : {verdict}{suffix}",
+        "insight": insight,
         "columns": columns,
         "verdict": verdict,
         "unresolved": unresolved,
@@ -220,9 +250,10 @@ def _build_compare_schools_card(obs: dict[str, Any]) -> AgentCard | None:
     columns = obs.get("columns")
     if not isinstance(columns, list) or not columns:
         return None
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     return AgentCard(
         type="compare_schools",
-        title="Comparaison des écoles",
+        title="School comparison" if use_en else "Comparaison des écoles",
         data=obs,
     )
 

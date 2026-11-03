@@ -62,6 +62,15 @@ _ACTION_RECENT = {"label": "Voir les derniers faits",
 _ACTION_PERIOD = {"label": "Voir une période plus longue",
                   "question": f"Et sur les {GUIDANCE_PERIOD_DAYS} derniers jours ?"}
 
+_ACTION_DISTRICTS_EN = {"label": "See all districts",
+                        "question": "Which districts are tracked?"}
+_ACTION_SCHOOLS_EN = {"label": "See tracked schools",
+                      "question": "Which schools are tracked?"}
+_ACTION_RECENT_EN = {"label": "See latest events",
+                     "question": "What are the latest reported incidents?"}
+_ACTION_PERIOD_EN = {"label": "See a longer period",
+                     "question": f"And over the last {GUIDANCE_PERIOD_DAYS} days?"}
+
 # Un modele par famille : titre simple, explication courte, 2-3 causes,
 # au moins 2 actions {label, question}.
 _FAMILY_GUIDANCE: dict[str, dict[str, Any]] = {
@@ -150,6 +159,92 @@ _FAMILY_GUIDANCE: dict[str, dict[str, Any]] = {
 }
 
 
+_FAMILY_GUIDANCE_EN: dict[str, dict[str, Any]] = {
+    FAMILY_LIEU: {
+        "title": "Can't find that place",
+        "insight": "The name given doesn't match any tracked place.",
+        "explication": ("Check the name letter by letter. "
+                        "One accent or typo is enough to block the search."),
+        "causes": [
+            "The name is misspelled.",
+            "That place is not tracked yet.",
+            "You are searching a school by a neighborhood name.",
+        ],
+        "actions": [_ACTION_SCHOOLS_EN, _ACTION_DISTRICTS_EN],
+    },
+    FAMILY_PERIODE: {
+        "title": "Nothing in this period",
+        "insight": "Nothing to report on the requested days.",
+        "explication": ("The search worked. There is just nothing to show "
+                        "for this period. That is often good news."),
+        "causes": [
+            "The period is too short.",
+            "Nothing really happened.",
+            "Events are older.",
+        ],
+        "actions": [_ACTION_PERIOD_EN, _ACTION_RECENT_EN],
+    },
+    FAMILY_DONNEES: {
+        "title": "No data for now",
+        "insight": "The information hasn't arrived yet.",
+        "explication": ("The list of schools and breakdowns is empty or not sent "
+                        "yet. Without it, nothing can be computed."),
+        "causes": [
+            "Data hasn't been sent yet.",
+            "The connection cut the upload.",
+            "The chosen filter keeps nothing.",
+        ],
+        "actions": [_ACTION_SCHOOLS_EN, _ACTION_RECENT_EN],
+    },
+    FAMILY_PARAMETRE: {
+        "title": "Missing information",
+        "insight": "The question is not specific enough.",
+        "explication": ("Tell me at least a school or district name, "
+                        "and what you want to know."),
+        "causes": [
+            "The school name is missing.",
+            "The district name is missing.",
+            "The question is too vague.",
+        ],
+        "actions": [_ACTION_SCHOOLS_EN, _ACTION_DISTRICTS_EN],
+    },
+    FAMILY_FILE: {
+        "title": "Queue not found",
+        "insight": "The pending messages can't be found.",
+        "explication": ("Messages kept offline aren't visible here. "
+                        "They may already be sent, "
+                        "or kept on another device."),
+        "causes": [
+            "Messages already went out.",
+            "They are kept on another device.",
+            "The list isn't loaded yet.",
+        ],
+        "actions": [
+            {"label": "Check the connection",
+             "question": "Is the connection back? What should I do?"},
+            _ACTION_RECENT_EN,
+        ],
+    },
+    FAMILY_DEFAUT: {
+        "title": "That didn't work",
+        "insight": "The search ran into a problem.",
+        "explication": ("Something blocked on our side. "
+                        "Retry with a simple question, "
+                        "like a school name."),
+        "causes": [
+            "A temporary service issue.",
+            "The question mixes two requests.",
+            "An expected detail is missing.",
+        ],
+        "actions": [
+            {"label": "Ask a simple question",
+             "question": "Which schools are tracked?"},
+            _ACTION_RECENT_EN,
+        ],
+    },
+}
+
+
 def _has(text: str, *keywords: str) -> bool:
     return any(kw in text for kw in keywords)
 
@@ -198,23 +293,37 @@ def _apply_tool_hints(tool_name: str, family: str, error_text: str,
                       title: str, explication: str,
                       actions: list[dict[str, str]],
                       district_examples: str | None = None,
+                      lang: str = "fr",
                       ) -> tuple[str, str, list[dict[str, str]]]:
     """Enrichit la carte selon l'outil appele (mapping par outil)."""
+    use_en = str(lang or "fr").lower().startswith("en")
     err = _norm(error_text)
     if tool_name in _DISTRICT_TOOLS:
         # District inexistant : guider vers un nom valide.
         if family == FAMILY_LIEU or _has(err, "district"):
             examples = district_examples or DISTRICT_EXAMPLES
-            explication = (f"Vérifiez le nom : {examples}… "
-                           + explication)
-        _ensure_action(actions, _ACTION_DISTRICTS, first=True)
+            prefix = (f"Check the name: {examples}… "
+                      if use_en else f"Vérifiez le nom : {examples}… ")
+            explication = prefix + explication
+        _ensure_action(actions,
+                       _ACTION_DISTRICTS_EN if use_en else _ACTION_DISTRICTS,
+                       first=True)
     if tool_name in _SCHOOL_TOOLS:
-        _ensure_action(actions, _ACTION_SCHOOLS, first=(family == FAMILY_LIEU))
+        _ensure_action(actions,
+                       _ACTION_SCHOOLS_EN if use_en else _ACTION_SCHOOLS,
+                       first=(family == FAMILY_LIEU))
     return title, explication, actions
 
 
-def _school_scoped_actions(school: str) -> list[dict[str, str]]:
+def _school_scoped_actions(school: str, lang: str = "fr") -> list[dict[str, str]]:
     """Actions cliquables restreintes à UNE école (discipline de périmètre)."""
+    if str(lang or "fr").lower().startswith("en"):
+        return [
+            {"label": f"Trends for {school}",
+             "question": f"Trends for {school}?"},
+            {"label": f"Emergencies at {school}",
+             "question": f"Any emergencies at {school}?"},
+        ]
     return [
         {"label": f"Tendances de {school}",
          "question": f"Tendances de {school} ?"},
@@ -386,16 +495,19 @@ def build_guidance_card(tool_name: str, observation: dict,
     `scope_school` : périmètre école unique — les actions restent sur cette
     école (ni districts, ni autres écoles) ; None = comportement historique.
     """
+    lang = ""
     try:
         if not isinstance(observation, dict):
             return None
         raw_error = observation.get("error")
         if not raw_error:
             return None
+        lang = str(observation.get("lang") or "fr")
+        use_en = lang.lower().startswith("en")
         error_text = str(raw_error)
         name = str(tool_name or "")
         family = _detect_family(name, error_text)
-        template = _FAMILY_GUIDANCE[family]
+        template = (_FAMILY_GUIDANCE_EN if use_en else _FAMILY_GUIDANCE)[family]
         title = str(template["title"])
         insight = str(template["insight"])
         explication = str(template["explication"])
@@ -404,11 +516,11 @@ def build_guidance_card(tool_name: str, observation: dict,
         if scope_school:
             # Périmètre école : actions cantonnées à l'école, sans enrichissement
             # district (ni exemples de districts, ni renvois larges).
-            actions = _school_scoped_actions(str(scope_school))
+            actions = _school_scoped_actions(str(scope_school), lang)
         else:
             title, explication, actions = _apply_tool_hints(
                 name, family, error_text, title, explication, actions,
-                district_examples=district_examples)
+                district_examples=district_examples, lang=lang)
         return AgentCard(
             type="guidance",
             title=title,
@@ -420,7 +532,8 @@ def build_guidance_card(tool_name: str, observation: dict,
             },
         )
     except Exception:
-        fallback = _FAMILY_GUIDANCE[FAMILY_DEFAUT]
+        use_en = str(lang or "fr").lower().startswith("en")
+        fallback = (_FAMILY_GUIDANCE_EN if use_en else _FAMILY_GUIDANCE)[FAMILY_DEFAUT]
         return AgentCard(
             type="guidance",
             title=str(fallback["title"]),

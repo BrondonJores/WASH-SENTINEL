@@ -533,6 +533,7 @@ class AgentChatResponse(BaseModel):
     cards: list[AgentCard] = Field(default_factory=list)
     model_used: str = ""
     follow_ups: list[str] = Field(default_factory=list)
+    lang: str = Field(default="fr", description="Langue de réponse fr|en (rendu cartes)")
 
 
 # ==========================================

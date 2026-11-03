@@ -437,5 +437,192 @@ class PrepSlotFollowupTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(fields.get("date")), "2026-11-04")
 
 
+REAL_PREP_TURN = (
+    "Intervention « l'intervention », prévue le 3 novembre 2026, budget "
+    "100 000 XAF, équipe Équipe Wouri Nord. Budget 100 000 XAF enregistré. "
+    "Quel incident existant faut-il réparer (titre ou référence) ? "
+    "De quelle école s'agit-il ?"
+)
+
+
+def _real_history():
+    return [
+        {"role": "assistant", "content":
+            "10 incidents ouverts dans 1 district : Wouri (10). Tournée "
+            "suggérée : École Publique de Bonanjo, Collège Libermann."},
+        {"role": "user", "content":
+            "Prépare une intervention pour ce signalement, equipe wouri "
+            "nord, aujourd'hui budget 100 000XAF"},
+        {"role": "assistant", "content": REAL_PREP_TURN},
+    ]
+
+
+class PrepSlotRobustnessTest(unittest.TestCase):
+    """Réponses courtes réelles : marqueurs ponctués, slots sans école."""
+
+    def test_markers_match_real_questions(self) -> None:
+        from app.agent_loop import _PREP_QUESTION_MARKERS, _norm_marker_text
+        from app.tools.prepare_intervention import (
+            _SLOT_QUESTIONS, _SLOT_QUESTIONS_EN)
+        questions = [*_SLOT_QUESTIONS.values(),
+                     *_SLOT_QUESTIONS_EN.values(),
+                     "De quelle école s'agit-il ?",
+                     "Which school do you mean?"]
+        for question in questions:
+            normed = _norm_marker_text(question)
+            self.assertTrue(
+                any(m in normed for m in _PREP_QUESTION_MARKERS),
+                f"aucun marqueur pour {question!r}")
+
+    def test_team_only_rebuilt_without_school(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        rewritten = resolve_prep_slot_followup(
+            "Confier à Équipe Wouri Nord", _real_history(),
+            {**CONTEXT, "teams": SLOT_TEAMS}, date(2026, 11, 3))
+        self.assertIn("100000", rewritten.replace(" ", ""))
+        self.assertIn("Équipe Wouri Nord", rewritten)
+        self.assertIn("03/11/2026", rewritten)
+
+    def test_proposed_teams_never_guessed(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        rewritten = resolve_prep_slot_followup(
+            "demain", _prep_history(), {**CONTEXT, "teams": SLOT_TEAMS})
+        self.assertNotIn("équipe", rewritten)
+        self.assertIn("WASH-2026-PUMP", rewritten)
+
+    def test_lone_school_answers_school_question(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        rewritten = resolve_prep_slot_followup(
+            "Bonanjo", _real_history(), {**CONTEXT, "teams": SLOT_TEAMS},
+            date(2026, 11, 3))
+        self.assertIn("Bonanjo", rewritten)
+        self.assertIn("100000", rewritten.replace(" ", ""))
+        self.assertIn("Équipe Wouri Nord", rewritten)
+
+    def test_bare_reference_answers_incident_question(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        rewritten = resolve_prep_slot_followup(
+            "WASH-2026-PUMP", _real_history(),
+            {**CONTEXT, "teams": SLOT_TEAMS}, date(2026, 11, 3))
+        self.assertIn("WASH-2026-PUMP", rewritten)
+        self.assertIn("100000", rewritten.replace(" ", ""))
+
+    def test_budget_only_answer_rebuilt(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        history = [
+            {"role": "user",
+             "content": "Prépare une intervention à Bonanjo"},
+            {"role": "assistant", "content":
+                "Intervention en préparation à École Publique de Bonanjo. "
+                "Quel budget allouez-vous (en XAF) ?"},
+        ]
+        rewritten = resolve_prep_slot_followup(
+            "100 000 XAF", history, {**CONTEXT, "teams": SLOT_TEAMS})
+        self.assertIn("Bonanjo", rewritten)
+        self.assertIn("budget 100000 XAF", rewritten)
+
+    def test_bare_number_never_budget(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        history = [
+            {"role": "assistant", "content":
+                "Quel budget allouez-vous (en XAF) ?"},
+        ]
+        self.assertEqual(
+            resolve_prep_slot_followup(
+                "100000", history, {**CONTEXT, "teams": SLOT_TEAMS}),
+            "100000")
+
+    def test_literal_date_wins_over_day_only(self) -> None:
+        from app.agent_loop import _prep_asserted_date
+        self.assertEqual(
+            _prep_asserted_date("Intervention prévue le 15 décembre 2026.",
+                                date(2026, 11, 3)),
+            date(2026, 12, 15))
+        self.assertEqual(
+            _prep_asserted_date("Pour demain.", date(2026, 11, 3)),
+            date(2026, 11, 4))
+
+    def test_prep_questions_en(self) -> None:
+        from app.tools.prepare_intervention import execute
+        obs = execute({"today": "2026-11-03"},
+                      {**CONTEXT, "lang": "en"})
+        self.assertTrue(all("?" in q for q in obs["questions"]))
+        self.assertIn("Which existing incident should be repaired",
+                      " ".join(obs["questions"]))
+        self.assertIn("the targeted existing incident",
+                      " ".join(obs["missing_labels"]))
+
+    def test_parse_date_english(self) -> None:
+        from datetime import date as _date
+        from app.tools.prepare_intervention import parse_date
+        ref = _date(2026, 11, 3)
+        self.assertEqual(parse_date("tomorrow", ref), _date(2026, 11, 4))
+        self.assertEqual(parse_date("today", ref), ref)
+        self.assertEqual(parse_date("day after tomorrow", ref),
+                         _date(2026, 11, 5))
+
+    def test_english_team_answer_rebuilt(self) -> None:
+        from app.agent_loop import resolve_prep_slot_followup
+        history = [
+            {"role": "assistant", "content":
+                "Partial preparation (nothing recorded). "
+                "Which team should intervene?"},
+        ]
+        rewritten = resolve_prep_slot_followup(
+            "Assign to Team Wouri Nord", history,
+            {"schools": [], "incidents": [],
+             "teams": [{"name": "Team Wouri Nord", "is_active": True}]},
+            date(2026, 11, 3))
+        self.assertIn("Team Wouri Nord", rewritten)
+        self.assertTrue(rewritten.startswith("Prépare une intervention"))
+
+    def test_anaphora_inherits_school_and_ref(self) -> None:
+        from app.agent_loop import resolve_prep_followup
+        history = [{"role": "assistant", "content":
+            "1 signalement le 3 nov. 2026 : École Publique de Bonanjo, "
+            "WASH-2026-IVMOCT."}]
+        rewritten = resolve_prep_followup(
+            "Prépare une intervention pour ce signalement, aujourd'hui "
+            "budget 100000 XAF", history, CONTEXT)
+        self.assertIn("Bonanjo", rewritten)
+        self.assertIn("WASH-2026-IVMOCT", rewritten)
+
+    def test_anaphora_ambiguous_ref_not_guessed(self) -> None:
+        from app.agent_loop import resolve_prep_followup
+        history = [{"role": "assistant", "content":
+            "2 signalements : WASH-2026-PUMP et WASH-2026-LAT à Bonanjo."}]
+        rewritten = resolve_prep_followup(
+            "Prépare une intervention pour cet incident, budget 50000 XAF",
+            history, CONTEXT)
+        self.assertIn("Bonanjo", rewritten)
+        self.assertNotIn("WASH-2026-PUMP", rewritten)
+        self.assertNotIn("WASH-2026-LAT", rewritten)
+
+
+class PrepSlotRobustnessE2ETest(unittest.IsolatedAsyncioTestCase):
+    """Cas réel 11:30 : jamais de listing, questions ciblées, sans LLM."""
+
+    async def test_team_only_asks_school_never_lists(self) -> None:
+        stub = PrepStubLLM()
+        res = await AgentLoop(stub).chat(
+            _req_teams("Confier à Équipe Wouri Nord", _real_history()),
+            today=date(2026, 11, 3))
+        self.assertEqual(stub.chat_calls, 0)
+        self.assertIn("prepare_intervention", res.tools_executed)
+        self.assertNotIn("list_incidents", res.tools_executed)
+        self.assertNotIn("dispatch_maintenance", res.tools_executed)
+        self.assertIn("De quelle école s'agit-il ?", res.answer)
+
+    async def test_lone_school_asks_incident_never_lists(self) -> None:
+        stub = PrepStubLLM()
+        res = await AgentLoop(stub).chat(
+            _req_teams("Bonanjo", _real_history()), today=date(2026, 11, 3))
+        self.assertEqual(stub.chat_calls, 0)
+        self.assertIn("prepare_intervention", res.tools_executed)
+        self.assertNotIn("list_incidents", res.tools_executed)
+        self.assertNotIn("incident_list", [c.type for c in res.cards])
+        self.assertIn("Quel incident existant faut-il réparer", res.answer)
+
+
 if __name__ == "__main__":
     unittest.main()

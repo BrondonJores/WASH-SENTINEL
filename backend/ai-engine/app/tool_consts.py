@@ -69,3 +69,13 @@ TIME_WINDOW_PRESETS = (
     "this_year",
     "since",
 )
+
+
+def tool_lang(context: dict | None) -> str:
+    """Langue des libellés d'outils/cartes : 'en' ou 'fr' (défaut).
+
+    Posée par AgentLoop.chat (langue de réponse résolue) ; les appels
+    directs (tests, scripts) sans clé restent en français.
+    """
+    lang = str((context or {}).get("lang") or "fr").strip().lower()
+    return "en" if lang.startswith("en") else "fr"

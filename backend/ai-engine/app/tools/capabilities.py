@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import tool_lang
 
 TOOL_NAME = "capabilities"
 
@@ -42,21 +43,39 @@ CAPABILITIES = (
     ("Écouter une réponse", "Bouton Écouter sur chaque carte"),
 )
 
+CAPABILITIES_EN = (
+    ("See priority schools", "Which schools need help most?"),
+    ("List incidents", "Show open incidents"),
+    ("Track interventions", "Interventions done today?"),
+    ("See trends", "Trends for Bonanjo over 3 months"),
+    ("Log an intervention", "Log an intervention"),
+    ("Report a breakdown", "Report a leak at Nkol school"),
+    ("Listen to an answer", "Listen button on each card"),
+)
+
 
 def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    del args, context
+    del args
+    items = CAPABILITIES_EN if tool_lang(context) == "en" else CAPABILITIES
+    if tool_lang(context) == "en":
+        insight = (f"I can do {len(items)} things: ask me for example "
+                   f"\u201c{items[0][1]}\u201d")
+    else:
+        insight = (f"Je sais faire {len(items)} choses : demande-moi par exemple "
+                   f"« {items[0][1]} »")
     return {
-        "insight": f"Je sais faire {len(CAPABILITIES)} choses : demande-moi par exemple « {CAPABILITIES[0][1]} »",
-        "items": [{"capability": c, "exemple": e} for c, e in CAPABILITIES],
+        "insight": insight,
+        "items": [{"capability": c, "exemple": e} for c, e in items],
     }
 
 
 def _build_capabilities_card(obs: dict[str, Any]) -> AgentCard | None:
     if not obs.get("items"):
         return None
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     return AgentCard(
         type="capabilities_list",
-        title="Ce que je sais faire",
+        title="What I can do" if use_en else "Ce que je sais faire",
         data=obs,
     )
 

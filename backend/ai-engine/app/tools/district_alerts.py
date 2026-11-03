@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..schemas import AgentCard
+from ..tool_consts import tool_lang
 from ..textnorm import dedup_incidents, district_match, fold, parse_dt
 from ..tool_consts import (
     ALERT_WINDOW_DAYS_DEFAULT,
@@ -112,6 +113,7 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         district = str(args.get("district") or "").strip()
         days = _parse_days(args.get("days", ALERT_WINDOW_DAYS_DEFAULT))
         now = datetime.now(timezone.utc)
+        use_en = tool_lang(context) == "en"
 
         incidents = [i for i in (context.get("incidents", []) or [])
                      if isinstance(i, dict)
@@ -121,7 +123,9 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             # présente mais vide est un vide valide -> carte typée vide.
             base: dict[str, Any] = {"alerts": [], "total": 0,
                                     "district": district or None, "days": days}
-            base["error"] = "Aucune donnée d'incident disponible pour détecter des alertes."
+            base["error"] = ("No incident data available to detect alerts."
+                             if use_en else
+                             "Aucune donnée d'incident disponible pour détecter des alertes.")
             return base
 
         alerts: list[dict[str, Any]] = []
@@ -135,11 +139,19 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             if urgency == "critical" and (age is None or age > _STALE_DAYS):
                 # Sans date = conservé, prudent (même politique qu'epidemic_alerts).
                 if age is None:
-                    action = (f"Intervenir en priorité à {school} : incident critique "
-                              "sans date connue — vérifier l'ancienneté.")
+                    if use_en:
+                        action = (f"Intervene first at {school}: critical incident "
+                                  "with unknown date — check how old it is.")
+                    else:
+                        action = (f"Intervenir en priorité à {school} : incident critique "
+                                  "sans date connue — vérifier l'ancienneté.")
                 else:
-                    action = (f"Intervenir en priorité à {school} : incident critique "
-                              f"ouvert depuis {age} jours.")
+                    if use_en:
+                        action = (f"Intervene first at {school}: critical incident "
+                                  f"open for {age} days.")
+                    else:
+                        action = (f"Intervenir en priorité à {school} : incident critique "
+                                  f"ouvert depuis {age} jours.")
                 alerts.append({
                     "kind": "critical_stale",
                     "severity": "critical",
@@ -161,7 +173,9 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                     "urgency": urgency or None,
                     "age_days": age,
                     "affected_students": affected,
-                    "action": f"Rétablir l'eau en urgence à {school} (apport temporaire puis réparation).",
+                    "action": (f"Restore water urgently at {school} (temporary supply then repair)."
+                               if use_en else
+                               f"Rétablir l'eau en urgence à {school} (apport temporaire puis réparation)."),
                 })
 
         sid_district = _school_districts(context)
@@ -184,11 +198,17 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 recent_count += 1
         spike_total = recent_count + undated_count
         if spike_total >= _SPIKE_THRESHOLD:
-            scope = f" à {district}" if district else ""
-            undated_suffix = (f" (dont {undated_count} sans date)"
-                              if undated_count else "")
-            title = (f"Pic de {spike_total} incidents en {days} jours{scope}"
-                     f"{undated_suffix}")
+            scope = (f" in {district}" if district else "") if use_en else (f" à {district}" if district else "")
+            if use_en:
+                undated_suffix = (f" (including {undated_count} undated)"
+                                  if undated_count else "")
+                title = (f"Spike of {spike_total} incidents in {days} days{scope}"
+                         f"{undated_suffix}")
+            else:
+                undated_suffix = (f" (dont {undated_count} sans date)"
+                                  if undated_count else "")
+                title = (f"Pic de {spike_total} incidents en {days} jours{scope}"
+                         f"{undated_suffix}")
             alerts.append({
                 "kind": "spike",
                 "severity": "high",
@@ -199,36 +219,52 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
                 "age_days": None,
                 "affected_students": None,
                 "undated_count": undated_count,
-                "action": f"Analyser la cause du pic ({title}) et planifier une tournée.",
+                "action": (f"Analyze the spike cause ({title}) and plan a tour."
+                               if use_en else
+                               f"Analyser la cause du pic ({title}) et planifier une tournée."),
             })
 
         if not alerts:
             # Vide valide -> carte typée vide (pas d'erreur) : l'état vide
             # frontend devient atteignable (politique AXE 7 / P1b).
-            scope = f" pour {district}" if district else ""
+            scope = (f" for {district}" if district else "") if use_en else (f" pour {district}" if district else "")
+            empty = (f"No actionable alerts{scope} over the period."
+                     if use_en else f"Aucune alerte actionnable{scope} sur la période.")
             return {"alerts": [], "total": 0, "district": district or None,
-                    "days": days,
-                    "insight": f"Aucune alerte actionnable{scope} sur la période."}
+                    "days": days, "insight": empty}
 
         severity_rank = {"critical": 0, "high": 1}
         alerts.sort(key=lambda a: (severity_rank.get(str(a.get("severity")), 9),
                                    -(a.get("age_days") if isinstance(a.get("age_days"), int) else -1)))
         kinds = [str(a.get("kind")) for a in alerts]
         parts = []
-        if "critical_stale" in kinds:
-            parts.append(f"{kinds.count('critical_stale')} critique(s) ancienne(s)")
-        if "no_water" in kinds:
-            parts.append(f"{kinds.count('no_water')} école(s) sans eau")
-        if "spike" in kinds:
-            parts.append("1 pic d'incidents")
-        scope = f" à {district}" if district else ""
-        total = len(alerts)
-        insight = (f"{total} alerte(s) actionnable(s){scope} : "
-                   f"{', '.join(parts)}. Intervention recommandée.")
+        if use_en:
+            if "critical_stale" in kinds:
+                parts.append(f"{kinds.count('critical_stale')} stale critical")
+            if "no_water" in kinds:
+                parts.append(f"{kinds.count('no_water')} school(s) without water")
+            if "spike" in kinds:
+                parts.append("1 incident spike")
+            scope = f" in {district}" if district else ""
+            total = len(alerts)
+            insight = (f"{total} actionable alert(s){scope}: "
+                       f"{', '.join(parts)}. Intervention recommended.")
+        else:
+            if "critical_stale" in kinds:
+                parts.append(f"{kinds.count('critical_stale')} critique(s) ancienne(s)")
+            if "no_water" in kinds:
+                parts.append(f"{kinds.count('no_water')} école(s) sans eau")
+            if "spike" in kinds:
+                parts.append("1 pic d'incidents")
+            scope = f" à {district}" if district else ""
+            total = len(alerts)
+            insight = (f"{total} alerte(s) actionnable(s){scope} : "
+                       f"{', '.join(parts)}. Intervention recommandée.")
         return {"insight": insight, "alerts": alerts, "total": total,
                 "district": district or None, "days": days}
     except Exception as exc:  # contrat : jamais d'exception vers la boucle
-        return {"alerts": [], "total": 0, "error": f"Alertes indisponibles : {exc}"}
+        return {"alerts": [], "total": 0,
+                "error": f"Alerts unavailable: {exc}"}
 
 
 def _build_district_alerts_card(obs: dict[str, Any]) -> AgentCard | None:
@@ -240,15 +276,16 @@ def _build_district_alerts_card(obs: dict[str, Any]) -> AgentCard | None:
     total = obs.get("total") or len(alerts)
     district = obs.get("district")
     scope = f" — {district}" if district else ""
+    use_en = str(obs.get("lang") or "fr").lower().startswith("en")
     if not alerts:
         return AgentCard(
             type="district_alerts",
-            title=f"Aucune alerte actionnable{scope}",
+            title=f"No actionable alerts{scope}" if use_en else f"Aucune alerte actionnable{scope}",
             data=obs,
         )
     return AgentCard(
         type="district_alerts",
-        title=f"{total} alerte(s) actionnable(s){scope}",
+        title=f"{total} actionable alert(s){scope}" if use_en else f"{total} alerte(s) actionnable(s){scope}",
         data=obs,
     )
 

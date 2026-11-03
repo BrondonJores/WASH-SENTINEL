@@ -25,7 +25,7 @@ from .textnorm import (
     parse_dt as _parse_dt,
     score_place,
 )
-from .tool_consts import INCIDENT_FUZZY_MIN_RATIO
+from .tool_consts import INCIDENT_FUZZY_MIN_RATIO, tool_lang
 
 
 def _env_float(name: str, default: float) -> float:
@@ -276,6 +276,8 @@ def _affected_unified_total(open_incs: list[dict[str, Any]]) -> int:
 
 FRENCH_MONTHS = ["", "janvier", "février", "mars", "avril", "mai", "juin",
                  "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+ENGLISH_MONTHS = ["", "January", "February", "March", "April", "May", "June",
+                  "July", "August", "September", "October", "November", "December"]
 
 
 def _resolve_school(context: dict[str, Any], ref: Any) -> dict[str, Any] | None:
@@ -526,9 +528,14 @@ def build_budget_compare(context: dict[str, Any], district: Any = None,
 
 def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Analyse complète d'une école : pannes ouvertes, coûts, arbitrage réparer/remplacer."""
+    lang = tool_lang(context)
+    use_en = lang == "en"
     school = _resolve_school(context, args.get("school", args.get("school_id")))
     if not school:
-        return {"error": f"École '{args.get('school', args.get('school_id'))}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."}
+        err = ((f"School '{args.get('school', args.get('school_id'))}' not found. Valid schools: {_school_choices(context)}. Retry with an exact name or id.")
+               if use_en else
+               (f"École '{args.get('school', args.get('school_id'))}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."))
+        return {"error": err}
     school_id = school["school_id"]
     open_incs = [i for i in _open_incidents(context) if i.get("school_id") == school_id]
     # Coût sourcé (fiche école > référentiel > inconnu) : jamais de 1 500 000
@@ -545,7 +552,7 @@ def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[s
         total_repair_cost=float(school.get("total_repair_cost", 0.0)),
         total_days_without_service=int(school.get("total_days_without_service", 0)),
     )
-    analysis = DecisionAgent.evaluate_school_equipment(history)
+    analysis = DecisionAgent.evaluate_school_equipment(history, lang)
     return {
         "school_id": school["school_id"],
         "school_name": school.get("school_name"),
@@ -601,14 +608,23 @@ def tool_rank_schools_by_need(args: dict[str, Any], context: dict[str, Any]) -> 
     ranking.sort(key=lambda r: r["need_score"], reverse=True)
     for position, row in enumerate(ranking, start=1):
         row["rank"] = position
+    lang = tool_lang(context)
+    use_en = lang == "en"
     if len(ranking) >= 2:
         gap = ranking[0]["need_score"] - ranking[1]["need_score"]
-        insight = (f"{ranking[0]['school_name']} devance {ranking[1]['school_name']} "
-                   f"de {_fmt_1(gap)} points.")
+        if use_en:
+            insight = (f"{ranking[0]['school_name']} leads {ranking[1]['school_name']} "
+                       f"by {_fmt_1(gap, lang)} points.")
+        else:
+            insight = (f"{ranking[0]['school_name']} devance {ranking[1]['school_name']} "
+                       f"de {_fmt_1(gap, lang)} points.")
     elif ranking:
-        insight = f"{ranking[0]['school_name']} est la seule école en difficulté."
+        insight = (f"{ranking[0]['school_name']} is the only school in difficulty."
+                   if use_en else
+                   f"{ranking[0]['school_name']} est la seule école en difficulté.")
     else:
-        insight = "Aucune école en difficulté pour le moment."
+        insight = ("No school in difficulty for now."
+                   if use_en else "Aucune école en difficulté pour le moment.")
     return {"ranking": ranking, "total": len(ranking), "insight": insight}
 
 
@@ -625,19 +641,30 @@ def tool_summarize_district(args: dict[str, Any], context: dict[str, Any]) -> di
     for i in open_incs:
         by_urgency[str(i.get("urgency", "?"))] = by_urgency.get(str(i.get("urgency", "?")), 0) + 1
         by_category[str(i.get("category", "?"))] = by_category.get(str(i.get("category", "?")), 0) + 1
+    lang = tool_lang(context)
+    use_en = lang == "en"
     if by_category and open_incs:
         top_cat = max(by_category, key=lambda k: by_category[k])
         n = int(by_category[top_cat])
         total = len(open_incs)
-        label = CAT_FR.get(top_cat, top_cat)
+        label = (CAT_EN if use_en else CAT_FR).get(top_cat, top_cat)
         if n == total:
-            insight = (f"Tous les {total} {_plural(total, 'incident ouvert', 'incidents ouverts')} "
-                       f"concernent « {label} ».")
+            if use_en:
+                insight = (f"All {total} {_plural(total, 'open incident', 'open incidents')} "
+                           f"concern \u00ab {label} \u00bb.")
+            else:
+                insight = (f"Tous les {total} {_plural(total, 'incident ouvert', 'incidents ouverts')} "
+                           f"concernent « {label} ».")
         else:
-            insight = (f"En tête : {n} {_plural(n, 'incident', 'incidents')} "
-                       f"« {label} » sur {total} au total.")
+            if use_en:
+                insight = (f"Leading: {n} {_plural(n, 'incident', 'incidents')} "
+                           f"\u00ab {label} \u00bb out of {total} total.")
+            else:
+                insight = (f"En tête : {n} {_plural(n, 'incident', 'incidents')} "
+                           f"« {label} » sur {total} au total.")
     else:
-        insight = "Aucun incident ouvert sur ce territoire."
+        insight = ("No open incidents in this territory."
+                   if use_en else "Aucun incident ouvert sur ce territoire.")
     return {
         "open_incidents": len(open_incs),
         "by_urgency": by_urgency,
@@ -657,12 +684,23 @@ def tool_explain_incident(args: dict[str, Any], context: dict[str, Any]) -> dict
     if not incident:
         # L'utilisateur donne une référence (WASH-2026-XXXX), pas un id numérique.
         incident = _resolve_incident(context, incident_id)
+    lang = tool_lang(context)
+    use_en = lang == "en"
     if not incident:
-        return {"error": f"Incident {incident_id} introuvable. Choix : {_incident_choices(context.get('incidents', []))}"}
+        err = ((f"Incident {incident_id} not found. Choices: {_incident_choices(context.get('incidents', []))}")
+               if use_en else
+               (f"Incident {incident_id} introuvable. Choix : {_incident_choices(context.get('incidents', []))}"))
+        return {"error": err}
     dt = _parse_dt(incident.get("reported_at"))
-    since = f", signalé le {dt.day} {FRENCH_MONTHS[dt.month]}" if dt else ""
-    insight = (f"Priorité {_fmt_1(incident.get('priority_score', 0))}/100 : "
-               f"{_fmt_int(incident.get('affected_students', 0))} élèves affectés{since}.")
+    months = ENGLISH_MONTHS if use_en else FRENCH_MONTHS
+    since = (f", reported on {months[dt.month]} {dt.day}" if dt and use_en
+             else f", signalé le {dt.day} {months[dt.month]}" if dt else "")
+    if use_en:
+        insight = (f"Priority {_fmt_1(incident.get('priority_score', 0), lang)}/100: "
+                   f"{_fmt_int(incident.get('affected_students', 0))} pupils affected{since}.")
+    else:
+        insight = (f"Priorité {_fmt_1(incident.get('priority_score', 0), lang)}/100 : "
+                   f"{_fmt_int(incident.get('affected_students', 0))} élèves affectés{since}.")
     return {
         "insight": insight,
         "id": incident.get("id"),
@@ -729,11 +767,47 @@ ACTION_TITLES = {
     "create_maintenance_log": "Journaliser une intervention",
 }
 
+SLOT_LABELS_EN = {
+    "school": "the school concerned",
+    "description": "the breakdown description",
+    "title": "the intervention title",
+    "category": "the category (water point, latrines, handwashing, drainage)",
+    "urgency": "the urgency level (low, medium, high, critical)",
+    "affected_students": "the number of pupils affected",
+    "incident": "the incident concerned (title, number or reference)",
+    "cost_amount": "the intervention cost in XAF",
+}
+
+SLOT_QUESTIONS_EN = {
+    "school": "Which school is concerned?",
+    "description": "Describe the breakdown in a few words?",
+    "title": "Which title for the intervention?",
+    "category": "Which category (water point, latrines, handwashing, drainage)?",
+    "urgency": "Which urgency level (low, medium, high, critical)?",
+    "affected_students": "How many pupils are affected?",
+    "incident": "Which incident is concerned (title or reference)?",
+    "cost_amount": "What is the intervention cost in XAF?",
+}
+
+ACTION_TITLES_EN = {
+    "create_report": "New report",
+    "create_incident": "New intervention",
+    "create_maintenance_log": "Log an intervention",
+}
+
 _SLOT_ROW_LABELS = {
     "school_name": "École", "description": "Description", "title": "Titre",
     "category": "Catégorie", "urgency": "Urgence",
     "affected_students": "Élèves affectés", "cost_amount": "Coût (XAF)",
     "notes": "Notes", "days_without_service": "Jours sans service",
+    "incident_label": "Incident",
+}
+
+_SLOT_ROW_LABELS_EN = {
+    "school_name": "School", "description": "Description", "title": "Title",
+    "category": "Category", "urgency": "Urgency",
+    "affected_students": "Pupils affected", "cost_amount": "Cost (XAF)",
+    "notes": "Notes", "days_without_service": "Days without service",
     "incident_label": "Incident",
 }
 
@@ -821,21 +895,31 @@ def _candidate_card(incident: dict[str, Any]) -> dict[str, Any]:
     return {key: incident.get(key) for key in _CANDIDATE_KEYS}
 
 
-def _recap(action: str, slots: dict[str, Any], missing_labels: list[str]) -> str:
+def _recap(action: str, slots: dict[str, Any], missing_labels: list[str],
+         lang: str = "fr") -> str:
+    use_en = str(lang or "fr").lower().startswith("en")
+    row_labels = _SLOT_ROW_LABELS_EN if use_en else _SLOT_ROW_LABELS
     rows = []
     for key, value in slots.items():
         if value is None or value == "" or key in ("school_id", "incident_id"):
             continue
-        rows.append(f"{_SLOT_ROW_LABELS.get(key, key)} : {value}")
-    text = ACTION_TITLES.get(action, action) + "\n" + "\n".join(rows)
+        sep = ": " if use_en else " : "
+        rows.append(f"{row_labels.get(key, key)}{sep}{value}")
+    titles = ACTION_TITLES_EN if use_en else ACTION_TITLES
+    text = titles.get(action, action) + "\n" + "\n".join(rows)
     if missing_labels:
-        text += "\nManquant : " + ", ".join(missing_labels) + "."
+        missing_word = "Missing" if use_en else "Manquant"
+        text += f"\n{missing_word}{': ' if use_en else ' : '}" + ", ".join(missing_labels) + "."
     return text
 
 
-def _proposal(action: str, slots: dict[str, Any], missing: list[str]) -> dict[str, Any]:
-    labels = [SLOT_LABELS[m] for m in missing]
-    questions = [SLOT_QUESTIONS[m] for m in missing[:2] if m in SLOT_QUESTIONS]
+def _proposal(action: str, slots: dict[str, Any], missing: list[str],
+              lang: str = "fr") -> dict[str, Any]:
+    use_en = str(lang or "fr").lower().startswith("en")
+    slot_labels = SLOT_LABELS_EN if use_en else SLOT_LABELS
+    slot_questions = SLOT_QUESTIONS_EN if use_en else SLOT_QUESTIONS
+    labels = [slot_labels[m] for m in missing]
+    questions = [slot_questions[m] for m in missing[:2] if m in slot_questions]
     return {
         "action": action,
         "complete": not missing,
@@ -843,7 +927,7 @@ def _proposal(action: str, slots: dict[str, Any], missing: list[str]) -> dict[st
         "missing": missing,
         "missing_labels": labels,
         "questions": questions,
-        "recap": _recap(action, slots, labels),
+        "recap": _recap(action, slots, labels, lang),
     }
 
 
@@ -884,7 +968,7 @@ def _prepare_creation(kind: str, args: dict[str, Any], context: dict[str, Any]) 
         "category": category,
         "urgency": urgency,
         "affected_students": affected,
-    }, missing)
+    }, missing, tool_lang(context))
     if hint and not school:
         obs["hint_unmatched"] = hint
         obs["school_choices"] = _school_choices(context)
@@ -925,7 +1009,7 @@ def tool_prepare_maintenance_log(args: dict[str, Any], context: dict[str, Any]) 
         "cost_amount": cost,
         "notes": notes,
         "days_without_service": days,
-    }, missing)
+    }, missing, tool_lang(context))
     if hint and not incident:
         obs["hint_unmatched"] = hint
         pool = candidates if candidates else _open_incidents(context)
@@ -936,6 +1020,7 @@ def tool_prepare_maintenance_log(args: dict[str, Any], context: dict[str, Any]) 
 
 
 URGENCY_FR = {"critical": "critique", "high": "haute", "medium": "moyenne", "low": "basse"}
+URGENCY_EN = {"critical": "critical", "high": "high", "medium": "medium", "low": "low"}
 
 
 def _fmt_int(n: Any) -> str:
@@ -949,15 +1034,19 @@ def _plural(count: int, singular: str, plural: str) -> str:
     return singular if count == 1 else plural
 
 
-def _fmt_1(value: Any) -> str:
+def _fmt_1(value: Any, lang: str = "fr") -> str:
+    """Une décimale : virgule FR (« 14,5 »), point EN (« 14.5 »)."""
     try:
-        return f"{float(value):.1f}".replace(".", ",")
+        text = f"{float(value):.1f}"
     except (TypeError, ValueError):
-        return "0,0"
+        return "0.0" if str(lang or "fr").lower().startswith("en") else "0,0"
+    return text if str(lang or "fr").lower().startswith("en") else text.replace(".", ",")
 
 
 CAT_FR = {"water_point": "point d'eau", "toilets_latrines": "latrines",
           "handwashing": "lavage des mains", "sewage_drainage": "évacuation"}
+CAT_EN = {"water_point": "water point", "toilets_latrines": "latrines",
+          "handwashing": "handwashing", "sewage_drainage": "drainage"}
 
 
 def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -974,54 +1063,98 @@ def tool_build_briefing(args: dict[str, Any], context: dict[str, Any]) -> dict[s
     affected = _affected_unified_total(open_incs)
     now = datetime.now(timezone.utc)
 
+    lang = tool_lang(context)
+    use_en = lang == "en"
+    urg_labels = URGENCY_EN if use_en else URGENCY_FR
     top = sorted(open_incs,
                  key=lambda i: (weights.get(str(i.get("urgency", "low")), 0.0),
                                 int(i.get("affected_students", 0) or 0)),
                  reverse=True)[:3]
-    priorities = [
-        f"{i.get('school_name', '?')} — {i.get('title', '?')} "
-        f"({URGENCY_FR.get(str(i.get('urgency')), str(i.get('urgency')))}, "
-        f"{_fmt_int(i.get('affected_students', 0))} élèves)"
-        for i in top
-    ] or ["Aucune priorité : calme plat sur ce territoire."]
+    if use_en:
+        priorities = [
+            f"{i.get('school_name', '?')} — {i.get('title', '?')} "
+            f"({urg_labels.get(str(i.get('urgency')), str(i.get('urgency')))}, "
+            f"{_fmt_int(i.get('affected_students', 0))} pupils)"
+            for i in top
+        ] or ["No priorities: all quiet in this territory."]
+    else:
+        priorities = [
+            f"{i.get('school_name', '?')} — {i.get('title', '?')} "
+            f"({urg_labels.get(str(i.get('urgency')), str(i.get('urgency')))}, "
+            f"{_fmt_int(i.get('affected_students', 0))} élèves)"
+            for i in top
+        ] or ["Aucune priorité : calme plat sur ce territoire."]
 
     actions: list[str] = []
     crit = [i for i in open_incs if str(i.get("urgency")) == "critical"]
     if crit:
         names = ", ".join(sorted({str(i.get("school_name", "?")) for i in crit}))
-        actions.append(
-            f"Intervenir en priorité sur "
-            f"{_plural(len(crit), '1 incident critique', f'{len(crit)} incidents critiques')} : {names}."
-        )
+        if use_en:
+            actions.append(
+                f"Intervene first on "
+                f"{_plural(len(crit), '1 critical incident', f'{len(crit)} critical incidents')}: {names}."
+            )
+        else:
+            actions.append(
+                f"Intervenir en priorité sur "
+                f"{_plural(len(crit), '1 incident critique', f'{len(crit)} incidents critiques')} : {names}."
+            )
     old = [i for i in open_incs
            if (dt := _parse_dt(i.get("reported_at"))) is not None and (now - dt).days > 7]
     if old:
-        actions.append(
-            f"{_plural(len(old), '1 incident ouvert', f'{len(old)} incidents ouverts')} "
-            "depuis plus de 7 jours : planifier la relance."
-        )
+        if use_en:
+            actions.append(
+                f"{_plural(len(old), '1 open incident', f'{len(old)} open incidents')} "
+                "for over 7 days: schedule a follow-up."
+            )
+        else:
+            actions.append(
+                f"{_plural(len(old), '1 incident ouvert', f'{len(old)} incidents ouverts')} "
+                "depuis plus de 7 jours : planifier la relance."
+            )
     by_district: dict[str, int] = {}
     for i in open_incs:
         by_district[str(i.get("district", "?"))] = by_district.get(str(i.get("district", "?")), 0) + 1
     grouped = [d for d, n in by_district.items() if n >= 2]
     if grouped:
-        actions.append(f"Tournée groupée possible : {', '.join(sorted(grouped))}.")
+        if use_en:
+            actions.append(f"Grouped tour possible: {', '.join(sorted(grouped))}.")
+        else:
+            actions.append(f"Tournée groupée possible : {', '.join(sorted(grouped))}.")
     if not actions:
-        actions.append("Aucune action urgente : maintenir la surveillance.")
+        actions.append("No urgent action: maintain monitoring."
+                       if use_en else
+                       "Aucune action urgente : maintenir la surveillance.")
 
-    slides = [
-        {"kind": "cover",
-         "title": f"Briefing WASH — {district or 'Territoire'}",
-         "subtitle": f"{now.day} {FRENCH_MONTHS[now.month]} {now.year} · {district or 'tous districts'}",
-         "lines": [],
-         "stats": [
-             {"label": "Incidents ouverts", "value": str(len(open_incs))},
-             {"label": "Élèves affectés", "value": _fmt_int(affected)},
-             {"label": "Écoles suivies", "value": str(len(schools))},
-         ]},
-        {"kind": "bullets", "title": "Priorités", "lines": priorities, "stats": []},
-        {"kind": "bullets", "title": "Actions recommandées", "lines": actions, "stats": []},
-    ]
+    months = ENGLISH_MONTHS if use_en else FRENCH_MONTHS
+    if use_en:
+        slides = [
+            {"kind": "cover",
+             "title": f"WASH Briefing — {district or 'Territory'}",
+             "subtitle": f"{months[now.month]} {now.day}, {now.year} · {district or 'all districts'}",
+             "lines": [],
+             "stats": [
+                 {"label": "Open incidents", "value": str(len(open_incs))},
+                 {"label": "Pupils affected", "value": _fmt_int(affected)},
+                 {"label": "Tracked schools", "value": str(len(schools))},
+             ]},
+            {"kind": "bullets", "title": "Priorities", "lines": priorities, "stats": []},
+            {"kind": "bullets", "title": "Recommended actions", "lines": actions, "stats": []},
+        ]
+    else:
+        slides = [
+            {"kind": "cover",
+             "title": f"Briefing WASH — {district or 'Territoire'}",
+             "subtitle": f"{now.day} {months[now.month]} {now.year} · {district or 'tous districts'}",
+             "lines": [],
+             "stats": [
+                 {"label": "Incidents ouverts", "value": str(len(open_incs))},
+                 {"label": "Élèves affectés", "value": _fmt_int(affected)},
+                 {"label": "Écoles suivies", "value": str(len(schools))},
+             ]},
+            {"kind": "bullets", "title": "Priorités", "lines": priorities, "stats": []},
+            {"kind": "bullets", "title": "Actions recommandées", "lines": actions, "stats": []},
+        ]
     return {
         "district": district or None,
         "slides": slides,
@@ -1071,13 +1204,22 @@ def tool_territory_overview(args: dict[str, Any], context: dict[str, Any]) -> di
             "top_urgency": top,
         })
     crit = sum(1 for s in points if s["top_urgency"] == "critical")
+    lang = tool_lang(context)
+    use_en = lang == "en"
     if crit:
-        insight = (f"{crit} {_plural(crit, 'urgence critique', 'urgences critiques')} "
-                   f"sur {len(points)} écoles géolocalisées.")
+        if use_en:
+            insight = (f"{crit} {_plural(crit, 'critical emergency', 'critical emergencies')} "
+                       f"across {len(points)} geolocated schools.")
+        else:
+            insight = (f"{crit} {_plural(crit, 'urgence critique', 'urgences critiques')} "
+                       f"sur {len(points)} écoles géolocalisées.")
     elif points:
-        insight = f"{len(points)} écoles géolocalisées, aucune urgence critique."
+        insight = (f"{len(points)} geolocated schools, no critical emergency."
+                   if use_en else
+                   f"{len(points)} écoles géolocalisées, aucune urgence critique.")
     else:
-        insight = "Aucune école géolocalisée sur ce territoire."
+        insight = ("No geolocated school in this territory."
+                   if use_en else "Aucune école géolocalisée sur ce territoire.")
     return {
         "district": args.get("district"),
         "schools": points,
@@ -1104,8 +1246,12 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     school = _resolve_school(context, args.get("school"))
     district_sids = {s.get("school_id") for s in context.get("schools", [])
                      if dlow and fold(s.get("district", "")) == dlow}
+    use_en = tool_lang(context) == "en"
     if not school and not district_sids:
-        return {"error": f"École '{args.get('school')}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."}
+        err = ((f"School '{args.get('school')}' not found. Valid schools: {_school_choices(context)}. Retry with an exact name or id.")
+               if use_en else
+               (f"École '{args.get('school')}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."))
+        return {"error": err}
     months = min(max(int(args.get("months", 3) or 3), 1), 12)
     if school:
         school_id: Any = school["school_id"]
@@ -1135,8 +1281,9 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
 
     buckets = _month_buckets(months, now)
     labels, incident_counts, costs, days_lost = [], [], [], []
+    trend_months = ENGLISH_MONTHS if use_en else FRENCH_MONTHS
     for year, month in buckets:
-        labels.append(f"{FRENCH_MONTHS[month]} {year}")
+        labels.append(f"{trend_months[month]} {year}")
         incident_counts.append(sum(1 for i in trend_pool if month_key(i.get("reported_at")) == (year, month)))
         month_logs = [l for l in logs if month_key(l.get("repaired_at")) == (year, month)]
         costs.append(round(sum(float(l.get("cost_amount", 0) or 0) for l in month_logs), 2))
@@ -1175,14 +1322,24 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
     if total_cost > 0 and costs:
         peak = max(range(len(costs)), key=lambda i: costs[i])
         share = round(costs[peak] / total_cost * 100)
-        insight = f"{share} % des coûts concentrés en {labels[peak].lower()}."
+        if use_en:
+            insight = f"{share}% of costs concentrated in {labels[peak]}."
+        else:
+            insight = f"{share} % des coûts concentrés en {labels[peak].lower()}."
     else:
-        insight = "Aucun coût de réparation sur la période."
+        insight = ("No repair costs over the period."
+                   if use_en else "Aucun coût de réparation sur la période.")
     if disruption_days > total_days:
-        what = f"« {disruption_title} »" if disruption_title else "La panne en cours"
-        jour_cons = f"{total_days} {_plural(total_days, 'jour consigné', 'jours consignés')}"
-        insight += (f" Privation réelle : {what} dure depuis {disruption_days} jours "
-                    f"({jour_cons} au journal).")
+        if use_en:
+            what = f"\u201c{disruption_title}\u201d" if disruption_title else "The ongoing breakdown"
+            jour_cons = f"{total_days} {_plural(total_days, 'logged day', 'logged days')}"
+            insight += (f" Real deprivation: {what} has lasted {disruption_days} days "
+                        f"({jour_cons} in the journal).")
+        else:
+            what = f"« {disruption_title} »" if disruption_title else "La panne en cours"
+            jour_cons = f"{total_days} {_plural(total_days, 'jour consigné', 'jours consignés')}"
+            insight += (f" Privation réelle : {what} dure depuis {disruption_days} jours "
+                        f"({jour_cons} au journal).")
 
     # --- Enrichissement graphes (défensif, optionnel à la lecture) : portée
     # district si un district est passé, sinon échelle du contexte entier. ---
@@ -1270,11 +1427,15 @@ def tool_repair_trends(args: dict[str, Any], context: dict[str, Any]) -> dict[st
         "months": months,
         "insight": insight,
         "labels": labels,
-        "datasets": [
+        "datasets": ([
+            {"label": f"Repair costs ({currency})", "data": costs, "kind": "bar"},
+            {"label": "Reported breakdowns (incidents)", "data": incident_counts, "kind": "line"},
+            {"label": "Days without service (logged)", "data": days_lost, "kind": "line"},
+        ] if use_en else [
             {"label": f"Coût réparations ({currency})", "data": costs, "kind": "bar"},
             {"label": "Pannes signalées (incidents)", "data": incident_counts, "kind": "line"},
             {"label": "Jours sans service (consignés)", "data": days_lost, "kind": "line"},
-        ],
+        ]),
         "figures": {
             "total_cost": total_cost,
             "currency": currency,
@@ -1386,24 +1547,34 @@ def tool_list_maintenance_logs(args: dict[str, Any], context: dict[str, Any]) ->
     ]
     total = len(filtered)
     applied_filters = {"date": date, "school_raw": hint, "school_matched": matched}
+    lang_en = tool_lang(context) == "en"
     prefix = ""
     if not matched:
-        prefix = f"École {str(hint).strip()} non reconnue — filtre ignoré. "
+        prefix = (f"School {str(hint).strip()} not recognized — filter ignored. "
+                  if lang_en else
+                  f"École {str(hint).strip()} non reconnue — filtre ignoré. ")
     if not filtered:
+        empty = (f"No logged interventions on {date}." if lang_en
+                 else f"Aucune intervention journalisée le {date}.")
         return {"date": date, "items": [], "total": 0,
-                "insight": f"{prefix}Aucune intervention journalisée le {date}.",
+                "insight": f"{prefix}{empty}",
                 "applied_filters": applied_filters, "is_empty": True}
     names: list[str] = []
     for log in filtered:
         name = str(log.get("school_name") or "").strip()
         if name and name not in names:
             names.append(name)
-    head = (f"{total} {_plural(total, 'intervention journalisée', 'interventions journalisées')} "
-            f"le {date}")
+    if lang_en:
+        head = (f"{total} {_plural(total, 'logged intervention', 'logged interventions')} "
+                f"on {date}")
+    else:
+        head = (f"{total} {_plural(total, 'intervention journalisée', 'interventions journalisées')} "
+                f"le {date}")
     if names:
         shown = ", ".join(names[:3])
         extra = f" (+{len(names) - 3})" if len(names) > 3 else ""
-        insight = f"{head} : {shown}{extra}."
+        sep = ": " if lang_en else " : "
+        insight = f"{head}{sep}{shown}{extra}."
     else:
         insight = f"{head}."
     items = [{
@@ -1461,23 +1632,32 @@ def tool_list_incidents(args: dict[str, Any], context: dict[str, Any]) -> dict[s
     total = len(filtered)
     applied_filters = {"date": date, "school_raw": hint, "school_matched": matched,
                        "urgency": urgency, "status": status}
+    lang_en = tool_lang(context) == "en"
     prefix = ""
     if not matched:
-        prefix = f"École {str(hint).strip()} non reconnue — filtre ignoré. "
+        prefix = (f"School {str(hint).strip()} not recognized — filter ignored. "
+                  if lang_en else
+                  f"École {str(hint).strip()} non reconnue — filtre ignoré. ")
     if not filtered:
+        empty = (f"No reports on {date}." if lang_en
+                 else f"Aucun signalement le {date}.")
         return {"date": date, "items": [], "total": 0,
-                "insight": f"{prefix}Aucun signalement le {date}.",
+                "insight": f"{prefix}{empty}",
                 "applied_filters": applied_filters, "is_empty": True}
     names: list[str] = []
     for incident in filtered:
         name = str(incident.get("school_name") or "").strip()
         if name and name not in names:
             names.append(name)
-    head = (f"{total} {_plural(total, 'signalement', 'signalements')} le {date}")
+    if lang_en:
+        head = f"{total} {_plural(total, 'report', 'reports')} on {date}"
+    else:
+        head = (f"{total} {_plural(total, 'signalement', 'signalements')} le {date}")
     if names:
         shown = ", ".join(names[:3])
         extra = f" (+{len(names) - 3})" if len(names) > 3 else ""
-        insight = f"{head} : {shown}{extra}."
+        sep = ": " if lang_en else " : "
+        insight = f"{head}{sep}{shown}{extra}."
     else:
         insight = f"{head}."
     items = [{
