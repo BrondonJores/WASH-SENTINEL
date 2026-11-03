@@ -27,6 +27,8 @@ COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+# Outils d'acceptance vocale (tests terrain dans le conteneur).
+COPY accept_voice.py ./accept_voice.py
 
 EXPOSE 8000
 
