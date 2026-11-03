@@ -381,7 +381,19 @@ class WashWhatsAppService
         $this->forgetSuivi($from);
         $this->forgetPending($from);
 
-        $result = $this->triage->ingest($contact->school, $channel, $text, $audio, $photo, null, 'whatsapp');
+        try {
+            $result = $this->triage->ingest($contact->school, $channel, $text, $audio, $photo, null, 'whatsapp');
+        } catch (\Throwable $e) {
+            // Vocal inaudible des deux côtés (STT explicite + triage) :
+            // on guide (réenregistrer), on ne crée RIEN (pas de doublon
+            // fantôme). Toute autre panne remonte au garde générique.
+            if (!str_starts_with($e->getMessage(), 'VOICE_STT_FAILED')) {
+                throw $e;
+            }
+            $this->reply($from, $this->t('whatsapp.unreadable_audio', $this->conversationEnglish($from)));
+
+            return ['status' => 'voice_stt_failed', 'from' => $from];
+        }
         $incident = $result['incident'];
         // Langue de RÉPONSE : marqueurs du texte usager (transcript vocal ou
         // texte), ou langue acoustique DÉTECTÉE (jamais language_effective
@@ -404,7 +416,7 @@ class WashWhatsAppService
 
         // Flow vocal : récap texte + boutons Oui/Non + note vocale TTS.
         if ($channel === 'voice' && (bool) config('whatsapp.voice_confirmation', true)) {
-            $this->reply($from, $staleNote . $this->createdReply($incident, $english, $voiceNativeLang));
+            $this->reply($from, $staleNote . $this->createdReply($incident, $english, $voiceNativeLang, $text));
             $this->rememberPending($from, $incident, $english);
             $this->sendConfirmationButtons($from, $english);
             $this->sendVoiceConfirmation($from, $incident, $english);
@@ -417,7 +429,7 @@ class WashWhatsAppService
             ];
         }
 
-        $this->reply($from, $staleNote . $this->createdReply($incident, $english, $voiceNativeLang));
+        $this->reply($from, $staleNote . $this->createdReply($incident, $english, $voiceNativeLang, $channel === 'voice' ? $text : null));
 
         return [
             'status' => 'triaged',
@@ -1914,9 +1926,16 @@ class WashWhatsAppService
         return $this->t('whatsapp.off_topic', $english);
     }
 
-    protected function createdReply(Incident $incident, bool $english = false, ?string $nativeLang = null): string
+    protected function createdReply(Incident $incident, bool $english = false, ?string $nativeLang = null, ?string $voiceTranscript = null): string
     {
-        $summary = Str::limit((string) ($incident->ai_summary ?: $incident->title), 140);
+        // Vocal : le récap répercute les mots de l'usager (transcript, non
+        // traduit) — il se relit/vérifie, même sans lire le français
+        // technique. Texte : résumé de l'extracteur, conservé tel quel.
+        $summary = Str::limit((string) (
+            ($voiceTranscript !== null && trim($voiceTranscript) !== '')
+                ? $voiceTranscript
+                : ($incident->ai_summary ?: $incident->title)
+        ), 140);
 
         $base = $this->t('whatsapp.created', $english, [
             'ref' => $incident->reference_code,
