@@ -310,6 +310,11 @@ class VoiceTranscriptionResponse(BaseModel):
     detection: dict[str, Any] = Field(default_factory=dict)
     driver: str | None = None
     duration_seconds: float | None = None
+    # Pivot FR déterministe (pont bbj) quand la langue est ghomala' :
+    # l'extraction/triage travaille sur le pivot, le transcript reste
+    # l'original (audit + validation par le locuteur natif).
+    french_pivot: str | None = None
+    bridge: dict[str, Any] | None = None
 
 
 class VoiceSynthesisRequest(BaseModel):

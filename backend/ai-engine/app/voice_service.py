@@ -24,6 +24,7 @@ from .stt_providers import (
     WhisperCppProvider,
     default_stt,
 )
+from .bbj_bridge import bridge_bbj_to_french
 from .voice_detect import arbitrate
 from .tts_providers import (
     MMS_LANGUAGE_MAP,
@@ -416,6 +417,18 @@ class VoiceService:
             if rms >= NOISE_RMS_THRESHOLD:
                 raise guided_error(STT_NOISY)
             raise guided_error(STT_INAUDIBLE)
+        # Langue ghomala' (demandée ou détectée) : pont déterministe vers
+        # un pivot FR pour l'extraction. Le transcript original est
+        # conservé tel quel (audit) ; le pivot ne sert qu'à travailler.
+        french_pivot: str | None = None
+        bridge_meta: dict[str, Any] | None = None
+        if language == "bbj_Latn" or detected == "bbj_Latn":
+            try:
+                bridge_meta = bridge_bbj_to_french(transcript)
+                french_pivot = bridge_meta["french_pivot"]
+            except Exception:
+                french_pivot = None
+                bridge_meta = None
         return VoiceTranscriptionResponse(
             transcript=transcript,
             language=language,
@@ -424,6 +437,8 @@ class VoiceService:
             detection=detail,
             driver=driver,
             duration_seconds=duration,
+            french_pivot=french_pivot,
+            bridge=bridge_meta,
         )
 
     def _transcribe_local(

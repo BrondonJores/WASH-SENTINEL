@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .agent_loop import AgentLoop
 from .ai_metrics import summary as ai_metrics_summary, timed
+from .bbj_bridge import bridge_bbj_to_french
 from .decision_agent import DecisionAgent
 from .duplicate_detector import DuplicateDetector
 from .epidemic_detector import EpidemicDetector
@@ -298,6 +299,28 @@ def synthesize_voice(request: Request, payload: VoiceSynthesisRequest) -> VoiceS
             detail=f"Erreur de synthèse vocale : {str(exc)}"
         ) from exc
 
+def _extract_text(
+    raw_content: str,
+    transcription_meta: dict[str, Any] | None,
+    header_language: str | None,
+    *,
+    has_audio: bool,
+) -> str:
+    """Texte de travail pour l'extraction : pivot FR (pont bbj) si ghomala'.
+
+    Vocal : pivot déjà calculé par le service vocal. Texte : pont appliqué
+    ici quand la langue de session est bbj. Sinon le texte brut, inchangé.
+    """
+    if has_audio and transcription_meta and transcription_meta.get("french_pivot"):
+        return transcription_meta["french_pivot"]
+    if (header_language or "").strip().lower().startswith("bbj") and raw_content.strip():
+        try:
+            return bridge_bbj_to_french(raw_content)["french_pivot"]
+        except Exception:
+            return raw_content
+    return raw_content
+
+
 # ==========================================
 # 9. Pipeline Unifié Commando (Texte ou Voix)
 # ==========================================
@@ -326,7 +349,15 @@ async def triage_report(
     if not raw_content.strip():
         raise HTTPException(status_code=422, detail="Aucun contenu textuel ou audio exploitable fourni.")
 
-    extracted = await WashExtractor(_llm(request)).extract(raw_content, school_name)
+    # Texte de TRAVAIL pour l'extraction (pivot bbj) ; raw_text = original.
+    extract_text = _extract_text(
+        raw_content,
+        transcription_meta,
+        request.headers.get("x-stt-language"),
+        has_audio=audio is not None,
+    )
+
+    extracted = await WashExtractor(_llm(request)).extract(extract_text, school_name)
 
     visual_meta: dict[str, Any] | None = None
     boost = 0.0
