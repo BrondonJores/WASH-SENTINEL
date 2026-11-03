@@ -78,6 +78,12 @@ return [
     'confirmation_template' => env('WHATSAPP_CONFIRMATION_TEMPLATE', 'wash_confirmation'),
     'confirmation_language' => env('WHATSAPP_CONFIRMATION_LANGUAGE', 'fr'),
 
+    // Suivi promis (« on vous écrit ici dès que ça avance ») : template de
+    // repli quand la fenêtre 24h est fermée (erreur Meta 131047). Vide =
+    // pas de repli, l'échec est journalisé sur l'abonnement.
+    'progress_template' => env('WHATSAPP_PROGRESS_TEMPLATE', ''),
+    'progress_template_language' => env('WHATSAPP_PROGRESS_TEMPLATE_LANGUAGE', 'fr'),
+
     // Durée de vie (secondes) d'une demande de confirmation Oui/Non en cache.
     'pending_ttl' => (int) env('WHATSAPP_PENDING_TTL', 86400),
 

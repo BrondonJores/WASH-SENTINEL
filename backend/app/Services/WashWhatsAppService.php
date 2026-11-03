@@ -6,6 +6,7 @@ use App\Contracts\AiEngineClient;
 use App\Contracts\IncidentTriage;
 use App\Contracts\WhatsAppClient;
 use App\Models\Incident;
+use App\Models\IncidentSubscription;
 use App\Models\Report;
 use App\Models\School;
 use App\Models\SchoolContact;
@@ -286,6 +287,20 @@ class WashWhatsAppService
             return ['status' => 'unsupported', 'from' => $from];
         }
 
+        // STOP : lu AVANT tout état (clarification, suivi, pending) pour que
+        // la sortie marche même en plein milieu d'un flow. Match strict sur
+        // tout le texte : un signalement contenant « stop » ne déclenche pas.
+        if ($channel === 'text' && is_string($text) && $this->isStopCommand($text)) {
+            $this->forgetClarification($from);
+            $this->forgetSuivi($from);
+            $this->forgetPending($from);
+            IncidentSubscription::unsubscribeAll(IncidentSubscription::CHANNEL_WHATSAPP, $from);
+            $english = $this->messageEnglish($message);
+            $this->reply($from, $this->t('notifications.progress.stopped', $english));
+
+            return ['status' => 'unsubscribed', 'from' => $from];
+        }
+
         // Clarification en attente (après Non) : lue AVANT le filtre hors-sujet
         // et AVANT le triage. Une correction ne doit JAMAIS partir en hors-sujet
         // (même sans mot-clé eau/hygiène) ni en doublon « Déjà reçu ».
@@ -401,10 +416,18 @@ class WashWhatsAppService
         $english = (is_string($text) && $text !== '' && $this->isEnglishReply($text))
             || $voiceDetected === self::LANG_EN
             || $langChoiceFreshEn;
+        // Suivi promis (« on vous écrit ici dès que ça avance ») : abonne le
+        // directeur au dossier, silencieusement (la réponse standard promet
+        // déjà le suivi). Réactivation après STOP → on le confirme.
+        $subscription = IncidentSubscription::subscribe(
+            $incident, IncidentSubscription::CHANNEL_WHATSAPP, $from, $english ? 'en' : 'fr');
+        $reactivatedNotice = (bool) ($subscription->was_reactivated ?? false)
+            ? $this->t('notifications.progress.subscribed', $english, ['ref' => $incident->reference_code]) . "\n\n"
+            : '';
         $staleNote = $staleClarification ? $this->staleClarificationNote($english) : '';
 
         if ($result['is_duplicate']) {
-            $this->reply($from, $staleNote . $this->duplicateReply($incident, $english));
+            $this->reply($from, $reactivatedNotice . $staleNote . $this->duplicateReply($incident, $english));
 
             return [
                 'status' => 'triaged',
@@ -416,7 +439,7 @@ class WashWhatsAppService
 
         // Flow vocal : récap texte + boutons Oui/Non + note vocale TTS.
         if ($channel === 'voice' && (bool) config('whatsapp.voice_confirmation', true)) {
-            $this->reply($from, $staleNote . $this->createdReply($incident, $english, $voiceNativeLang, $text));
+            $this->reply($from, $reactivatedNotice . $staleNote . $this->createdReply($incident, $english, $voiceNativeLang, $text));
             $this->rememberPending($from, $incident, $english);
             $this->sendConfirmationButtons($from, $english);
             $this->sendVoiceConfirmation($from, $incident, $english);
@@ -429,7 +452,7 @@ class WashWhatsAppService
             ];
         }
 
-        $this->reply($from, $staleNote . $this->createdReply($incident, $english, $voiceNativeLang, $channel === 'voice' ? $text : null));
+        $this->reply($from, $reactivatedNotice . $staleNote . $this->createdReply($incident, $english, $voiceNativeLang, $channel === 'voice' ? $text : null));
 
         return [
             'status' => 'triaged',
@@ -546,6 +569,12 @@ class WashWhatsAppService
     // ------------------------------------------------------------------
 
     /** Intention suivi : référence explicite WASH-… ou mot-clé FR/EN. */
+    /** Commande STOP (FR/EN) : tout le texte, tolère ponctuation et accents. */
+    protected function isStopCommand(string $text): bool
+    {
+        return (bool) preg_match('/^\s*(stop|arrets?|arrêts?|unsubscribe)\s*[.!]*\s*$/iu', $text);
+    }
+
     protected function suiviIntent(string $text): array
     {
         $reference = null;

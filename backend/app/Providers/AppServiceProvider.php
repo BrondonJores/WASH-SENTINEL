@@ -5,6 +5,10 @@ namespace App\Providers;
 use App\Contracts\AiEngineClient;
 use App\Contracts\IncidentTriage;
 use App\Contracts\WhatsAppClient;
+use App\Models\Incident;
+use App\Models\MaintenanceLog;
+use App\Observers\IncidentObserver;
+use App\Observers\MaintenanceLogObserver;
 use App\Services\IncidentTriageService;
 use App\Services\MetaWhatsAppService;
 use App\Services\WashAiEngineService;
@@ -27,6 +31,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Suivi promis au directeur : chaque avancée du dossier notifie
+        // les abonnés WhatsApp (statuts + interventions journalisées).
+        Incident::observe(IncidentObserver::class);
+        MaintenanceLog::observe(MaintenanceLogObserver::class);
     }
 }

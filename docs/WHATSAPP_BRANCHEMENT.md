@@ -72,6 +72,27 @@ Bonjour, votre signalement {{1}} est bien suivi par nos équipes : {{2}}.
 Répondez à ce message pour ajouter une précision. Merci !
 ```
 
+### Suivi promis (« on vous écrit ici dès que ça avance »)
+
+- Chaque signalement WhatsApp **abonne** le directeur au dossier
+  (table `incident_subscriptions`, locale FR/EN de la conversation).
+- Chaque **changement de statut** (assigné, en cours, résolu, clôturé) et
+  chaque **intervention journalisée** (manuelle ou proposition Sentinel
+  validée) envoie un WhatsApp via observateurs Eloquent
+  (`IncidentObserver`, `MaintenanceLogObserver`) — envoi best-effort :
+  un échec n'interrompt jamais la requête, il est tracé sur
+  l'abonnement (`last_error`) et dans les logs.
+- **STOP** (ou ARRÊT / UNSUBSCRIBE) désabonne le numéro ; un nouveau
+  signalement le réabonne (avec confirmation).
+- Hors fenêtre 24 h (erreur 131047) : repli sur le template
+  `WHATSAPP_PROGRESS_TEMPLATE` (défaut vide = pas de repli), langue
+  `WHATSAPP_PROGRESS_TEMPLATE_LANGUAGE`, catégorie **UTILITY**.
+  Corps proposé (`{{1}}` = référence, `{{2}}` = statut ou coût) :
+
+```text
+Suivi WASH Sentinel {{1}} : {{2}}. Répondez STOP pour ne plus recevoir ces messages.
+```
+
 ## 6. Passage en live
 
 1. Numéro réel : une ligne **n'ayant jamais eu WhatsApp** (nouvelle SIM/eSIM).

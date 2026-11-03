@@ -192,6 +192,25 @@ return [
             'status' => 'Statut : :status — Priorité IA : :priority/100',
             'action' => "Voir l'incident",
         ],
+        // Suivi promis au directeur (« on vous écrit ici dès que ça avance »).
+        // Style WhatsApp (*gras*, retours ligne), jamais de terme technique.
+        'progress' => [
+            'status' => "*:ref* — votre dossier avance : *:status*.\n:detail\nÉcole : :school.",
+            'intervention' => "*:ref* — intervention enregistrée : :notes\nCoût : :cost XAF.\nÉcole : :school.",
+            'detail_assigned' => 'Un technicien est désigné, il interviendra très vite.',
+            'detail_in_progress' => "Notre équipe est sur place ou en route. Merci de laisser l'accès libre si possible.",
+            'detail_resolved' => 'Problème réglé selon nos équipes. Si ça persiste, signalez-le de nouveau.',
+            'detail_closed' => 'Dossier clôturé. Merci pour votre signalement !',
+            'detail_default' => 'Nos équipes suivent le dossier de près.',
+            'status_reported' => 'signalé, en attente de tri',
+            'status_triaged' => 'trié par notre équipe',
+            'status_assigned' => 'confié à un technicien',
+            'status_in_progress' => "en cours d'intervention",
+            'status_resolved' => 'résolu',
+            'status_closed' => 'clôturé',
+            'subscribed' => "C'est noté : vous recevrez ici chaque avancée du dossier *:ref* (intervention, clôture…). Répondez *STOP* pour arrêter.",
+            'stopped' => "C'est noté, vous ne recevrez plus de messages pour vos dossiers. Un nouveau signalement vous réabonnera.",
+        ],
     ],
 
 ];

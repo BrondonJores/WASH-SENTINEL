@@ -186,6 +186,25 @@ return [
             'status' => 'Status: :status — AI priority: :priority/100',
             'action' => 'View incident',
         ],
+        // Follow-up promised to the head teacher ("we will write to you here").
+        // WhatsApp style (*bold*, line breaks), no technical jargon.
+        'progress' => [
+            'status' => "*:ref* — your case is moving forward: *:status*.\n:detail\nSchool: :school.",
+            'intervention' => "*:ref* — work logged: :notes\nCost: :cost XAF.\nSchool: :school.",
+            'detail_assigned' => 'A technician has been assigned and will come very soon.',
+            'detail_in_progress' => 'Our team is on site or on the way. Please keep access clear if you can.',
+            'detail_resolved' => 'Fixed according to our teams. If it persists, please report it again.',
+            'detail_closed' => 'Case closed. Thank you for your report!',
+            'detail_default' => 'Our teams are watching the case closely.',
+            'status_reported' => 'reported, awaiting triage',
+            'status_triaged' => 'triaged by our team',
+            'status_assigned' => 'assigned to a technician',
+            'status_in_progress' => 'work in progress',
+            'status_resolved' => 'resolved',
+            'status_closed' => 'closed',
+            'subscribed' => "Noted: you will receive every update of case *:ref* here (work, closure…). Reply *STOP* to opt out.",
+            'stopped' => 'Noted, you will no longer receive messages about your cases. A new report will subscribe you again.',
+        ],
     ],
 
 ];

@@ -18,6 +18,9 @@ class FakeWhatsAppService extends MetaWhatsAppService
     /** Panne injectée : sendText lève (Graph API down), rien n'est envoyé. */
     public static bool $failSend = false;
 
+    /** Panne injectée : sendText lève cette erreur précise (ex. 131047). */
+    public static ?\Throwable $sendError = null;
+
     public function downloadMedia(string $mediaId): array
     {
         if (self::$downloadError) {
@@ -33,6 +36,9 @@ class FakeWhatsAppService extends MetaWhatsAppService
 
     public function sendText(string $to, string $message): array
     {
+        if (self::$sendError) {
+            throw self::$sendError;
+        }
         if (self::$failSend) {
             throw new \RuntimeException('Graph API down (panne injectée).');
         }
@@ -79,5 +85,6 @@ class FakeWhatsAppService extends MetaWhatsAppService
         self::$uploads = [];
         self::$downloadError = null;
         self::$failSend = false;
+        self::$sendError = null;
     }
 }
