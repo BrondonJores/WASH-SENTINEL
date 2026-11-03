@@ -331,7 +331,11 @@ def detect_scope(message: str, context: dict[str, Any] | None) -> dict[str, Any]
     """
     ctx = context or {}
     signals = detect_scope_signals(message or "")
-    schools, districts = mentioned_places(message or "", ctx)
+    # Les noms d'équipes (« Équipe Wouri Nord ») portent des tokens
+    # districts : une équipe n'est pas un lieu, on les masque avant la
+    # détection (même principe que sur l'historique de prépa).
+    schools, districts = mentioned_places(
+        _mask_team_names(message or "", ctx), ctx)
     result = {
         "school": schools[0] if schools else None,
         "schools": list(schools),

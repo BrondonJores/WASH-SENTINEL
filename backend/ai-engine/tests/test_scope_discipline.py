@@ -90,6 +90,26 @@ class DetectScopeTest(unittest.TestCase):
         self.assertEqual(scope["scope"], "school")
         self.assertEqual(scope["schools"], [NGOK])
 
+    def test_team_name_is_not_a_place(self) -> None:
+        # « Équipe Wouri Nord » contient « Wouri » : sans masquage, le
+        # périmètre s'élargit à tort au district et la prépa perd l'école.
+        ctx = dict(CTX, teams=[{"name": "Équipe Wouri Nord",
+                                "district": "Wouri", "is_active": True}])
+        scope = detect_scope(
+            "Prepare an intervention to fix the tap leak at Bonanjo, "
+            "with Équipe Wouri Nord, today, budget 100000 XAF.", ctx)
+        self.assertEqual(scope["scope"], "school")
+        self.assertEqual(scope["school"], BONANJO)
+
+    def test_team_name_alone_keeps_default_scope(self) -> None:
+        # Sans école : défaut large historique, mais aucun district
+        # « Wouri » détecté depuis le seul nom d'équipe.
+        ctx = dict(CTX, teams=[{"name": "Équipe Wouri Nord",
+                                "district": "Wouri", "is_active": True}])
+        scope = detect_scope("Show the jobs for Équipe Wouri Nord", ctx)
+        self.assertEqual(scope["scope"], "district")
+        self.assertIsNone(scope.get("district"))
+
     def test_district_word_widens(self) -> None:
         scope = detect_scope("Résumez mon district", CTX)
         self.assertEqual(scope["scope"], "district")
