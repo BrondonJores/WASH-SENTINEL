@@ -1591,6 +1591,32 @@ def tool_list_maintenance_logs(args: dict[str, Any], context: dict[str, Any]) ->
             "applied_filters": applied_filters, "is_empty": False}
 
 
+#: Statuts réellement stockés (ne pas inventer « open » comme valeur exacte).
+_CLOSED_STATUSES = ("resolved", "closed")
+
+#: Alias « ouvert » (FR/EN) -> tout statut non clôturé.
+_OPEN_ALIASES = frozenset({"open", "opened", "ouvert", "ouverts", "ouverte", "ouvertes"})
+
+#: Alias « clôturé » (FR/EN) -> resolved/closed.
+_CLOSED_ALIASES = frozenset({
+    "closed", "close", "resolved", "resolu", "resolue", "résolu", "résolue",
+    "clos", "close", "ferme", "fermee", "fermé", "fermée", "fermes", "fermés",
+})
+
+
+def _status_matches(row_status: Any, wanted: str | None) -> bool:
+    """Filtre statut : alias open/closed + match exact insensible à la casse."""
+    if not wanted:
+        return True
+    code = str(row_status or "").strip().lower()
+    asked = str(wanted).strip().lower()
+    if asked in _OPEN_ALIASES:
+        return code not in _CLOSED_STATUSES
+    if asked in _CLOSED_ALIASES:
+        return code in _CLOSED_STATUSES
+    return code == asked
+
+
 def tool_list_incidents(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Liste les SIGNALEMENTS déclarés par les écoles (lecture seule).
 
@@ -1626,7 +1652,7 @@ def tool_list_incidents(args: dict[str, Any], context: dict[str, Any]) -> dict[s
             continue
         if urgency and str(incident.get("urgency") or "").lower() != urgency:
             continue
-        if status and str(incident.get("status") or "").lower() != status:
+        if not _status_matches(incident.get("status"), status):
             continue
         filtered.append(incident)
     total = len(filtered)
@@ -1764,7 +1790,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                     "date": {"type": "string", "description": "Jour filtré au format AAAA-MM-JJ (défaut : aujourd'hui)"},
                     "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école (optionnel)"},
                     "urgency": {"type": "string", "description": "Filtre urgence : low, medium, high, critical (optionnel)"},
-                    "status": {"type": "string", "description": "Filtre statut (optionnel)"},
+                    "status": {"type": "string", "description": "Filtre statut (optionnel) : open = non clôturé (reported/triaged/assigned/in_progress), closed|resolved = clôturé, ou valeur exacte"},
                     "limit": {"type": "integer", "description": "Nombre max de signalements (défaut 10)"},
                 },
             },

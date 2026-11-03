@@ -104,6 +104,34 @@ LIST_FEATURES: tuple[tuple[str, float], ...] = tuple(
         ("montre", 1.5),
         ("voir", 1.0),
         ("date", 1.0),
+        # Formes EN (jury international) : vocabulaire lecture seule.
+        # Jamais de bare « incident/report/file » ici (ambiguïté création),
+        # ni « list » seul (collision préfixe avec FR « liste » : doublon).
+        ("show", 2.0),
+        ("lists", 2.0),
+        (_phrase("list the"), 2.0),
+        (_phrase("list all"), 2.0),
+        ("display", 2.0),
+        ("reports", 2.0),
+        ("today", 2.0),
+        ("yesterday", 2.0),
+        ("history", 2.0),
+        (_phrase("how many"), 2.0),
+        (_phrase("this week"), 2.0),
+        (_phrase("this month"), 2.0),
+        ("rank", 2.0),
+        ("trend", 2.0),
+        ("map", 2.0),
+        ("summary", 1.5),
+        ("summarize", 1.5),
+        ("summarise", 1.5),
+        ("compare", 1.5),
+        ("send", 1.5),
+        ("emergency", 1.5),
+        ("briefing", 1.5),
+        ("open", 1.0),
+        ("week", 1.0),
+        ("month", 1.0),
     ]
 )
 
@@ -158,6 +186,15 @@ CREATE_FEATURES: tuple[tuple[str, float], ...] = tuple(
         (_phrase("actualiser le journal"), 2.0),
         (_phrase("maj le journal"), 2.0),
         (_phrase("mets a jour"), 1.5),
+        # Formes EN : verbes de création + locutions (nom « report » exclu :
+        # « report a » = signaler, « reports » seul = consulter, voir liste).
+        ("create", 2.0),
+        ("add", 2.0),
+        ("log", 2.0),
+        (_phrase("report a"), 2.0),
+        (_phrase("report this"), 2.0),
+        (_phrase("file a"), 2.0),
+        (_phrase("log a"), 2.0),
     ]
 )
 

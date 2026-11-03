@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import unittest
 
+from datetime import datetime, timezone
+
 from app.agent_loop import (
     AgentLoop,
     _annotate_period_obs,
+    _detect_lang,
     _summarize_analysis,
     _summarize_briefing,
     _summarize_district,
@@ -21,6 +24,8 @@ from app.agent_loop import (
     period_place_suffix,
     time_window_label,
 )
+from app.agent_loop import route_intent
+from app.agent_tools import tool_list_incidents
 from app.tools.document_briefing import execute as briefing_execute
 from app.tools.dossier_decideur import build_dossier
 from app.tools.epidemic_alerts import execute as epidemic_execute
@@ -211,3 +216,89 @@ class PluginsBilingualTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JuryEnglishRoutingTest(unittest.TestCase):
+    """Requêtes courtes jury EN : langue EN + routage liste/création.
+
+    Non-régression : les équivalents FR (dont « Compare un district ? »)
+    restent FR.
+    """
+
+    EN_LIST = [
+        "Show open incidents",
+        "Compare schools",
+        "Map the territory",
+        "Rank schools",
+        "Summarize the district",
+        "Trends for Bonanjo",
+        "Show the reports",
+        "Emergency today",
+        "Who to send on site?",
+        "the emergency of the day?",
+    ]
+
+    FR_GUARD = [
+        "Compare un district ?",
+        "Voir les incidents ouverts",
+        "Liste les écoles",
+        "Fais-moi un briefing Mvila",
+        "Résume le district Mvila",
+    ]
+
+    def test_short_english_detected_en(self) -> None:
+        for query in self.EN_LIST:
+            with self.subTest(query=query):
+                self.assertEqual(_detect_lang(query), "en")
+
+    def test_french_guards_stay_fr(self) -> None:
+        for query in self.FR_GUARD:
+            with self.subTest(query=query):
+                self.assertEqual(_detect_lang(query), "fr")
+
+    def test_english_list_routes_list(self) -> None:
+        for query in self.EN_LIST:
+            with self.subTest(query=query):
+                self.assertEqual(route_intent(query), "list")
+
+    def test_english_create_routes_create(self) -> None:
+        for query in ("Report a leak", "File a report", "Log a repair",
+                      "Create an incident"):
+            with self.subTest(query=query):
+                self.assertEqual(route_intent(query), "create")
+
+    def test_french_create_untouched(self) -> None:
+        for query in ("Signale une fuite", "Crée un incident",
+                      "Enregistre une réparation", "Ajoute un signalement"):
+            with self.subTest(query=query):
+                self.assertEqual(route_intent(query), "create")
+
+
+class StatusAliasFilterTest(unittest.TestCase):
+    """status=open -> non clôturé ; status=closed -> clôturé (FR/EN)."""
+
+    def _ctx(self) -> dict:
+        now = datetime.now(timezone.utc).isoformat()
+        return {"lang": "en", "incidents": [
+            {"id": 1, "status": "triaged", "reported_at": now},
+            {"id": 2, "status": "in_progress", "reported_at": now},
+            {"id": 3, "status": "resolved", "reported_at": now},
+        ]}
+
+    def test_open_matches_non_closed(self) -> None:
+        obs = tool_list_incidents({"status": "open"}, self._ctx())
+        self.assertEqual(obs["total"], 2)
+
+    def test_closed_matches_closed(self) -> None:
+        for alias in ("closed", "resolved", "fermé"):
+            with self.subTest(alias=alias):
+                obs = tool_list_incidents({"status": alias}, self._ctx())
+                self.assertEqual(obs["total"], 1)
+
+    def test_french_open_alias(self) -> None:
+        obs = tool_list_incidents({"status": "ouverts"}, self._ctx())
+        self.assertEqual(obs["total"], 2)
+
+    def test_exact_status_still_matches(self) -> None:
+        obs = tool_list_incidents({"status": "triaged"}, self._ctx())
+        self.assertEqual(obs["total"], 1)

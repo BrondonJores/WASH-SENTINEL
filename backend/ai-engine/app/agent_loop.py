@@ -1779,7 +1779,11 @@ _EN_TOOL_WORDS = frozenset(
     "that this these those what which who where when how why there their "
     "your you we our my will would can could should have has had do does did "
     "show list need needs help please hello hi thanks thank give "
-    "school schools water".split()
+    "school schools water "
+    "open incident incidents report reports map territory rank ranking "
+    "trend trends repair replace compare summary status emergency "
+    "emergencies today yesterday week month team teams display analyze "
+    "dashboard pump critical breakdown breakdowns failure failures summarize summarise send sent leak leaks burst broken".split()
 )
 
 _FR_TOOL_WORDS = frozenset(
