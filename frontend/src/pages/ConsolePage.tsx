@@ -23,7 +23,8 @@ import { Button, StatusDot } from '../components/ui';
 import { Icon } from '../components/icons';
 import { SlowWaitActions, WaitingSteps } from '../components/StreamingStatus';
 import { UX_WAIT_TIMEOUT_MS } from '../lib/streaming';
-import { LOCALE } from '../lib/locale';
+import { localeFor } from '../lib/locale';
+import { pick, useUILang } from '../lib/i18n';
 import { MAX_VOICE_MESSAGE } from '../lib/voice-limits';
 import { AGENT_INPUT_MAX_CHARS } from '../lib/agent-limits';
 import { CHAT_PHOTO_ACCEPT, CHAT_PHOTO_MAX_BYTES, isChatPhotoMime } from '../lib/photo-limits';
@@ -57,6 +58,15 @@ const HINTS = [
   'Montre-moi la carte du territoire.',
 ];
 
+const HINTS_EN = [
+  'How many schools are without water today?',
+  'Should we repair or replace the equipment in Ngok?',
+  'Summarize the district situation in a briefing.',
+  'Which schools need help most?',
+  'Bonanjo trends over 3 months.',
+  'Show me the territory map.',
+];
+
 const PLACEHOLDER_EXAMPLES = [
   'Essaie : quelles \u00e9coles ont besoin d\u2019aide ?',
   'Essaie : tendances de Bonanjo sur 3 mois',
@@ -65,11 +75,23 @@ const PLACEHOLDER_EXAMPLES = [
   'Essaie : r\u00e9sume la situation du district',
 ];
 
-const VOICE_LANGS: { code: VoiceLanguage; label: string }[] = [
-  { code: 'fr', label: 'Français' },
-  { code: 'dua_Latn', label: 'Douala' },
-  { code: 'bassa', label: 'Bassa' },
-  { code: 'ewondo', label: 'Ewondo' },
+const PLACEHOLDER_EXAMPLES_EN = [
+  'Try: which schools need help?',
+  'Try: Bonanjo trends over 3 months',
+  'Try: repair or replace in Ngok?',
+  'Try: show me the territory map',
+  'Try: summarize the district situation',
+];
+
+const hintsFor = (lang: string | undefined): string[] => (lang === 'en' ? HINTS_EN : HINTS);
+const placeholderExamplesFor = (lang: string | undefined): string[] =>
+  (lang === 'en' ? PLACEHOLDER_EXAMPLES_EN : PLACEHOLDER_EXAMPLES);
+
+const VOICE_LANGS: { code: VoiceLanguage; label: string; labelEn: string }[] = [
+  { code: 'fr', label: 'Français', labelEn: 'French' },
+  { code: 'dua_Latn', label: 'Douala', labelEn: 'Duala' },
+  { code: 'bassa', label: 'Bassa', labelEn: 'Bassa' },
+  { code: 'ewondo', label: 'Ewondo', labelEn: 'Ewondo' },
 ];
 
 const VOICE_LANG_KEY = 'wash_voice_lang';
@@ -84,8 +106,9 @@ function readVoiceLang(): VoiceLanguage {
   return 'fr';
 }
 
-/** Suffixe FR ajouté quand une longue dictée est coupée (préciser en une phrase). */
-const LONG_MESSAGE_SUFFIX = '…(message long, suite coupée : précisez en une phrase)';
+/** Suffixe ajouté quand une longue dictée est coupée (préciser en une phrase). */
+const longMessageSuffix = (lang: string | undefined): string =>
+  pick(lang, '…(message long, suite coupée : précisez en une phrase)', '…(long message, rest cut off: clarify in one sentence)');
 
 /** Longueur minimale gardée à la coupe (évite un résidu trop court). */
 const MIN_KEPT_MESSAGE = 400;
@@ -96,30 +119,31 @@ const MIN_KEPT_MESSAGE = 400;
  * puis coupe dure. Le résultat reste sous la limite backend : jamais de
  * 422, jamais perdu.
  */
-function truncateLongVoiceMessage(text: string): string {
+function truncateLongVoiceMessage(text: string, lang: string | undefined): string {
   if (text.length <= MAX_VOICE_MESSAGE) return text;
   const head = text.slice(0, MAX_VOICE_MESSAGE);
   let cut = -1;
   for (const end of ['.', '!', '?', '…', '\n']) cut = Math.max(cut, head.lastIndexOf(end));
-  if (cut >= MIN_KEPT_MESSAGE) return `${head.slice(0, cut + 1).trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+  if (cut >= MIN_KEPT_MESSAGE) return `${head.slice(0, cut + 1).trimEnd()}${longMessageSuffix(lang)}`;
   const space = head.lastIndexOf(' ');
-  if (space >= MIN_KEPT_MESSAGE) return `${head.slice(0, space).trimEnd()}${LONG_MESSAGE_SUFFIX}`;
-  return `${head.trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+  if (space >= MIN_KEPT_MESSAGE) return `${head.slice(0, space).trimEnd()}${longMessageSuffix(lang)}`;
+  return `${head.trimEnd()}${longMessageSuffix(lang)}`;
 }
 
 function VoiceLangSelector({ value, onChange }: { value: VoiceLanguage; onChange: (v: VoiceLanguage) => void }) {
+  const ui = useUILang();
   return (
     <label className="inline-flex items-center gap-2 font-mono text-[11px] text-ink-faint">
-      <span aria-hidden="true">Voix</span>
+      <span aria-hidden="true">{pick(ui, 'Voix', 'Voice')}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as VoiceLanguage)}
-        aria-label="Langue de dictée et de lecture vocale"
+        aria-label={pick(ui, 'Langue de dictée et de lecture vocale', 'Dictation and voice playback language')}
         className="rounded-full border border-line bg-card px-2 py-1 text-ink-soft focus-visible:outline-2 focus-visible:outline-accent"
       >
         {VOICE_LANGS.map((l) => (
           <option key={l.code} value={l.code}>
-            {l.label}
+            {pick(ui, l.label, l.labelEn)}
           </option>
         ))}
       </select>
@@ -130,6 +154,9 @@ function VoiceLangSelector({ value, onChange }: { value: VoiceLanguage; onChange
 const CHIPS_ALERT = ['Qui envoyer sur place ?', 'Voir les d\u00e9tails ?', 'Comparer les \u00e9coles ?'];
 const CHIPS_TREND = ['Voir sur 6 mois ?', 'Comparer avec un autre district ?', 'Voir la carte ?'];
 const CHIPS_CONFIRM = ['Confirmer ?', 'Annuler ?'];
+const CHIPS_ALERT_EN = ['Who to send on site?', 'See details?', 'Compare schools?'];
+const CHIPS_TREND_EN = ['See over 6 months?', 'Compare with another district?', 'See the map?'];
+const CHIPS_CONFIRM_EN = ['Confirm?', 'Cancel?'];
 
 const ALERT_TOOLS = new Set([
   'district_alerts',
@@ -151,11 +178,11 @@ const CONFIRM_TOOLS = new Set([
   'document_briefing',
 ]);
 
-function composerChips(tools: string[]): string[] {
-  if (tools.some((t) => ALERT_TOOLS.has(t))) return CHIPS_ALERT;
-  if (tools.some((t) => TREND_TOOLS.has(t))) return CHIPS_TREND;
-  if (tools.some((t) => CONFIRM_TOOLS.has(t))) return CHIPS_CONFIRM;
-  return HINTS.slice(0, 3);
+function composerChips(tools: string[], lang: string | undefined): string[] {
+  if (tools.some((t) => ALERT_TOOLS.has(t))) return lang === 'en' ? CHIPS_ALERT_EN : CHIPS_ALERT;
+  if (tools.some((t) => TREND_TOOLS.has(t))) return lang === 'en' ? CHIPS_TREND_EN : CHIPS_TREND;
+  if (tools.some((t) => CONFIRM_TOOLS.has(t))) return lang === 'en' ? CHIPS_CONFIRM_EN : CHIPS_CONFIRM;
+  return hintsFor(lang).slice(0, 3);
 }
 
 const TOOL_FR: Record<string, string> = {
@@ -185,8 +212,36 @@ const TOOL_FR: Record<string, string> = {
   observatoire: 'Observatoire',
 };
 
-function prettyTool(t: string): string {
-  return TOOL_FR[t] ?? t.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const TOOL_EN: Record<string, string> = {
+  summarize_district: 'District summary',
+  rank_schools_by_need: 'School ranking',
+  analyze_school: 'School analysis',
+  repair_trends: 'Repair trends',
+  explain_incident: 'Incident details',
+  prepare_report: 'New report',
+  prepare_incident: 'Incident creation',
+  prepare_maintenance_log: 'Intervention log',
+  list_maintenance_logs: 'Interventions',
+  territory_overview: 'Territory map',
+  build_briefing: 'Briefing',
+  capabilities: 'Capabilities',
+  district_alerts: 'District alerts',
+  epidemic_alerts: 'Epidemic watch',
+  maintenance_team: 'Maintenance team',
+  compare_schools: 'School comparison',
+  copilot_answer: 'Advice',
+  mission_timeline: 'Field missions',
+  document_briefing: 'Document',
+  prepare_chantier_update: 'Works tracking',
+  saisie_assistee: 'Guided entry',
+  offline_queue: 'Offline queue',
+  relances_proactives: 'Follow-ups',
+  observatoire: 'Observatory',
+};
+
+function prettyTool(t: string, lang: string | undefined): string {
+  const map = lang === 'en' ? TOOL_EN : TOOL_FR;
+  return map[t] ?? t.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function draftKey(chatId: number | null): string {
@@ -210,35 +265,36 @@ function writeDraft(chatId: number | null, value: string): void {
   }
 }
 
-function fmtTime(at: number): string {
-  return new Date(at).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' });
+function fmtTime(at: number, lang: string | undefined): string {
+  return new Date(at).toLocaleTimeString(localeFor(lang), { hour: '2-digit', minute: '2-digit' });
 }
 
-function greeting(hour: number): string {
-  if (hour < 5) return 'Bonne nuit';
-  if (hour < 18) return 'Bonjour';
-  return 'Bonsoir';
+function greeting(hour: number, lang: string | undefined): string {
+  if (hour < 5) return pick(lang, 'Bonne nuit', 'Good night');
+  if (hour < 18) return pick(lang, 'Bonjour', 'Hello');
+  return pick(lang, 'Bonsoir', 'Good evening');
 }
 
-function dayMoment(hour: number): string {
-  if (hour < 5) return 'Cette nuit';
-  if (hour < 12) return 'Ce matin';
-  if (hour < 18) return 'Cet après-midi';
-  return 'Ce soir';
+function dayMoment(hour: number, lang: string | undefined): string {
+  if (hour < 5) return pick(lang, 'Cette nuit', 'Tonight');
+  if (hour < 12) return pick(lang, 'Ce matin', 'This morning');
+  if (hour < 18) return pick(lang, 'Cet après-midi', 'This afternoon');
+  return pick(lang, 'Ce soir', 'This evening');
 }
 
-function whisperText(pulse: TerritoryPulse, hour: number): string {
-  const schools = `${pulse.schools_tracked} \u00e9cole${pulse.schools_tracked > 1 ? 's' : ''}`;
-  if (pulse.open_incidents === 0) return `Tout est calme, je veille sur ${schools}.`;
-  const urg = `${pulse.open_incidents} urgence${pulse.open_incidents > 1 ? 's' : ''} ouverte${pulse.open_incidents > 1 ? 's' : ''}`;
+function whisperText(pulse: TerritoryPulse, hour: number, lang: string | undefined): string {
+  const schools = pick(lang, `${pulse.schools_tracked} \u00e9cole${pulse.schools_tracked > 1 ? 's' : ''}`, `${pulse.schools_tracked} school${pulse.schools_tracked > 1 ? 's' : ''}`);
+  if (pulse.open_incidents === 0) return pick(lang, `Tout est calme, je veille sur ${schools}.`, `All quiet, I am watching over ${schools}.`);
+  const urg = pick(lang, `${pulse.open_incidents} urgence${pulse.open_incidents > 1 ? 's' : ''} ouverte${pulse.open_incidents > 1 ? 's' : ''}`, `${pulse.open_incidents} open emergenc${pulse.open_incidents > 1 ? 'ies' : 'y'}`);
   const kids =
     pulse.affected_students > 0
-      ? `, ${pulse.affected_students.toLocaleString(LOCALE)} \u00e9l\u00e8ves concern\u00e9s`
+      ? pick(lang, `, ${pulse.affected_students.toLocaleString(localeFor(lang))} \u00e9l\u00e8ves concern\u00e9s`, `, ${pulse.affected_students.toLocaleString(localeFor(lang))} students affected`)
       : '';
-  return `${dayMoment(hour)} : ${urg}${kids} \u2014 je veille sur ${schools}.`;
+  return pick(lang, `${dayMoment(hour, lang)} : ${urg}${kids} \u2014 je veille sur ${schools}.`, `${dayMoment(hour, lang)}: ${urg}${kids} — I am watching over ${schools}.`);
 }
 
 function CopyAnswer({ text }: { text: string }) {
+  const ui = useUILang();
   const [done, setDone] = useState(false);
   return (
     <button
@@ -254,12 +310,13 @@ function CopyAnswer({ text }: { text: string }) {
       }}
       className="font-mono text-[11px] text-stone-500 hover:text-teal-700 dark:text-stone-400 dark:hover:text-teal-400"
     >
-      {done ? 'Copié !' : 'Copier'}
+      {done ? pick(ui, 'Copié !', 'Copied!') : pick(ui, 'Copier', 'Copy')}
     </button>
   );
 }
 
 export default function ConsolePage() {
+  const ui = useUILang();
   const { user } = useAuth();
   const navigate = useNavigate();
   const { activeChat, activeChatId, syncMessages, newChat, registerLoader } = useDialogues();
@@ -430,6 +487,7 @@ export default function ConsolePage() {
             model: res.model_used ?? '',
             at: Date.now(),
             follow_ups: res.follow_ups ?? [],
+            lang: res.lang ?? 'fr',
           },
         ]);
         if (!calm && res.answer !== '') {
@@ -443,7 +501,7 @@ export default function ConsolePage() {
         if (err instanceof ApiError && err.status === 422) {
           setError(err.message);
         } else {
-          setError(err instanceof Error ? err.message : 'Sentinel est injoignable.');
+          setError(err instanceof Error ? err.message : pick(ui, 'Sentinel est injoignable.', 'Sentinel is unreachable.'));
         }
       } finally {
         if (attemptId === attemptRef.current) {
@@ -453,18 +511,18 @@ export default function ConsolePage() {
         }
       }
     },
-    [calm],
+    [calm, ui],
   );
 
   /** Valide la photo côté client (miroir des règles Laravel) puis l'arme pour l'envoi. */
   const pickPhoto = useCallback((file: File | undefined) => {
     if (!file) return;
     if (!isChatPhotoMime(file.type)) {
-      setError('Format de photo accepté : JPEG, PNG ou WebP uniquement.');
+      setError(pick(ui, 'Format de photo accepté : JPEG, PNG ou WebP uniquement.', 'Accepted photo formats: JPEG, PNG or WebP only.'));
       return;
     }
     if (file.size > CHAT_PHOTO_MAX_BYTES) {
-      setError('Photo trop lourde (10 Mo maximum) : choisissez une photo plus légère.');
+      setError(pick(ui, 'Photo trop lourde (10 Mo maximum) : choisissez une photo plus légère.', 'Photo too heavy (10 MB maximum): choose a lighter photo.'));
       return;
     }
     setError(null);
@@ -475,7 +533,7 @@ export default function ConsolePage() {
     const url = URL.createObjectURL(file);
     photoUrlsRef.current.add(url);
     setPhoto({ file, url });
-  }, [photo]);
+  }, [photo, ui]);
 
   /** Retire la photo avant envoi (l'URL objet est libérée). */
   const clearPhoto = useCallback(() => {
@@ -568,7 +626,7 @@ export default function ConsolePage() {
       const res = await api.transcribeVoice(blob, voiceLang);
       const dictated = res.transcript.trim();
       if (dictated === '') {
-        setError('Transcription vide : aucun mot reconnu.');
+        setError(pick(ui, 'Transcription vide : aucun mot reconnu.', 'Empty transcription: no words recognized.'));
         return;
       }
       setPreviewAudio((prev) => {
@@ -577,19 +635,27 @@ export default function ConsolePage() {
       });
       setPreviewLang(res.language_effective ?? res.language ?? voiceLang);
       // Longue dictée : texte coupé proprement + suffixe FR, aperçu affiché tronqué.
-      setPreview(truncateLongVoiceMessage(dictated));
+      setPreview(truncateLongVoiceMessage(dictated, ui));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Transcription impossible.');
+      setError(err instanceof Error ? err.message : pick(ui, 'Transcription impossible.', 'Transcription failed.'));
     }
-  }, [voiceLang]);
+  }, [voiceLang, ui]);
 
-  const voiceLangLabel = VOICE_LANGS.find((l) => l.code === voiceLang)?.label.toLowerCase();
+  const voiceLangEntry = VOICE_LANGS.find((l) => l.code === voiceLang);
+  const voiceLangLabel = voiceLangEntry === undefined ? undefined : pick(ui, voiceLangEntry.label, voiceLangEntry.labelEn).toLowerCase();
 
   const [detail, setDetail] = useState<DetailTarget | null>(null);
 
   const openDetail = useCallback((kind: DetailKind, id: number) => {
     setDetail({ kind, id });
   }, []);
+
+  // Tiroir : langue de la conversation (dernier message horodaté), sinon langue UI.
+  let detailLang: string = ui;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const l = messages[i].lang;
+    if (l === 'en' || l === 'fr') { detailLang = l; break; }
+  }
 
   const closeDetail = useCallback(() => {
     setDetail(null);
@@ -620,28 +686,29 @@ export default function ConsolePage() {
     return () => window.clearInterval(t);
   }, [placeholderIdle, calm]);
 
+  const examples = placeholderExamplesFor(ui);
   const placeholder = busy
-    ? 'Sentinel consulte les données…'
+    ? pick(ui, 'Sentinel consulte les données…', 'Sentinel is checking the data…')
     : streaming
-      ? 'Sentinel rédige…'
+      ? pick(ui, 'Sentinel rédige…', 'Sentinel is writing…')
       : calm
-        ? PLACEHOLDER_EXAMPLES[0]
-        : PLACEHOLDER_EXAMPLES[placeholderIdx];
+        ? examples[0]
+        : examples[placeholderIdx];
 
   const photoPreview =
     photo !== null ? (
       <div className="msg-in mb-2 flex items-center gap-3 rounded-xl border border-line bg-card/80 p-2 text-left backdrop-blur-md">
-        <img src={photo.url} alt="Photo à envoyer" className="h-14 w-14 shrink-0 rounded-lg object-cover" />
+        <img src={photo.url} alt={pick(ui, 'Photo à envoyer', 'Photo to send')} className="h-14 w-14 shrink-0 rounded-lg object-cover" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-medium text-ink">{photo.file.name}</p>
-          <p className="font-mono text-[11px] text-ink-faint">Photo prête — elle partira avec votre message.</p>
+          <p className="font-mono text-[11px] text-ink-faint">{pick(ui, 'Photo prête — elle partira avec votre message.', 'Photo ready — it will be sent with your message.')}</p>
         </div>
         <button
           type="button"
           onClick={clearPhoto}
           disabled={busy || streaming}
-          aria-label="Retirer la photo"
-          title="Retirer la photo"
+          aria-label={pick(ui, 'Retirer la photo', 'Remove the photo')}
+          title={pick(ui, 'Retirer la photo', 'Remove the photo')}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-line bg-card text-ink-soft transition-colors duration-150 hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
         >
           <Icon name="x" className="h-4 w-4" />
@@ -688,7 +755,7 @@ export default function ConsolePage() {
           onChange={(e) => setInput(e.target.value)}
           maxLength={AGENT_INPUT_MAX_CHARS}
           placeholder={placeholder}
-          aria-label="Message à Sentinel"
+          aria-label={pick(ui, 'Message à Sentinel', 'Message to Sentinel')}
           disabled={busy || streaming}
           autoFocus
           onFocus={() => setComposerFocus(true)}
@@ -699,8 +766,8 @@ export default function ConsolePage() {
           type="button"
           onClick={() => photoInputRef.current?.click()}
           disabled={busy || streaming}
-          aria-label="Joindre une photo"
-          title="Joindre une photo (JPEG, PNG, WebP — 10 Mo max)"
+          aria-label={pick(ui, 'Joindre une photo', 'Attach a photo')}
+          title={pick(ui, 'Joindre une photo (JPEG, PNG, WebP — 10 Mo max)', 'Attach a photo (JPEG, PNG, WebP — 10 MB max)')}
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line bg-card text-ink-soft transition-colors duration-150 hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
         >
           <Icon name="camera" className="h-5 w-5" />
@@ -722,7 +789,7 @@ export default function ConsolePage() {
           type="submit"
           variant="primary"
           disabled={busy || streaming || (input.trim() === '' && photo === null)}
-          aria-label="Envoyer"
+          aria-label={pick(ui, 'Envoyer', 'Send')}
           className="btn-drop h-12 w-12 shrink-0"
         >
           <Icon name="send" className="h-5 w-5 -rotate-45" />
@@ -746,7 +813,7 @@ export default function ConsolePage() {
           onChange={(e) => setInput(e.target.value)}
           maxLength={AGENT_INPUT_MAX_CHARS}
           placeholder={placeholder}
-          aria-label="Message à Sentinel"
+          aria-label={pick(ui, 'Message à Sentinel', 'Message to Sentinel')}
           disabled={busy || streaming}
           autoFocus
           className="h-10 w-full bg-transparent text-sm caret-accent text-ink placeholder:text-ink-faint focus:outline-none"
@@ -755,8 +822,8 @@ export default function ConsolePage() {
           type="button"
           onClick={() => photoInputRef.current?.click()}
           disabled={busy || streaming}
-          aria-label="Joindre une photo"
-          title="Joindre une photo (JPEG, PNG, WebP — 10 Mo max)"
+          aria-label={pick(ui, 'Joindre une photo', 'Attach a photo')}
+          title={pick(ui, 'Joindre une photo (JPEG, PNG, WebP — 10 Mo max)', 'Attach a photo (JPEG, PNG, WebP — 10 MB max)')}
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line bg-card text-ink-soft transition-colors duration-150 hover:bg-raised hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
         >
           <Icon name="camera" className="h-5 w-5" />
@@ -778,7 +845,7 @@ export default function ConsolePage() {
           type="submit"
           variant="primary"
           disabled={busy || streaming || (input.trim() === '' && photo === null)}
-          aria-label="Envoyer"
+          aria-label={pick(ui, 'Envoyer', 'Send')}
           className="btn-drop h-10 w-10 shrink-0"
         >
           <Icon name="send" className="h-4 w-4 -rotate-45" />
@@ -811,16 +878,16 @@ export default function ConsolePage() {
             disabled={busy || streaming}
             className="rounded-full bg-danger px-3 py-1 text-[13px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
           >
-            Réessayer
+            {pick(ui, 'Réessayer', 'Retry')}
           </button>
         )}
         <button
           type="button"
-          onClick={() => ask('Voir les incidents ouverts')}
+          onClick={() => ask(pick(ui, 'Voir les incidents ouverts', 'Show open incidents'))}
           disabled={busy || streaming}
           className="rounded-full border border-line bg-card px-3 py-1 text-[13px] font-medium transition-[border-color] hover:border-accent disabled:cursor-default disabled:opacity-50"
         >
-          Voir les incidents
+          {pick(ui, 'Voir les incidents', 'See incidents')}
         </button>
       </div>
     </div>
@@ -866,7 +933,7 @@ export default function ConsolePage() {
             {first !== '' ? (
               <>
                 <span className="block text-3xl font-semibold text-ink-soft sm:text-4xl">
-                  {greeting(hour)},
+                  {greeting(hour, ui)},
                 </span>
                 <span className="relative mt-1 inline-block text-7xl font-extrabold sm:text-8xl">
                   {first}.
@@ -887,29 +954,29 @@ export default function ConsolePage() {
                 </span>
               </>
             ) : (
-              <span className="text-6xl sm:text-7xl">{greeting(hour)}.</span>
+              <span className="text-6xl sm:text-7xl">{greeting(hour, ui)}.</span>
             )}
           </h1>
           <button
             type="button"
-            onClick={() => void send(HINTS[hint])}
+            onClick={() => void send(hintsFor(ui)[hint])}
             onMouseEnter={() => setHintPaused(true)}
             onMouseLeave={() => setHintPaused(false)}
             onFocus={() => setHintPaused(true)}
             onBlur={() => setHintPaused(false)}
-            title="Envoyer cette question"
+            title={pick(ui, 'Envoyer cette question', 'Send this question')}
             className="stage-in stage-3 group mt-4 max-w-md text-[15px] text-ink-soft transition-colors hover:text-ink"
           >
             <span className="mr-2 font-mono font-bold text-accent">›</span>
             <span key={hint} className="hint-in">
-              {HINTS[hint]}
+              {hintsFor(ui)[hint]}
             </span>
           </button>
           {pulse !== null && (
             <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">
               <span className="hint-in">
                 <StatusDot tone="live" pulse className="mr-2" />
-                {whisperText(pulse, hour)}
+                {whisperText(pulse, hour, ui)}
               </span>
             </p>
           )}
@@ -945,7 +1012,7 @@ export default function ConsolePage() {
             </div>
           )}
         </div>
-        <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} />
+        <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} lang={detailLang} />
         {voiceOpen && <VoiceMode onClose={() => setVoiceOpen(false)} />}
         {demoOpen && <DemoPlayer onExit={() => setDemoOpen(false)} />}
       </div>
@@ -966,10 +1033,10 @@ export default function ConsolePage() {
             <p className="mt-0.5">
               <span
                 className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-line/70 bg-card/60 py-0.5 pl-2 pr-2.5 font-mono text-[10px] text-ink-faint backdrop-blur-md"
-                title={lastModel !== '' ? `Modèle IA actif : ${lastModel}` : 'Console IA'}
+                title={lastModel !== '' ? pick(ui, `Modèle IA actif : ${lastModel}`, `Active AI model: ${lastModel}`) : pick(ui, 'Console IA', 'AI console')}
               >
                 <StatusDot tone="live" pulse />
-                <span className="truncate">{lastModel !== '' ? lastModel : 'console IA'}</span>
+                <span className="truncate">{lastModel !== '' ? lastModel : pick(ui, 'console IA', 'AI console')}</span>
               </span>
             </p>
           </div>
@@ -978,8 +1045,8 @@ export default function ConsolePage() {
           <button
             type="button"
             onClick={() => newChat()}
-            title="Nouvelle discussion"
-            aria-label="Nouvelle discussion"
+            title={pick(ui, 'Nouvelle discussion', 'New chat')}
+            aria-label={pick(ui, 'Nouvelle discussion', 'New chat')}
             className="glass flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-ink-soft transition-[transform,color] duration-150 ease-snap hover:text-ink active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100"
           >
             <Icon name="plus" className="h-4 w-4" />
@@ -993,13 +1060,13 @@ export default function ConsolePage() {
                 <div className="flex justify-end">
                   <div className="msg-in glass max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 text-[15px] leading-relaxed">
                     {m.imageUrl ? (
-                      <img src={m.imageUrl} alt="Photo envoyée" className="mb-2 max-h-56 w-full rounded-lg object-cover" />
+                      <img src={m.imageUrl} alt={pick(ui, 'Photo envoyée', 'Sent photo')} className="mb-2 max-h-56 w-full rounded-lg object-cover" />
                     ) : null}
                     {m.content}
                   </div>
                 </div>
                 <p className="mt-1 text-right font-mono text-[11px] text-stone-400 dark:text-stone-500">
-                  {fmtTime(m.at)}
+                  {fmtTime(m.at, ui)}
                 </p>
               </div>
             ) : (
@@ -1009,7 +1076,7 @@ export default function ConsolePage() {
                   <div
                     className={`space-y-1.5 text-[15px] leading-7${streamId === i ? ' cursor-pointer' : ''}`}
                     onClick={streamId === i ? completeStream : undefined}
-                    title={streamId === i ? 'Cliquer pour afficher toute la réponse' : undefined}
+                    title={streamId === i ? pick(ui, 'Cliquer pour afficher toute la réponse', 'Click to show the full answer') : undefined}
                   >
                     {renderRichText(streamId === i ? m.content.slice(0, visible) : m.content)}
                     {streamId === i && <span className="stream-caret" aria-hidden="true" />}
@@ -1020,12 +1087,12 @@ export default function ConsolePage() {
                       onClick={completeStream}
                       className="rounded-full border border-line bg-card px-3 py-1 text-[13px] font-medium text-ink-soft transition-[border-color,color] hover:border-accent hover:text-ink"
                     >
-                      Afficher toute la réponse
+                      {pick(ui, 'Afficher toute la réponse', 'Show the full answer')}
                     </button>
                   )}
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-[11px] text-stone-400 dark:text-stone-500">
-                      {fmtTime(m.at)}
+                      {fmtTime(m.at, ui)}
                     </span>
                     <CopyAnswer text={m.content} />
                     <VoicePlayer
@@ -1041,20 +1108,20 @@ export default function ConsolePage() {
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="inline-flex items-center gap-1 text-[12px] text-ink-faint">
                         <Icon name="check" className="h-3.5 w-3.5 text-teal-600 dark:text-teal-300" />
-                        Vérifié :
+                        {pick(ui, 'Vérifié :', 'Verified:')}
                       </span>
                       {m.tools.map((t, j) => (
                         <span
                           key={`${t}-${j}`}
                           className="msg-in rounded-full bg-teal-700/10 px-2.5 py-0.5 text-[12px] font-medium text-teal-800 dark:bg-teal-300/15 dark:text-teal-200"
                         >
-                          {prettyTool(t)}
+                          {prettyTool(t, ui)}
                         </span>
                       ))}
                     </div>
                   )}
                   <div className="cards-in">
-                    <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} onDetail={openDetail} />
+                    <AgentCardList cards={m.cards} onAsk={ask} onAppend={appendAssistant} onDetail={openDetail} lang={m.lang} />
                   </div>
                   {streamId !== i && <FollowUps items={m.follow_ups ?? []} onAsk={ask} />}
                 </div>
@@ -1075,7 +1142,7 @@ export default function ConsolePage() {
                       <span className="absolute h-full w-full rounded-full bg-teal-500 opacity-60 motion-safe:animate-ping" />
                       <span className="relative h-2 w-2 rounded-full bg-teal-500" />
                     </span>
-                    Analyse de la photo…
+                    {pick(ui, 'Analyse de la photo…', 'Analyzing the photo…')}
                   </span>
                 </div>
               )}
@@ -1122,6 +1189,7 @@ export default function ConsolePage() {
           >
             {composerChips(
               [...messages].reverse().find((m) => m.role === 'assistant')?.tools ?? [],
+              ui,
             ).map((chip) => (
               <button
                 key={chip}
@@ -1137,7 +1205,7 @@ export default function ConsolePage() {
           {composer(false)}
         </div>
       </div>
-      <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} />
+      <DetailDrawer detail={detail} onClose={closeDetail} onDetail={openDetail} onAsk={ask} lang={detailLang} />
       {voiceOpen && <VoiceMode onClose={() => setVoiceOpen(false)} />}
     </div>
   );

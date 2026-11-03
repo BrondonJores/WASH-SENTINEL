@@ -1,3 +1,5 @@
+import { getUILang, pick } from './i18n';
+
 export interface ProviderField {
   name: string;
   label: string;
@@ -105,7 +107,8 @@ export interface AgentChatResponse {
   tools_executed: string[];
   cards: AgentCard[];
   model_used: string;
-  follow_ups: string[];
+  follow_ups: string[];
+  lang?: string;
 }
 
 export interface TerritoryPulse {
@@ -181,7 +184,9 @@ function resolveApiUrl(): string {
   const configured = import.meta.env.VITE_API_URL as string | undefined;
   if (configured) return configured;
   if (import.meta.env.PROD) {
-    throw new Error('Configuration manquante : VITE_API_URL est requise en production.');
+    throw new Error(
+      pick(getUILang(), 'Configuration manquante : VITE_API_URL est requise en production.', 'Missing configuration: VITE_API_URL is required in production.'),
+    );
   }
   return DEV_API_URL;
 }
@@ -213,8 +218,9 @@ export function setToken(t: string | null) {
 
 export type ApiFailureKind = 'network' | 'timeout' | 'unauthorized' | 'rate-limit' | 'server' | 'other';
 
-export const GUIDED_NETWORK_MESSAGE =
-  'Pas de connexion. Vérifiez le réseau puis réessayez — votre texte est gardé.';
+export function guidedNetworkMessage(): string {
+  return pick(getUILang(), 'Pas de connexion. Vérifiez le réseau puis réessayez — votre texte est gardé.', 'No connection. Check the network and try again — your text is kept.');
+}
 /**
  * Pause annoncée par défaut sur 429 (s) — miroir de SOFT_THROTTLE_DECAY_SECONDS
  * (WashAgentController). La pause réelle vient de l'en-tête Retry-After.
@@ -223,7 +229,7 @@ export const RATE_LIMIT_DEFAULT_PAUSE_SECONDS = 60;
 
 /** Message 429 dynamique : reprend la pause réelle imposée par le serveur. */
 export function rateLimitMessage(pauseSeconds: number): string {
-  return `Trop de questions d'un coup, pause ${pauseSeconds} secondes.`;
+  return pick(getUILang(), `Trop de questions d'un coup, pause ${pauseSeconds} secondes.`, `Too many questions at once, pausing for ${pauseSeconds} seconds.`);
 }
 
 /** Lit la pause imposée par le serveur (en-tête Retry-After du throttle Laravel), défaut 60 s. */
@@ -233,9 +239,12 @@ function retryAfterSeconds(res: Response): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : RATE_LIMIT_DEFAULT_PAUSE_SECONDS;
 }
 
-export const GUIDED_RATE_LIMIT_MESSAGE = rateLimitMessage(RATE_LIMIT_DEFAULT_PAUSE_SECONDS);
-export const GUIDED_SERVER_MESSAGE =
-  'Sentinel met trop longtemps. Réessayez — si ça persiste, reposez plus simplement.';
+export function guidedRateLimitMessage(): string {
+  return rateLimitMessage(RATE_LIMIT_DEFAULT_PAUSE_SECONDS);
+}
+export function guidedServerMessage(): string {
+  return pick(getUILang(), 'Sentinel met trop longtemps. Réessayez — si ça persiste, reposez plus simplement.', 'Sentinel is taking too long. Try again — if it persists, ask more simply.');
+}
 
 function kindForStatus(status: number): ApiFailureKind {
   if (status === 0) return 'network';
@@ -282,7 +291,7 @@ async function parseError(res: Response, fallback: string): Promise<never> {
   const body = (await res.json().catch(() => ({}))) as ErrorBody;
   if (res.status === 429) throw new ApiError(res.status, rateLimitMessage(retryAfterSeconds(res)), 'rate-limit');
   if (res.status === 408 || res.status >= 500) {
-    throw new ApiError(res.status, GUIDED_SERVER_MESSAGE, 'server');
+    throw new ApiError(res.status, guidedServerMessage(), 'server');
   }
   const first = body.errors ? Object.values(body.errors)[0]?.[0] : undefined;
   const guidance: ProposalGuidance | undefined =
@@ -295,7 +304,7 @@ async function parseError(res: Response, fallback: string): Promise<never> {
 function handle401(): never {
   setToken(null);
   unauthorizedHandler?.();
-  throw new ApiError(401, 'Session expirée, reconnectez-vous.');
+  throw new ApiError(401, pick(getUILang(), 'Session expirée, reconnectez-vous.', 'Session expired, please sign in again.'));
 }
 
 async function guardedFetch(input: string, init: RequestInit): Promise<Response> {
@@ -303,9 +312,9 @@ async function guardedFetch(input: string, init: RequestInit): Promise<Response>
     return await fetch(input, init);
   } catch (err) {
     if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-      throw new ApiError(408, GUIDED_SERVER_MESSAGE, 'timeout');
+      throw new ApiError(408, guidedServerMessage(), 'timeout');
     }
-    throw new ApiError(0, GUIDED_NETWORK_MESSAGE, 'network');
+    throw new ApiError(0, guidedNetworkMessage(), 'network');
   }
 }
 
@@ -341,7 +350,7 @@ async function req<T>(path: string, init?: RequestInit, timeoutMs?: number): Pro
     if (!res.ok) {
       const degraded = await readDegraded<T>(res);
       if (degraded !== undefined) return degraded;
-      await parseError(res, `Erreur ${res.status}`);
+      await parseError(res, pick(getUILang(), `Erreur ${res.status}`, `Error ${res.status}`));
     }
     return (await res.json()) as T;
   } finally {
@@ -366,7 +375,7 @@ async function reqMultipart<T>(path: string, form: FormData, timeoutMs?: number,
     if (!res.ok) {
       const degraded = await readDegraded<T>(res);
       if (degraded !== undefined) return degraded;
-      await parseError(res, `Erreur ${res.status}`);
+      await parseError(res, pick(getUILang(), `Erreur ${res.status}`, `Error ${res.status}`));
     }
     return (await res.json()) as T;
   } finally {

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { Icon } from './icons';
 import type { IconName } from './icons';
-import { LOCALE } from '../lib/locale';
+import { localeFor } from '../lib/locale';
+import { pick, useUILang } from '../lib/i18n';
 
 // --- Boutons ---
 
@@ -137,10 +138,11 @@ export function EmptyState({
 // --- Jauge de confiance IA (cœur du "vérifier avant de croire") ---
 
 export function ConfidenceMeter({ value, label }: { value: number; label?: string }) {
+  const ui = useUILang();
   const pct = Math.max(0, Math.min(100, Math.round(value)));
   const bar = pct >= 70 ? 'bg-teal-600 dark:bg-teal-500' : pct >= 40 ? 'bg-amber-500' : 'bg-red-500';
   return (
-    <div className="flex items-center gap-2" title={`Confiance IA : ${pct} %`}>
+    <div className="flex items-center gap-2" title={pick(ui, `Confiance IA : ${pct} %`, `AI confidence: ${pct}%`)}>
       {label && <span className="text-xs text-ink-soft">{label}</span>}
       <div className="h-2 w-24 overflow-hidden rounded-full bg-raised">
         <div className={`h-full rounded-full ${bar}`} style={{ width: `${pct}%` }} />
@@ -198,6 +200,7 @@ export function StatusDot({
 const LIVE_CLOCK_TICK_MS = 1000;
 
 export function LiveClock({ className = '' }: { className?: string }) {
+  const ui = useUILang();
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), LIVE_CLOCK_TICK_MS);
@@ -207,7 +210,7 @@ export function LiveClock({ className = '' }: { className?: string }) {
   return (
     <span
       className={`font-mono text-xs tabular-nums ${className}`}
-      title={now.toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+      title={now.toLocaleDateString(localeFor(ui), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
     >
       {pad(now.getHours())}:{pad(now.getMinutes())}:{pad(now.getSeconds())}
     </span>

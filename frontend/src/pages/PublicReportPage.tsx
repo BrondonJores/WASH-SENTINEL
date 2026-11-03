@@ -12,8 +12,17 @@ import type { Incident, School } from '../lib/api';
 import { Badge, Button, Card, Skeleton, StatusDot } from '../components/ui';
 import { SentinelAvatar } from '../components/SentinelAvatar';
 import { Icon } from '../components/icons';
-import { CATEGORY_FR, INPUT_CLS, URGENCY_FR, urgencyTone } from '../lib/wash';
+import { CATEGORY_FR, INPUT_CLS, URGENCY_EN, URGENCY_FR, urgencyTone } from '../lib/wash';
 import { SEARCH_DEBOUNCE_MS } from '../lib/search';
+import { pick, useUILang } from '../lib/i18n';
+
+// Libellés EN des catégories (miroir local de CATEGORY_FR : lib/wash.ts hors périmètre).
+const CATEGORY_EN: Record<string, string> = {
+  water_point: 'Water point',
+  toilets_latrines: 'Toilets / latrines',
+  handwashing: 'Handwashing',
+  sewage_drainage: 'Sewage / drainage',
+};
 
 const CATEGORY_KEYS = ['water_point', 'toilets_latrines', 'handwashing', 'sewage_drainage'] as const;
 const URGENCY_KEYS = ['low', 'medium', 'high', 'critical'] as const;
@@ -38,17 +47,18 @@ const labelCls = 'mb-1 block text-sm font-medium text-ink';
 const hintCls = 'mt-1 text-xs text-ink-faint';
 const errorCls = 'mt-1 text-xs font-medium text-danger';
 
-function friendlySubmitError(err: unknown): string {
+function friendlySubmitError(err: unknown, lang: string | undefined): string {
   if (err instanceof ApiError) {
-    if (err.status === 429) return 'Trop de signalements rapprochés. Attendez une minute puis réessayez.';
-    if (err.status >= 500) return 'Le service est momentanément indisponible. Réessayez dans quelques instants.';
-    return err.message || 'Ce signalement a été refusé. Vérifiez les champs puis réessayez.';
+    if (err.status === 429) return pick(lang, 'Trop de signalements rapprochés. Attendez une minute puis réessayez.', 'Too many reports in a row. Wait a minute, then try again.');
+    if (err.status >= 500) return pick(lang, 'Le service est momentanément indisponible. Réessayez dans quelques instants.', 'The service is temporarily unavailable. Try again in a moment.');
+    return err.message || pick(lang, 'Ce signalement a été refusé. Vérifiez les champs puis réessayez.', 'This report was rejected. Check the fields, then try again.');
   }
-  if (err instanceof TypeError) return 'Pas de connexion internet. Vérifiez votre connexion puis réessayez.';
-  return err instanceof Error ? err.message : 'Envoi impossible pour le moment. Réessayez.';
+  if (err instanceof TypeError) return pick(lang, 'Pas de connexion internet. Vérifiez votre connexion puis réessayez.', 'No internet connection. Check your connection, then try again.');
+  return err instanceof Error ? err.message : pick(lang, 'Envoi impossible pour le moment. Réessayez.', 'Cannot send right now. Try again.');
 }
 
 export default function PublicReportPage() {
+  const ui = useUILang();
   const [schools, setSchools] = useState<School[]>([]);
   const [schoolsLoading, setSchoolsLoading] = useState(true);
   const [schoolsError, setSchoolsError] = useState<string | null>(null);
@@ -87,12 +97,12 @@ export default function PublicReportPage() {
       })
       .catch(() => {
         if (searchRef.current !== run) return;
-        setSchoolsError("La liste des écoles n'a pas pu être chargée. Vérifiez votre connexion.");
+        setSchoolsError(pick(ui, "La liste des écoles n'a pas pu être chargée. Vérifiez votre connexion.", 'The school list could not be loaded. Check your connection.'));
       })
       .finally(() => {
         if (searchRef.current === run) setSchoolsLoading(false);
       });
-  }, [debouncedSearch]);
+  }, [debouncedSearch, ui]);
 
   const selectedSchool = useMemo(
     () => schools.find((s) => s.id === schoolId) ?? null,
@@ -110,20 +120,20 @@ export default function PublicReportPage() {
 
   const validate = (): boolean => {
     const errors: Record<string, string> = {};
-    if (!schoolId) errors.school = 'Choisissez votre école dans la liste.';
-    if (!category) errors.category = 'Choisissez le type de problème.';
-    if (!urgency) errors.urgency = 'Choisissez un niveau d’urgence.';
+    if (!schoolId) errors.school = pick(ui, 'Choisissez votre école dans la liste.', 'Choose your school from the list.');
+    if (!category) errors.category = pick(ui, 'Choisissez le type de problème.', 'Choose the problem type.');
+    if (!urgency) errors.urgency = pick(ui, 'Choisissez un niveau d’urgence.', 'Choose an urgency level.');
     if (students.trim() !== '') {
       if (!Number.isInteger(parsedStudents) || (parsedStudents as number) < 0) {
-        errors.students = 'Indiquez un nombre entier positif (ou laissez vide).';
+        errors.students = pick(ui, 'Indiquez un nombre entier positif (ou laissez vide).', 'Enter a positive whole number (or leave empty).');
       } else if ((parsedStudents as number) > MAX_AFFECTED_STUDENTS) {
-        errors.students = 'Nombre trop élevé (maximum 100 000).';
+        errors.students = pick(ui, 'Nombre trop élevé (maximum 100 000).', 'Number too high (maximum 100,000).');
       }
     }
     const desc = description.trim();
-    if (desc.length < 10) errors.description = 'Décrivez le problème en au moins 10 caractères.';
+    if (desc.length < 10) errors.description = pick(ui, 'Décrivez le problème en au moins 10 caractères.', 'Describe the problem in at least 10 characters.');
     else if (desc.length > DESCRIPTION_MAX)
-      errors.description = `Description trop longue (maximum ${DESCRIPTION_MAX} caractères).`;
+      errors.description = pick(ui, `Description trop longue (maximum ${DESCRIPTION_MAX} caractères).`, `Description too long (maximum ${DESCRIPTION_MAX} characters).`);
     setFieldErrors(errors);
     return Object.values(errors).every((v) => !v);
   };
@@ -145,7 +155,7 @@ export default function PublicReportPage() {
       setSuccess({ message: res.message, isDuplicate: res.is_duplicate, incident: res.incident });
       window.scrollTo({ top: 0 });
     } catch (err) {
-      setSubmitError(friendlySubmitError(err));
+      setSubmitError(friendlySubmitError(err, ui));
     } finally {
       setBusy(false);
     }
@@ -170,9 +180,9 @@ export default function PublicReportPage() {
         <div className="mb-6 flex items-center gap-3">
           <SentinelAvatar className="h-12 w-12 shrink-0" />
           <div>
-            <h1 className="font-display text-xl font-bold tracking-tight">Signaler une panne</h1>
+            <h1 className="font-display text-xl font-bold tracking-tight">{pick(ui, 'Signaler une panne', 'Report a breakdown')}</h1>
             <p className="text-sm text-ink-soft">
-              Eau, toilettes, lavage des mains : prévenez l’équipe WASH de votre école.
+              {pick(ui, 'Eau, toilettes, lavage des mains : prévenez l’équipe WASH de votre école.', 'Water, toilets, handwashing: alert your school WASH team.')}
             </p>
           </div>
         </div>
@@ -183,37 +193,37 @@ export default function PublicReportPage() {
               <span className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300">
                 <Icon name="check" className="h-6 w-6" />
               </span>
-              <h2 className="mt-4 font-display text-lg font-bold">Merci, c’est bien reçu !</h2>
+              <h2 className="mt-4 font-display text-lg font-bold">{pick(ui, 'Merci, c’est bien reçu !', 'Thank you, received!')}</h2>
               <p className="mt-1 text-sm text-ink-soft">{success.message}</p>
               {success.isDuplicate && (
                 <p className="mt-1 text-xs text-ink-faint">
-                  Un incident similaire existait déjà : votre signalement y a été rattaché.
+                  {pick(ui, 'Un incident similaire existait déjà : votre signalement y a été rattaché.', 'A similar incident already existed: your report was attached to it.')}
                 </p>
               )}
             </div>
             <dl className="mt-6 space-y-3 rounded-lg bg-raised p-4 text-sm">
               <div className="flex items-center justify-between gap-3">
-                <dt className="text-ink-soft">Référence du dossier</dt>
+                <dt className="text-ink-soft">{pick(ui, 'Référence du dossier', 'File reference')}</dt>
                 <dd className="font-mono font-bold">{success.incident.reference_code}</dd>
               </div>
               <div className="flex items-center justify-between gap-3">
-                <dt className="text-ink-soft">Urgence</dt>
+                <dt className="text-ink-soft">{pick(ui, 'Urgence', 'Urgency')}</dt>
                 <dd>
                   <Badge tone={urgencyTone(success.incident.urgency)}>
-                    {URGENCY_FR[success.incident.urgency] ?? success.incident.urgency}
+                    {(ui === 'en' ? URGENCY_EN : URGENCY_FR)[success.incident.urgency] ?? success.incident.urgency}
                   </Badge>
                 </dd>
               </div>
               <div className="flex items-center justify-between gap-3">
-                <dt className="text-ink-soft">École</dt>
+                <dt className="text-ink-soft">{pick(ui, 'École', 'School')}</dt>
                 <dd className="text-right font-medium">{success.incident.school?.name ?? '—'}</dd>
               </div>
             </dl>
             <p className="mt-4 text-xs text-ink-faint">
-              Gardez cette référence : elle permet de suivre votre dossier auprès de l’école.
+              {pick(ui, 'Gardez cette référence : elle permet de suivre votre dossier auprès de l’école.', 'Keep this reference: it lets you follow up with the school.')}
             </p>
             <Button variant="primary" className="mt-4 w-full" onClick={reset}>
-              Faire un autre signalement
+              {pick(ui, 'Faire un autre signalement', 'File another report')}
             </Button>
           </Card>
         ) : (
@@ -221,14 +231,14 @@ export default function PublicReportPage() {
             <form onSubmit={submit} noValidate className="space-y-5">
               <div>
                 <label htmlFor="school-search" className={labelCls}>
-                  Votre école <span className="text-danger">*</span>
+                  {pick(ui, 'Votre école', 'Your school')} <span className="text-danger">*</span>
                 </label>
                 <div className="relative">
                   <input
                     id="school-search"
                     type="text"
                     autoComplete="off"
-                    placeholder="Tapez le nom de l’école…"
+                    placeholder={pick(ui, 'Tapez le nom de l’école…', 'Type the school name…')}
                     value={search}
                     onChange={(e) => {
                       setSearch(e.target.value);
@@ -253,10 +263,10 @@ export default function PublicReportPage() {
                         <p className="p-3 text-sm text-danger">{schoolsError}</p>
                       ) : schools.length === 0 ? (
                         <p className="p-3 text-sm text-ink-soft">
-                          Aucune école trouvée. Essayez un autre nom.
+                          {pick(ui, 'Aucune école trouvée. Essayez un autre nom.', 'No schools found. Try another name.')}
                         </p>
                       ) : (
-                        <ul id="school-listbox" role="listbox" aria-label="Écoles">
+                        <ul id="school-listbox" role="listbox" aria-label={pick(ui, 'Écoles', 'Schools')}>
                           {schools.map((s) => (
                             <li key={s.id}>
                               <button
@@ -282,14 +292,14 @@ export default function PublicReportPage() {
                     {selectedSchool.name} — {selectedSchool.district}
                   </p>
                 ) : (
-                  <p className={hintCls}>Commencez à taper, puis touchez le nom de l’école.</p>
+                  <p className={hintCls}>{pick(ui, 'Commencez à taper, puis touchez le nom de l’école.', 'Start typing, then tap the school name.')}</p>
                 )}
                 {fieldErrors.school && <p className={errorCls}>{fieldErrors.school}</p>}
               </div>
 
               <fieldset>
                 <legend className={labelCls}>
-                  Type de problème <span className="text-danger">*</span>
+                  {pick(ui, 'Type de problème', 'Problem type')} <span className="text-danger">*</span>
                 </legend>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup">
                   {CATEGORY_KEYS.map((key) => (
@@ -308,7 +318,7 @@ export default function PublicReportPage() {
                           : 'border-line bg-card text-ink-soft hover:bg-raised'
                       }`}
                     >
-                      {CATEGORY_FR[key]}
+                      {(ui === 'en' ? CATEGORY_EN : CATEGORY_FR)[key]}
                     </button>
                   ))}
                 </div>
@@ -317,7 +327,7 @@ export default function PublicReportPage() {
 
               <fieldset>
                 <legend className={labelCls}>
-                  Urgence <span className="text-danger">*</span>
+                  {pick(ui, 'Urgence', 'Urgency')} <span className="text-danger">*</span>
                 </legend>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup">
                   {URGENCY_KEYS.map((key) => (
@@ -336,20 +346,19 @@ export default function PublicReportPage() {
                           : 'border-line bg-card text-ink-soft hover:bg-raised'
                       }`}
                     >
-                      {URGENCY_FR[key]}
+                      {(ui === 'en' ? URGENCY_EN : URGENCY_FR)[key]}
                     </button>
                   ))}
                 </div>
                 <p className={hintCls}>
-                  Critique = danger immédiat (eau contaminée, effondrement…). En cas de danger,
-                  prévenez aussi l’école directement.
+                  {pick(ui, 'Critique = danger immédiat (eau contaminée, effondrement…). En cas de danger, prévenez aussi l’école directement.', 'Critical = immediate danger (contaminated water, collapse…). If in danger, also alert the school directly.')}
                 </p>
                 {fieldErrors.urgency && <p className={errorCls}>{fieldErrors.urgency}</p>}
               </fieldset>
 
               <div>
                 <label htmlFor="students" className={labelCls}>
-                  Élèves affectés (si vous savez)
+                  {pick(ui, 'Élèves affectés (si vous savez)', 'Affected students (if known)')}
                 </label>
                 <input
                   id="students"
@@ -358,7 +367,7 @@ export default function PublicReportPage() {
                   min={0}
                   max={MAX_AFFECTED_STUDENTS}
                   step={1}
-                  placeholder="Ex. 120"
+                  placeholder={pick(ui, 'Ex. 120', 'E.g. 120')}
                   value={students}
                   onChange={(e) => {
                     setStudents(e.target.value);
@@ -371,13 +380,13 @@ export default function PublicReportPage() {
 
               <div>
                 <label htmlFor="description" className={labelCls}>
-                  Décrivez le problème <span className="text-danger">*</span>
+                  {pick(ui, 'Décrivez le problème', 'Describe the problem')} <span className="text-danger">*</span>
                 </label>
                 <textarea
                   id="description"
                   rows={4}
                   maxLength={DESCRIPTION_MAX + 100}
-                  placeholder="Ex. Le robinet de la cour ne coule plus depuis lundi, les élèves n’ont plus d’eau pour se laver les mains."
+                  placeholder={pick(ui, 'Ex. Le robinet de la cour ne coule plus depuis lundi, les élèves n’ont plus d’eau pour se laver les mains.', 'E.g. The yard tap has been dry since Monday, students have no water left to wash their hands.')}
                   value={description}
                   onChange={(e) => {
                     setDescription(e.target.value);
@@ -386,8 +395,7 @@ export default function PublicReportPage() {
                   className={INPUT_CLS}
                 />
                 <p className={hintCls}>
-                  {description.trim().length}/{DESCRIPTION_MAX} caractères. Pas besoin de donner votre
-                  nom.
+                  {pick(ui, `${description.trim().length}/${DESCRIPTION_MAX} caractères. Pas besoin de donner votre nom.`, `${description.trim().length}/${DESCRIPTION_MAX} characters. No need to give your name.`)}
                 </p>
                 {fieldErrors.description && <p className={errorCls}>{fieldErrors.description}</p>}
               </div>
@@ -399,19 +407,19 @@ export default function PublicReportPage() {
               )}
 
               <Button type="submit" variant="primary" disabled={busy} className="w-full">
-                {busy ? 'Envoi en cours…' : 'Envoyer le signalement'}
+                {busy ? pick(ui, 'Envoi en cours…', 'Sending…') : pick(ui, 'Envoyer le signalement', 'Send the report')}
               </Button>
               <p className="text-center text-xs text-ink-faint">
-                Gratuit, sans compte. Vos réponses servent uniquement à réparer plus vite.
+                {pick(ui, 'Gratuit, sans compte. Vos réponses servent uniquement à réparer plus vite.', 'Free, no account needed. Your answers only help repair faster.')}
               </p>
             </form>
           </Card>
         )}
 
         <p className="mt-4 text-center text-xs text-ink-faint">
-          Membre de l’équipe WASH ?{' '}
+          {pick(ui, 'Membre de l’équipe WASH ?', 'WASH team member?')}{' '}
           <Link to="/login" className="underline hover:text-ink-soft">
-            Se connecter
+            {pick(ui, 'Se connecter', 'Sign in')}
           </Link>
         </p>
       </div>

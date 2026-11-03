@@ -7,11 +7,33 @@ import { Radio, Select } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { Icon } from '../components/icons';
-import { CHANNEL_FR, INPUT_CLS, fmtDate } from '../lib/wash';
+import { CHANNEL_FR, INPUT_CLS } from '../lib/wash';
+import { localeFor } from '../lib/locale';
+import { pick, useUILang } from '../lib/i18n';
 import { DEFAULT_PER_PAGE } from '../lib/pagination';
 import { SEARCH_DEBOUNCE_MS } from '../lib/search';
 
-const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
+const errMsg = (e: unknown, lang?: string): string =>
+  (e instanceof ApiError ? e.message : pick(lang, 'Erreur réseau.', 'Network error.'));
+
+// Libellés EN des canaux (miroir local de CHANNEL_FR : lib/wash.ts hors périmètre).
+const CHANNEL_EN: Record<string, string> = {
+  voice: 'Voice',
+  text: 'Text',
+  photo: 'Photo',
+  webrtc_call: 'Call',
+};
+
+/** Même format que wash.fmtDate, avec la locale de la langue UI. */
+const fmtDateL = (iso: string | null, lang: string | undefined): string =>
+  iso
+    ? new Date(iso).toLocaleString(localeFor(lang), {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '—';
 const errorCls = 'mt-1 text-xs font-medium text-danger';
 const CHANNEL_KEYS = ['voice', 'text', 'photo', 'webrtc_call'] as const;
 
@@ -20,6 +42,7 @@ type DupFilter = 'all' | 'unique' | 'dup';
 // Recherche d'école distante debounced avec anti-requêtes-obsolètes
 // (même pattern que le widget public : debounce partagé + compteur de run).
 function useSchoolOptions() {
+  const ui = useUILang();
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [options, setOptions] = useState<School[]>([]);
@@ -46,17 +69,19 @@ function useSchoolOptions() {
       .catch(() => {
         if (reqRef.current !== run) return;
         setOptions([]);
-        setError("La liste des écoles n'a pas pu être chargée.");
+        setError(pick(ui, "La liste des écoles n'a pas pu être chargée.", 'The school list could not be loaded.'));
       })
       .finally(() => {
         if (reqRef.current === run) setLoading(false);
       });
-  }, [debounced]);
+  }, [debounced, ui]);
 
   return { search, setSearch, options, loading, error };
 }
 
 export default function ReportsPage() {
+  const ui = useUILang();
+  const channelMap = ui === 'en' ? CHANNEL_EN : CHANNEL_FR;
   const [items, setItems] = useState<Report[]>([]);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
@@ -103,11 +128,11 @@ export default function ReportsPage() {
       setLastPage(res.last_page);
       setTotal(res.total);
     } catch (e) {
-      setError(errMsg(e));
+      setError(errMsg(e, ui));
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, schoolId, channel, dupFilter]);
+  }, [page, perPage, schoolId, channel, dupFilter, ui]);
 
   useEffect(() => {
     void load();
@@ -157,11 +182,11 @@ export default function ReportsPage() {
       setInlineDetail(await api.report(r.id));
     } catch (e) {
       setInlineDetail(null);
-      setMsg(errMsg(e));
+      setMsg(errMsg(e, ui));
     } finally {
       setDetailLoading(false);
     }
-  }, []);
+  }, [ui]);
 
   const pickCreateSchool = (s: School) => {
     setFSchoolId(s.id);
@@ -173,15 +198,15 @@ export default function ReportsPage() {
   const create = async () => {
     if (busy) return;
     const errors: Record<string, string> = {};
-    if (!fSchoolId) errors.school = 'Choisissez une école dans la liste.';
-    if (fMessage.trim() === '') errors.message = 'Le message est requis.';
+    if (!fSchoolId) errors.school = pick(ui, 'Choisissez une école dans la liste.', 'Choose a school from the list.');
+    if (fMessage.trim() === '') errors.message = pick(ui, 'Le message est requis.', 'Message is required.');
     setFErrors(errors);
     if (Object.keys(errors).length > 0) return;
     setBusy(true);
     setMsg(null);
     try {
       const res = await api.createReport({ school_id: fSchoolId as number, message: fMessage.trim() });
-      setMsg(`${res.message} Incident : ${res.incident.reference_code}.`);
+      setMsg(`${res.message} ${pick(ui, `Incident : ${res.incident.reference_code}.`, `Incident: ${res.incident.reference_code}.`)}`);
       setFMessage('');
       setFErrors({});
       setShowForm(false);
@@ -193,26 +218,26 @@ export default function ReportsPage() {
       setSelectedId(res.report.id);
       setDrawer({ kind: 'incident', id: res.incident.id });
     } catch (e) {
-      setMsg(errMsg(e));
+      setMsg(errMsg(e, ui));
     } finally {
       setBusy(false);
     }
   };
 
   const dupOptions: Array<{ key: DupFilter; label: string }> = [
-    { key: 'all', label: 'Tous' },
-    { key: 'unique', label: 'Uniques' },
-    { key: 'dup', label: 'Doublons' },
+    { key: 'all', label: pick(ui, 'Tous', 'All') },
+    { key: 'unique', label: pick(ui, 'Uniques', 'Unique') },
+    { key: 'dup', label: pick(ui, 'Doublons', 'Duplicates') },
   ];
 
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
-        title="Signalements"
-        description="File de vérification : doublons flaggés, rattachements, corrections."
+        title={pick(ui, 'Signalements', 'Reports')}
+        description={pick(ui, 'File de vérification : doublons flaggés, rattachements, corrections.', 'Review queue: flagged duplicates, attachments, corrections.')}
         actions={
           <Button variant="primary" onClick={() => setShowForm((v) => !v)}>
-            {showForm ? 'Fermer' : '+ Nouveau signalement'}
+            {showForm ? pick(ui, 'Fermer', 'Close') : pick(ui, '+ Nouveau signalement', '+ New report')}
           </Button>
         }
       />
@@ -220,12 +245,12 @@ export default function ReportsPage() {
 
       {showForm && (
         <Card className="mb-4 space-y-3 p-4">
-          <Field label="École *">
+          <Field label={pick(ui, 'École *', 'School *')}>
             <div className="relative max-w-md">
               <input
                 type="text"
                 autoComplete="off"
-                placeholder="Tapez le nom de l’école…"
+                placeholder={pick(ui, 'Tapez le nom de l’école…', 'Type the school name…')}
                 value={createSchools.search}
                 onChange={(e) => {
                   createSchools.setSearch(e.target.value);
@@ -252,9 +277,9 @@ export default function ReportsPage() {
                   ) : createSchools.error ? (
                     <p className="p-3 text-sm text-danger">{createSchools.error}</p>
                   ) : createSchools.options.length === 0 ? (
-                    <p className="p-3 text-sm text-ink-soft">Aucune école trouvée. Essayez un autre nom.</p>
+                    <p className="p-3 text-sm text-ink-soft">{pick(ui, 'Aucune école trouvée. Essayez un autre nom.', 'No schools found. Try another name.')}</p>
                   ) : (
-                    <ul id="create-school-listbox" role="listbox" aria-label="Écoles">
+                    <ul id="create-school-listbox" role="listbox" aria-label={pick(ui, 'Écoles', 'Schools')}>
                       {createSchools.options.map((s) => (
                         <li key={s.id}>
                           <button
@@ -276,7 +301,7 @@ export default function ReportsPage() {
             </div>
             {fErrors.school && <p className={errorCls}>{fErrors.school}</p>}
           </Field>
-          <Field label="Message *">
+          <Field label={pick(ui, 'Message *', 'Message *')}>
             <textarea
               rows={3}
               value={fMessage}
@@ -284,7 +309,7 @@ export default function ReportsPage() {
                 setFMessage(e.target.value);
                 setFErrors((p) => ({ ...p, message: '' }));
               }}
-              placeholder="Décrivez le problème : pompe cassée, latrines bouchées, eau souillée…"
+              placeholder={pick(ui, 'Décrivez le problème : pompe cassée, latrines bouchées, eau souillée…', 'Describe the problem: broken pump, clogged latrines, dirty water…')}
               className={INPUT_CLS}
               aria-invalid={fErrors.message ? true : undefined}
             />
@@ -292,10 +317,10 @@ export default function ReportsPage() {
           </Field>
           <div className="flex gap-2">
             <Button variant="primary" disabled={busy} onClick={() => void create()}>
-              {busy ? 'Envoi en cours…' : 'Envoyer au tri IA'}
+              {busy ? pick(ui, 'Envoi en cours…', 'Sending…') : pick(ui, 'Envoyer au tri IA', 'Send to AI triage')}
             </Button>
             <Button variant="ghost" onClick={() => setShowForm(false)}>
-              Annuler
+              {pick(ui, 'Annuler', 'Cancel')}
             </Button>
           </div>
         </Card>
@@ -311,8 +336,8 @@ export default function ReportsPage() {
           <input
             type="text"
             autoComplete="off"
-            placeholder="Filtrer par école…"
-            aria-label="Filtrer par école"
+            placeholder={pick(ui, 'Filtrer par école…', 'Filter by school…')}
+            aria-label={pick(ui, 'Filtrer par école', 'Filter by school')}
             value={filterSchools.search}
             onChange={(e) => {
               filterSchools.setSearch(e.target.value);
@@ -337,8 +362,8 @@ export default function ReportsPage() {
             <button
               type="button"
               onClick={clearFilterSchool}
-              aria-label="Effacer le filtre école"
-              title="Effacer"
+              aria-label={pick(ui, 'Effacer le filtre école', 'Clear the school filter')}
+              title={pick(ui, 'Effacer', 'Clear')}
               className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-ink-faint transition-colors hover:bg-raised hover:text-ink motion-reduce:transition-none"
             >
               <Icon name="x" className="h-4 w-4" />
@@ -354,9 +379,9 @@ export default function ReportsPage() {
               ) : filterSchools.error ? (
                 <p className="p-3 text-sm text-danger">{filterSchools.error}</p>
               ) : filterSchools.options.length === 0 ? (
-                <p className="p-3 text-sm text-ink-soft">Aucune école trouvée. Essayez un autre nom.</p>
+                <p className="p-3 text-sm text-ink-soft">{pick(ui, 'Aucune école trouvée. Essayez un autre nom.', 'No schools found. Try another name.')}</p>
               ) : (
-                <ul id="filter-school-listbox" role="listbox" aria-label="Écoles">
+                <ul id="filter-school-listbox" role="listbox" aria-label={pick(ui, 'Écoles', 'Schools')}>
                   {filterSchools.options.map((s) => (
                     <li key={s.id}>
                       <button
@@ -383,12 +408,12 @@ export default function ReportsPage() {
             setPage(1);
             clearInline();
           }}
-          ariaLabel="Filtrer par canal"
-          options={[{ value: '', label: 'Tous les canaux' },
-            ...CHANNEL_KEYS.map((k) => ({ value: k, label: CHANNEL_FR[k] ?? k }))]}
+          ariaLabel={pick(ui, 'Filtrer par canal', 'Filter by channel')}
+          options={[{ value: '', label: pick(ui, 'Tous les canaux', 'All channels') },
+            ...CHANNEL_KEYS.map((k) => ({ value: k, label: channelMap[k] ?? k }))]}
         />
         <div className="flex items-center gap-2">
-          <div role="radiogroup" aria-label="Filtrer les doublons" className="flex flex-1 flex-wrap gap-3">
+          <div role="radiogroup" aria-label={pick(ui, 'Filtrer les doublons', 'Filter duplicates')} className="flex flex-1 flex-wrap gap-3">
             {dupOptions.map((o) => (
               <Radio
                 key={o.key}
@@ -412,7 +437,7 @@ export default function ReportsPage() {
         </div>
       </div>
       <p aria-live="polite" className="mb-4 text-xs text-ink-soft">
-        {loading && items.length === 0 ? 'Chargement…' : `${total} signalement(s)`}
+        {loading && items.length === 0 ? pick(ui, 'Chargement…', 'Loading…') : pick(ui, `${total} signalement(s)`, `${total} report(s)`)}
       </p>
 
       <div className="grid items-start gap-4 lg:grid-cols-5">
@@ -429,18 +454,18 @@ export default function ReportsPage() {
               {hasFilters ? (
                 <EmptyState
                   icon="inbox"
-                  title="Aucun signalement"
-                  description="Aucun signalement ne correspond à ces filtres."
-                  action={<Button onClick={resetFilters}>Réinitialiser les filtres</Button>}
+                  title={pick(ui, 'Aucun signalement', 'No reports')}
+                  description={pick(ui, 'Aucun signalement ne correspond à ces filtres.', 'No reports match these filters.')}
+                  action={<Button onClick={resetFilters}>{pick(ui, 'Réinitialiser les filtres', 'Reset filters')}</Button>}
                 />
               ) : (
                 <EmptyState
                   icon="inbox"
-                  title="Aucun signalement"
-                  description="La file est vide."
+                  title={pick(ui, 'Aucun signalement', 'No reports')}
+                  description={pick(ui, 'La file est vide.', 'The queue is empty.')}
                   action={
                     <Button variant="primary" onClick={() => setShowForm(true)}>
-                      + Nouveau signalement
+                      {pick(ui, '+ Nouveau signalement', '+ New report')}
                     </Button>
                   }
                 />
@@ -460,18 +485,18 @@ export default function ReportsPage() {
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-mono text-xs text-ink-faint">
-                  #{r.id} · {fmtDate(r.created_at)}
+                  #{r.id} · {fmtDateL(r.created_at, ui)}
                 </span>
                 {r.is_duplicate ? (
-                  <Badge tone="warn">Doublon</Badge>
+                  <Badge tone="warn">{pick(ui, 'Doublon', 'Duplicate')}</Badge>
                 ) : (
-                  <Badge tone="neutral">{CHANNEL_FR[r.channel] ?? r.channel}</Badge>
+                  <Badge tone="neutral">{channelMap[r.channel] ?? r.channel}</Badge>
                 )}
               </div>
               <p className="mt-1 line-clamp-2 text-sm">{r.raw_content}</p>
               <p className="mt-0.5 truncate text-xs text-ink-soft">
-                {r.school?.name ?? '—'} · {CHANNEL_FR[r.channel] ?? r.channel}
-                {r.incident ? ` · ${r.incident.reference_code}` : ' · sans incident'}
+                {r.school?.name ?? '—'} · {channelMap[r.channel] ?? r.channel}
+                {r.incident ? ` · ${r.incident.reference_code}` : pick(ui, ' · sans incident', ' · no incident')}
               </p>
             </button>
           ))}
@@ -494,8 +519,8 @@ export default function ReportsPage() {
             <Card>
               <EmptyState
                 icon="inbox"
-                title="Sélectionnez un signalement"
-                description="Les signalements rattachés à un incident s'ouvrent dans le panneau latéral. Les autres s'affichent ici."
+                title={pick(ui, 'Sélectionnez un signalement', 'Select a report')}
+                description={pick(ui, "Les signalements rattachés à un incident s'ouvrent dans le panneau latéral. Les autres s'affichent ici.", 'Reports linked to an incident open in the side panel. Others show here.')}
               />
             </Card>
           )}
@@ -503,15 +528,15 @@ export default function ReportsPage() {
             <Card className="space-y-4 p-4">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone="neutral">{CHANNEL_FR[inlineDetail.channel] ?? inlineDetail.channel}</Badge>
-                  {inlineDetail.is_duplicate && <Badge tone="warn">Doublon</Badge>}
+                  <Badge tone="neutral">{channelMap[inlineDetail.channel] ?? inlineDetail.channel}</Badge>
+                  {inlineDetail.is_duplicate && <Badge tone="warn">{pick(ui, 'Doublon', 'Duplicate')}</Badge>}
                   <span className="font-mono text-xs text-ink-faint">
-                    #{inlineDetail.id} · {fmtDate(inlineDetail.created_at)}
+                    #{inlineDetail.id} · {fmtDateL(inlineDetail.created_at, ui)}
                   </span>
                 </div>
                 <p className="mt-2 text-sm">{inlineDetail.raw_content}</p>
                 <p className="mt-2 text-sm text-ink-soft">
-                  École : {inlineDetail.school?.name ?? '—'} · Incident :{' '}
+                  {pick(ui, 'École :', 'School:')} {inlineDetail.school?.name ?? '—'} · {pick(ui, 'Incident :', 'Incident:')}{' '}
                   {inlineDetail.incident ? (
                     <span className="font-mono">
                       {inlineDetail.incident.reference_code} ({inlineDetail.incident.status})
@@ -522,7 +547,7 @@ export default function ReportsPage() {
                 </p>
                 {inlineDetail.is_duplicate && (
                   <p className="mt-1 text-sm text-ink-soft">
-                    Rattaché à l'incident #{inlineDetail.duplicate_of_incident_id} · similarité{' '}
+                    {pick(ui, `Rattaché à l'incident #${inlineDetail.duplicate_of_incident_id} · similarité`, `Attached to incident #${inlineDetail.duplicate_of_incident_id} · similarity`)}{' '}
                     {inlineDetail.duplicate_similarity_score != null
                       ? `${Math.round(inlineDetail.duplicate_similarity_score * 100)} %`
                       : '—'}
@@ -545,7 +570,7 @@ export default function ReportsPage() {
                     name="chevron-down"
                     className={`h-4 w-4 transition-transform motion-reduce:transition-none ${showExtraction ? 'rotate-180' : ''}`}
                   />
-                  Extraction IA
+                  {pick(ui, 'Extraction IA', 'AI extraction')}
                 </button>
                 {showExtraction && <Pretty data={inlineDetail.raw_ai_extraction} />}
               </div>
@@ -554,7 +579,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      <DetailDrawer detail={drawer} onClose={() => setDrawer(null)} onDetail={(kind, id) => setDrawer({ kind, id })} />
+      <DetailDrawer detail={drawer} onClose={() => setDrawer(null)} onDetail={(kind, id) => setDrawer({ kind, id })} lang={ui} />
     </div>
   );
 }

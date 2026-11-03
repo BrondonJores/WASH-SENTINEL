@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { getUILang, pick } from '../lib/i18n';
 import { api, getToken, setToken, setUnauthorizedHandler } from '../lib/api';
 import type { AuthUser } from '../lib/api';
 
@@ -54,6 +55,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth(): AuthState {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth utilisé hors AuthProvider');
+  if (!ctx) throw new Error(pick(getUILang(), 'useAuth utilisé hors AuthProvider', 'useAuth used outside AuthProvider'));
   return ctx;
 }

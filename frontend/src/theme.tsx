@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { getUILang, pick } from './lib/i18n';
 
 export type Theme = 'light' | 'dark';
 
@@ -38,6 +39,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 /* eslint-disable-next-line react-refresh/only-export-components -- hook co-localisé avec son provider. */
 export function useTheme(): ThemeState {
   const ctx = useContext(ThemeContext);
-  if (!ctx) throw new Error('useTheme utilisé hors ThemeProvider');
+  if (!ctx) throw new Error(pick(getUILang(), 'useTheme utilisé hors ThemeProvider', 'useTheme used outside ThemeProvider'));
   return ctx;
 }

@@ -1,4 +1,5 @@
-import { WAITING_STEPS, stepIndexForElapsed } from '../lib/streaming';
+import { waitingSteps, stepIndexForElapsed } from '../lib/streaming';
+import { pick, useUILang } from '../lib/i18n';
 
 /**
  * Indicateur d'étape animé pendant converse.
@@ -7,13 +8,15 @@ import { WAITING_STEPS, stepIndexForElapsed } from '../lib/streaming';
  * d'écran pour ne pas les spammer.
  */
 export function WaitingSteps({ elapsedMs, calm }: { elapsedMs: number; calm: boolean }) {
+  const ui = useUILang();
+  const steps = waitingSteps(ui);
   const current = stepIndexForElapsed(elapsedMs);
-  const step = WAITING_STEPS[current] ?? WAITING_STEPS[0];
+  const step = steps[current] ?? steps[0];
   const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
   return (
     <div className="min-w-0 flex-1">
       <ol aria-hidden="true" className="flex items-center gap-1.5">
-        {WAITING_STEPS.map((s, i) => {
+        {steps.map((s, i) => {
           const done = i < current;
           const active = i === current;
           return (
@@ -40,7 +43,7 @@ export function WaitingSteps({ elapsedMs, calm }: { elapsedMs: number; calm: boo
               >
                 {s.label}
               </span>
-              {i < WAITING_STEPS.length - 1 && (
+              {i < steps.length - 1 && (
                 <span
                   aria-hidden="true"
                   className={`mx-1 h-px w-4 sm:w-6 ${done ? 'bg-teal-600' : 'bg-stone-300 dark:bg-stone-700'}`}
@@ -75,6 +78,7 @@ export function SlowWaitActions({
   onRetry: () => void;
   onSeeIncidents: () => void;
 }) {
+  const ui = useUILang();
   return (
     <div
       role="status"
@@ -82,10 +86,10 @@ export function SlowWaitActions({
       className="rounded-xl border border-amber-500/40 bg-amber-50 px-4 py-3 dark:bg-amber-950/40"
     >
       <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
-        Sentinel met plus de {elapsedSec} secondes à répondre.
+        {pick(ui, `Sentinel met plus de ${elapsedSec} secondes à répondre.`, `Sentinel is taking more than ${elapsedSec} seconds to answer.`)}
       </p>
       <p className="mt-0.5 text-sm text-amber-800 dark:text-amber-200">
-        Votre message est gardé. Que voulez-vous faire ?
+        {pick(ui, 'Votre message est gardé. Que voulez-vous faire ?', 'Your message is kept. What would you like to do?')}
       </p>
       <div className="mt-2.5 flex flex-wrap gap-1.5">
         <button
@@ -93,21 +97,21 @@ export function SlowWaitActions({
           onClick={onKeepWaiting}
           className="rounded-full bg-amber-600 px-3 py-1.5 text-[13px] font-semibold text-white transition-opacity hover:opacity-90"
         >
-          Continuer d&apos;attendre
+          {pick(ui, "Continuer d'attendre", 'Keep waiting')}
         </button>
         <button
           type="button"
           onClick={onRetry}
           className="rounded-full border border-line bg-card px-3 py-1.5 text-[13px] font-medium text-ink transition-[border-color] hover:border-accent"
         >
-          Réessayer
+          {pick(ui, 'Réessayer', 'Retry')}
         </button>
         <button
           type="button"
           onClick={onSeeIncidents}
           className="rounded-full border border-line bg-card px-3 py-1.5 text-[13px] font-medium text-ink transition-[border-color] hover:border-accent"
         >
-          Voir les incidents
+          {pick(ui, 'Voir les incidents', 'See incidents')}
         </button>
       </div>
     </div>

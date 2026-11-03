@@ -6,47 +6,50 @@ import { ErrorBanner, Pager, Pretty } from '../components/crud';
 import { Toggle } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
-import { URGENCY_FR, fmtNum, urgencyTone } from '../lib/wash';
-import { LOCALE } from '../lib/locale';
+import { URGENCY_EN, URGENCY_FR, fmtNum, urgencyTone } from '../lib/wash';
+import { localeFor } from '../lib/locale';
+import { pick, useUILang } from '../lib/i18n';
 import { DEFAULT_PER_PAGE } from '../lib/pagination';
 
 // Forme réelle de `data` (lecture seule backend) — seule classe existante :
 // CriticalIncidentNotification::toArray() = { incident_id, reference_code, school,
 // district, title, urgency, priority_score, affected_students, ai_summary }.
 
-const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
+const errMsg = (e: unknown, lang?: string): string =>
+  (e instanceof ApiError ? e.message : pick(lang, 'Erreur réseau.', 'Network error.'));
 const shortType = (t: string): string => t.split('\\').pop() ?? t;
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 const num = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) ? v : null;
 
-/** Temps relatif en français, ex. « il y a 2 h ». */
-const timeAgo = (iso: string): string => {
+/** Temps relatif, ex. « il y a 2 h » / « 2 h ago ». */
+const timeAgo = (iso: string, lang: string | undefined): string => {
   const ms = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return 'à l\u2019instant';
+  if (!Number.isFinite(ms) || ms < 0) return pick(lang, 'à l\u2019instant', 'just now');
   const min = Math.floor(ms / 60000);
-  if (min < 1) return 'à l\u2019instant';
-  if (min < 60) return `il y a ${min} min`;
+  if (min < 1) return pick(lang, 'à l\u2019instant', 'just now');
+  if (min < 60) return pick(lang, `il y a ${min} min`, `${min} min ago`);
   const h = Math.floor(min / 60);
-  if (h < 24) return `il y a ${h} h`;
+  if (h < 24) return pick(lang, `il y a ${h} h`, `${h} h ago`);
   const d = Math.floor(h / 24);
-  if (d < 30) return `il y a ${d} j`;
+  if (d < 30) return pick(lang, `il y a ${d} j`, `${d} d ago`);
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `il y a ${mo} mois`;
-  return `il y a ${Math.floor(mo / 12)} an${mo >= 24 ? 's' : ''}`;
+  if (mo < 12) return pick(lang, `il y a ${mo} mois`, `${mo} mo ago`);
+  return pick(lang, `il y a ${Math.floor(mo / 12)} an${mo >= 24 ? 's' : ''}`, `${Math.floor(mo / 12)} yr ago`);
 };
 
-const fullDate = (iso: string): string => {
+const fullDate = (iso: string, lang: string | undefined): string => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
     ? iso
-    : d.toLocaleString(LOCALE, { dateStyle: 'full', timeStyle: 'short' });
+    : d.toLocaleString(localeFor(lang), { dateStyle: 'full', timeStyle: 'short' });
 };
 
 const byNewest = (a: AppNotification, b: AppNotification): number =>
   new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
 
 export default function NotificationsPage() {
+  const ui = useUILang();
   const [items, setItems] = useState<AppNotification[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -76,11 +79,11 @@ export default function NotificationsPage() {
       setTotal(res.total);
       setLastPage(res.last_page);
     } catch (e) {
-      setError(errMsg(e));
+      setError(errMsg(e, ui));
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, unreadOnly]);
+  }, [page, perPage, unreadOnly, ui]);
 
   useEffect(() => {
     void load();
@@ -100,7 +103,7 @@ export default function NotificationsPage() {
         );
       }
     } catch (e) {
-      setError(errMsg(e));
+      setError(errMsg(e, ui));
     } finally {
       setBusyId(null);
     }
@@ -117,7 +120,7 @@ export default function NotificationsPage() {
         await load();
       }
     } catch (e) {
-      setError(errMsg(e));
+      setError(errMsg(e, ui));
     } finally {
       setBusy(false);
     }
@@ -131,12 +134,12 @@ export default function NotificationsPage() {
         title="Notifications"
         description={
           unreadOnly
-            ? `${fmtNum(items.length)} non lue(s) affichée(s) — ${fmtNum(total)} au total.`
-            : `${fmtNum(unreadOnPage)} non lue(s) sur cette page — ${fmtNum(total)} au total.`
+            ? pick(ui, `${fmtNum(items.length)} non lue(s) affichée(s) — ${fmtNum(total)} au total.`, `${fmtNum(items.length)} unread shown — ${fmtNum(total)} in total.`)
+            : pick(ui, `${fmtNum(unreadOnPage)} non lue(s) sur cette page — ${fmtNum(total)} au total.`, `${fmtNum(unreadOnPage)} unread on this page — ${fmtNum(total)} in total.`)
         }
         actions={
           <Button disabled={busy || (unreadOnly ? items.length === 0 : unreadOnPage === 0)} onClick={() => void markAll()}>
-            Tout marquer comme lu
+            {pick(ui, 'Tout marquer comme lu', 'Mark all as read')}
           </Button>
         }
       />
@@ -145,7 +148,7 @@ export default function NotificationsPage() {
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Toggle
           checked={unreadOnly}
-          label="Non lues uniquement"
+          label={pick(ui, 'Non lues uniquement', 'Unread only')}
           onChange={(v) => {
             setPage(1);
             setUnreadOnly(v);
@@ -164,16 +167,16 @@ export default function NotificationsPage() {
         <Card>
           <EmptyState
             icon={unreadOnly ? 'check' : 'bell'}
-            title={unreadOnly ? 'Aucune notification non lue' : 'Aucune notification'}
+            title={unreadOnly ? pick(ui, 'Aucune notification non lue', 'No unread notifications') : pick(ui, 'Aucune notification', 'No notifications')}
             description={
               unreadOnly
-                ? 'Tout est lu. Décochez le filtre pour revoir l\u2019historique.'
-                : 'Rien à signaler pour le moment.'
+                ? pick(ui, 'Tout est lu. Décochez le filtre pour revoir l\u2019historique.', 'All caught up. Uncheck the filter to see history again.')
+                : pick(ui, 'Rien à signaler pour le moment.', 'Nothing to report right now.')
             }
             action={
               unreadOnly ? (
                 <Button size="sm" onClick={() => setUnreadOnly(false)}>
-                  Voir tout l'historique
+                  {pick(ui, "Voir tout l'historique", 'See full history')}
                 </Button>
               ) : undefined
             }
@@ -204,10 +207,10 @@ export default function NotificationsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-sm font-semibold">
-                      {title ?? (hasData ? 'Incident critique' : shortType(n.type))}
+                      {title ?? (hasData ? pick(ui, 'Incident critique', 'Critical incident') : shortType(n.type))}
                     </p>
-                    <span className="font-mono text-xs text-ink-faint" title={fullDate(n.created_at)}>
-                      {timeAgo(n.created_at)}
+                    <span className="font-mono text-xs text-ink-faint" title={fullDate(n.created_at, ui)}>
+                      {timeAgo(n.created_at, ui)}
                     </span>
                   </div>
                   <p className="mt-0.5 font-mono text-xs text-ink-faint">
@@ -218,25 +221,25 @@ export default function NotificationsPage() {
                   )}
                   {!hasData && (
                     <p className="mt-1 text-sm text-ink-faint">
-                      Détails indisponibles pour cette notification.
+                      {pick(ui, 'Détails indisponibles pour cette notification.', 'Details unavailable for this notification.')}
                     </p>
                   )}
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    {urgency && <Badge tone={urgencyTone(urgency)}>{URGENCY_FR[urgency] ?? urgency}</Badge>}
+                    {urgency && <Badge tone={urgencyTone(urgency)}>{(ui === 'en' ? URGENCY_EN : URGENCY_FR)[urgency] ?? urgency}</Badge>}
                     {affected !== null && (
                       <span className="font-mono text-xs text-ink-faint">
-                        {fmtNum(affected)} élèves
+                        {pick(ui, `${fmtNum(affected)} élèves`, `${fmtNum(affected)} students`)}
                       </span>
                     )}
                     {score !== null && (
                       <span className="font-mono text-xs text-ink-faint">
-                        Priorité {fmtNum(Math.round(score))}/100
+                        {pick(ui, `Priorité ${fmtNum(Math.round(score))}/100`, `Priority ${fmtNum(Math.round(score))}/100`)}
                       </span>
                     )}
                   </div>
                   {hasData && (
                     <details className="mt-1">
-                      <summary className="cursor-pointer text-xs text-ink-soft">Détails bruts</summary>
+                      <summary className="cursor-pointer text-xs text-ink-soft">{pick(ui, 'Détails bruts', 'Raw details')}</summary>
                       <div className="mt-1">
                         <Pretty data={n.data} />
                       </div>
@@ -250,12 +253,12 @@ export default function NotificationsPage() {
                       variant="primary"
                       onClick={() => setDetail({ kind: 'incident', id: incidentId })}
                     >
-                      Voir l'incident
+                      {pick(ui, "Voir l'incident", 'See incident')}
                     </Button>
                   )}
                   {!n.read_at && (
                     <Button size="sm" variant="ghost" disabled={rowBusy} onClick={() => void markRead(n.id)}>
-                      {rowBusy ? '…' : 'Marquer lu'}
+                      {rowBusy ? '…' : pick(ui, 'Marquer lu', 'Mark read')}
                     </Button>
                   )}
                 </div>
@@ -280,6 +283,7 @@ export default function NotificationsPage() {
         detail={detail}
         onClose={() => setDetail(null)}
         onDetail={(kind, id) => setDetail({ kind, id })}
+        lang={ui}
       />
     </div>
   );

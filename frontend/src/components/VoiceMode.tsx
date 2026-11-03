@@ -4,6 +4,7 @@ import type { AgentCard, ChatHistoryMessage, VoiceLanguage } from '../lib/api';
 import { getCachedTtsUrl, getSynthesizedUrl, ttsCacheKey } from '../lib/ttsCache';
 import { ELAPSED_TICK_MS, MAX_RECORD_BYTES, MAX_RECORD_MS, MAX_VOICE_MESSAGE, SPEECH_TEXT_MAX_LEN } from '../lib/voice-limits';
 import { renderRichText } from '../lib/richtext';
+import { pick, useUILang } from '../lib/i18n';
 import { SentinelOrb } from './SentinelOrb';
 import type { OrbState } from './SentinelOrb';
 import { AgentCardList, FollowUps } from './AgentCards';
@@ -22,8 +23,9 @@ import { Icon } from './icons';
  * guidé backend, guided:true toujours envoyé). Aucun SSE : converse classique uniquement.
  * ========================================================================== */
 
-/** Suffixe FR ajouté quand une longue dictée est coupée (une phrase simple, parcours analphabète). */
-const LONG_MESSAGE_SUFFIX = '…(message long, suite coupée : précisez en une phrase)';
+/** Suffixe ajouté quand une longue dictée est coupée (une phrase simple, parcours analphabète). */
+const longMessageSuffix = (lang: string | undefined): string =>
+  pick(lang, '…(message long, suite coupée : précisez en une phrase)', '…(long message, rest cut off: clarify in one sentence)');
 
 /** Longueur minimale gardée à la coupe (évite un résidu trop court). */
 const MIN_KEPT_MESSAGE = 400;
@@ -33,15 +35,15 @@ const MIN_KEPT_MESSAGE = 400;
  * caractères, puis ajoute le suffixe FR. Repli : dernière espace, puis coupe
  * dure. Le résultat reste sous la limite backend : jamais de 422, jamais perdu.
  */
-function truncateLongVoiceMessage(text: string): string {
+function truncateLongVoiceMessage(text: string, lang: string | undefined): string {
   if (text.length <= MAX_VOICE_MESSAGE) return text;
   const head = text.slice(0, MAX_VOICE_MESSAGE);
   let cut = -1;
   for (const end of ['.', '!', '?', '…', '\n']) cut = Math.max(cut, head.lastIndexOf(end));
-  if (cut >= MIN_KEPT_MESSAGE) return `${head.slice(0, cut + 1).trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+  if (cut >= MIN_KEPT_MESSAGE) return `${head.slice(0, cut + 1).trimEnd()}${longMessageSuffix(lang)}`;
   const space = head.lastIndexOf(' ');
-  if (space >= MIN_KEPT_MESSAGE) return `${head.slice(0, space).trimEnd()}${LONG_MESSAGE_SUFFIX}`;
-  return `${head.trimEnd()}${LONG_MESSAGE_SUFFIX}`;
+  if (space >= MIN_KEPT_MESSAGE) return `${head.slice(0, space).trimEnd()}${longMessageSuffix(lang)}`;
+  return `${head.trimEnd()}${longMessageSuffix(lang)}`;
 }
 
 /** Même clé que la console : le Mode Voix reprend la langue déjà choisie. */
@@ -93,22 +95,22 @@ function cleanupForSpeech(text: string): string {
     .slice(0, SPEECH_TEXT_MAX_LEN);
 }
 
-function micGuidance(err: unknown): string {
+function micGuidance(err: unknown, lang: string | undefined): string {
   if (err instanceof DOMException || err instanceof Error) {
     switch (err.name) {
       case 'NotAllowedError':
       case 'SecurityError':
-        return 'Micro refusé. Autorisez le micro dans le navigateur, puis touchez Parler.';
+        return pick(lang, 'Micro refusé. Autorisez le micro dans le navigateur, puis touchez Parler.', 'Microphone blocked. Allow the microphone in the browser, then tap Talk.');
       case 'NotFoundError':
       case 'OverconstrainedError':
-        return 'Aucun micro sur cet appareil. Branchez un micro, puis réessayez.';
+        return pick(lang, 'Aucun micro sur cet appareil. Branchez un micro, puis réessayez.', 'No microphone on this device. Plug one in, then try again.');
       case 'NotReadableError':
-        return 'Micro déjà utilisé ailleurs. Fermez l’autre application, puis réessayez.';
+        return pick(lang, 'Micro déjà utilisé ailleurs. Fermez l’autre application, puis réessayez.', 'Microphone already in use elsewhere. Close the other app, then try again.');
       case 'AbortError':
-        return 'Enregistrement interrompu. Touchez Parler pour réessayer.';
+        return pick(lang, 'Enregistrement interrompu. Touchez Parler pour réessayer.', 'Recording interrupted. Tap Talk to try again.');
     }
   }
-  return 'Micro impossible. Vérifiez votre micro, puis touchez Parler.';
+  return pick(lang, 'Micro impossible. Vérifiez votre micro, puis touchez Parler.', 'Microphone unavailable. Check your microphone, then tap Talk.');
 }
 
 // --- Icônes locales (gros boutons image, aria-hidden : le sens est en aria-label) ---
@@ -146,20 +148,21 @@ function ReplayIcon({ className = 'h-8 w-8' }: { className?: string }) {
 // --- Bouton d'ouverture (visible depuis la console) ---------------------------
 
 export function VoiceModeToggle({ onOpen, size = 'md' }: { onOpen: () => void; size?: 'md' | 'lg' }) {
+  const ui = useUILang();
   if (size === 'lg') {
     return (
       <button
         type="button"
         onClick={onOpen}
-        aria-label="Ouvrir le Mode Voix : parler à Sentinel en plein écran"
-        title="Mode Voix"
+        aria-label={pick(ui, 'Ouvrir le Mode Voix : parler à Sentinel en plein écran', 'Open Voice Mode: talk to Sentinel in full screen')}
+        title={pick(ui, 'Mode Voix', 'Voice Mode')}
         className="group flex flex-col items-center gap-2 rounded-2xl px-6 py-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <span className="glass flex h-20 w-20 items-center justify-center rounded-full text-teal-700 transition-transform duration-150 ease-snap group-hover:scale-105 group-active:scale-95 motion-reduce:transition-none motion-reduce:group-hover:scale-100 dark:text-teal-300">
           <MicIcon className="h-9 w-9" />
         </span>
         <span aria-hidden="true" className="text-sm font-semibold text-ink-soft group-hover:text-ink">
-          Mode Voix
+          {pick(ui, 'Mode Voix', 'Voice Mode')}
         </span>
       </button>
     );
@@ -168,8 +171,8 @@ export function VoiceModeToggle({ onOpen, size = 'md' }: { onOpen: () => void; s
     <button
       type="button"
       onClick={onOpen}
-      aria-label="Ouvrir le Mode Voix : parler à Sentinel en plein écran"
-      title="Mode Voix"
+      aria-label={pick(ui, 'Ouvrir le Mode Voix : parler à Sentinel en plein écran', 'Open Voice Mode: talk to Sentinel in full screen')}
+      title={pick(ui, 'Mode Voix', 'Voice Mode')}
       className="glass flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink-soft transition-[transform,color] duration-150 ease-snap hover:text-ink active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100"
     >
       <MicIcon className="h-5 w-5" />
@@ -182,6 +185,7 @@ export function VoiceModeToggle({ onOpen, size = 'md' }: { onOpen: () => void; s
 type BusyKind = 'transcribe' | 'answer' | null;
 
 export function VoiceMode({ onClose }: { onClose: () => void }) {
+  const ui = useUILang();
   const [voiceLang] = useState<VoiceLanguage>(() => readVoiceLang());
   const [calm] = useState(
     () =>
@@ -199,6 +203,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
   const [heard, setHeard] = useState<string | null>(null);
   const [answer, setAnswer] = useState<string | null>(null);
   const [cards, setCards] = useState<AgentCard[]>([]);
+  const [cardsLang, setCardsLang] = useState<string>('fr');
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [history, setHistory] = useState<ChatHistoryMessage[]>([]);
   const [lastKey, setLastKey] = useState<string | null>(null);
@@ -223,18 +228,18 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
   const orb: OrbState = recording ? 'listening' : busy ? 'thinking' : playing ? 'speaking' : 'idle';
 
   const statusText = recording
-    ? 'Parlez, je vous écoute.'
+    ? pick(ui, 'Parlez, je vous écoute.', 'Speak, I am listening.')
     : busyKind === 'transcribe'
-      ? 'J’écris ce que vous avez dit.'
+      ? pick(ui, 'J’écris ce que vous avez dit.', 'I am writing down what you said.')
       : busy
-        ? 'Je réfléchis.'
+        ? pick(ui, 'Je réfléchis.', 'I am thinking.')
         : playing
-          ? 'Écoutez. Touchez l’image pour couper le son.'
+          ? pick(ui, 'Écoutez. Touchez l’image pour couper le son.', 'Listen. Tap the picture to mute.')
           : needsTap
-            ? 'Touchez Réécouter pour entendre.'
+            ? pick(ui, 'Touchez Réécouter pour entendre.', 'Tap Replay to listen.')
             : answer !== null
-              ? 'Touchez le micro pour continuer.'
-              : 'Touchez le micro et parlez.';
+              ? pick(ui, 'Touchez le micro pour continuer.', 'Tap the microphone to continue.')
+              : pick(ui, 'Touchez le micro et parlez.', 'Tap the microphone and speak.');
 
   // --- Cycle de vie : focus, verrou du scroll, Échap, nettoyage ---------------
 
@@ -341,12 +346,12 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
       if (!mountedRef.current) return;
       if (url === null) {
         setNeedsTap(true);
-        setError('Voix coupée : lisez la réponse, ou touchez le micro pour réessayer.');
+        setError(pick(ui, 'Voix coupée : lisez la réponse, ou touchez le micro pour réessayer.', 'Voice off: read the answer, or tap the microphone to try again.'));
         return;
       }
       await playUrl(url);
     },
-    [playUrl, voiceLang],
+    [playUrl, voiceLang, ui],
   );
 
   /** Échange converse + affichage cards + lecture auto. Le verrou busy est déjà posé. */
@@ -367,6 +372,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
         );
         setAnswer(text);
         setCards(res.cards ?? []);
+        setCardsLang(res.lang ?? 'fr');
         setFollowUps(res.follow_ups ?? []);
         if (text.trim() !== '') await speak(text);
       } catch (err) {
@@ -375,19 +381,19 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
         if (err instanceof ApiError && err.status === 422) {
           setError(err.message);
         } else {
-          setError(err instanceof Error ? err.message : 'Sentinel est injoignable. Touchez le micro pour réessayer.');
+          setError(err instanceof Error ? err.message : pick(ui, 'Sentinel est injoignable. Touchez le micro pour réessayer.', 'Sentinel is unreachable. Tap the microphone to try again.'));
         }
       } finally {
         ctrlRef.current = null;
       }
     },
-    [speak],
+    [speak, ui],
   );
 
   /** Envoie un texte (transcription, Oui/Non, relance) dans la boucle mains-libres. */
   const ask = useCallback(
     async (raw: string) => {
-      const message = truncateLongVoiceMessage(raw.trim());
+      const message = truncateLongVoiceMessage(raw.trim(), ui);
       if (message === '' || busy || recording) return;
       stopAudio();
       setNeedsTap(false);
@@ -407,7 +413,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
         }
       }
     },
-    [busy, recording, converse, history, stopAudio],
+    [busy, recording, converse, history, stopAudio, ui],
   );
 
   const askRef = useRef(ask);
@@ -440,11 +446,11 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
         if (!mountedRef.current) return;
         const raw = res.transcript.trim();
         if (raw === '') {
-          setError('On n’a rien compris. Parlez plus près du micro, puis touchez Parler.');
+          setError(pick(ui, 'On n’a rien compris. Parlez plus près du micro, puis touchez Parler.', 'Could not understand. Speak closer to the microphone, then tap Talk.'));
           return;
         }
         // Longue dictée : texte coupé proprement + suffixe FR, entendu affiché tronqué.
-        const text = truncateLongVoiceMessage(raw);
+        const text = truncateLongVoiceMessage(raw, ui);
         setHeard(text);
         setBusyKind('answer');
         setRequestStart(Date.now());
@@ -452,7 +458,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
         await converse(text, history.slice(-19));
       } catch (err) {
         if (!mountedRef.current) return;
-        setError(err instanceof Error ? err.message : 'Transcription impossible. Touchez Parler pour réessayer.');
+        setError(err instanceof Error ? err.message : pick(ui, 'Transcription impossible. Touchez Parler pour réessayer.', 'Transcription failed. Tap Talk to try again.'));
       } finally {
         if (mountedRef.current) {
           setBusy(false);
@@ -461,7 +467,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
         }
       }
     },
-    [converse, history, voiceLang],
+    [converse, history, voiceLang, ui],
   );
 
   const handleBlobRef = useRef(handleBlob);
@@ -471,22 +477,22 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
 
   const startRecord = useCallback(async () => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setError('Ce navigateur ne permet pas de parler. Écrivez plutôt dans la console.');
+      setError(pick(ui, 'Ce navigateur ne permet pas de parler. Écrivez plutôt dans la console.', 'This browser does not support talking. Type in the console instead.'));
       return;
     }
     if (typeof MediaRecorder === 'undefined') {
-      setError('Ce navigateur ne permet pas de parler. Écrivez plutôt dans la console.');
+      setError(pick(ui, 'Ce navigateur ne permet pas de parler. Écrivez plutôt dans la console.', 'This browser does not support talking. Type in the console instead.'));
       return;
     }
     if (typeof window !== 'undefined' && !window.isSecureContext) {
-      setError('Parler demande une page sécurisée (HTTPS). Écrivez plutôt dans la console.');
+      setError(pick(ui, 'Parler demande une page sécurisée (HTTPS). Écrivez plutôt dans la console.', 'Talking needs a secure page (HTTPS). Type in the console instead.'));
       return;
     }
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      setError(micGuidance(err));
+      setError(micGuidance(err, ui));
       return;
     }
     const mimeType = pickMimeType();
@@ -495,7 +501,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
       recorder = mimeType !== '' ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     } catch {
       stream.getTracks().forEach((t) => t.stop());
-      setError('Parler n’a pas démarré. Touchez Parler pour réessayer.');
+      setError(pick(ui, 'Parler n’a pas démarré. Touchez Parler pour réessayer.', 'Talk did not start. Tap Talk to try again.'));
       return;
     }
     streamRef.current = stream;
@@ -518,11 +524,11 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
       }
       if (wasCancelled || !mountedRef.current) return;
       if (blob.size === 0) {
-        setError('On n’a rien entendu. Parlez plus près du micro, puis touchez Parler.');
+        setError(pick(ui, 'On n’a rien entendu. Parlez plus près du micro, puis touchez Parler.', 'Heard nothing. Speak closer to the microphone, then tap Talk.'));
         return;
       }
       if (blob.size > MAX_RECORD_BYTES) {
-        setError('Message trop long : parlez plus court, puis touchez Parler.');
+        setError(pick(ui, 'Message trop long : parlez plus court, puis touchez Parler.', 'Message too long: speak shorter, then tap Talk.'));
         return;
       }
       void handleBlobRef.current(blob);
@@ -532,14 +538,14 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
       if (mountedRef.current) {
         setRecording(false);
         setRecElapsed(0);
-        setError('Parler s’est interrompu. Touchez Parler pour réessayer.');
+        setError(pick(ui, 'Parler s’est interrompu. Touchez Parler pour réessayer.', 'Talk was interrupted. Tap Talk to try again.'));
       }
     };
     try {
       recorder.start(250);
     } catch {
       stopStream();
-      setError('Parler n’a pas démarré. Touchez Parler pour réessayer.');
+      setError(pick(ui, 'Parler n’a pas démarré. Touchez Parler pour réessayer.', 'Talk did not start. Tap Talk to try again.'));
       return;
     }
     recStartRef.current = Date.now();
@@ -553,7 +559,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
         if (rec !== null && rec.state !== 'inactive') rec.stop();
       }
     }, 250);
-  }, [stopStream]);
+  }, [stopStream, ui]);
 
   const stopRecord = useCallback(
     (cancelled: boolean) => {
@@ -594,16 +600,16 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
     if (lastKey === null) return;
     const url = getCachedTtsUrl(lastKey);
     if (url === undefined) {
-      setError('Réécoute impossible : touchez le micro pour poser une nouvelle question.');
+      setError(pick(ui, 'Réécoute impossible : touchez le micro pour poser une nouvelle question.', 'Replay unavailable: tap the microphone to ask a new question.'));
       return;
     }
     setError(null);
     void playUrl(url);
-  }, [busy, recording, playing, lastKey, playUrl, stopAudio]);
+  }, [busy, recording, playing, lastKey, playUrl, stopAudio, ui]);
 
   /** Oui/Non envoyés comme message : prépare la confirmation guidée backend. */
   const answerYesNo = useCallback(
-    (value: 'Oui' | 'Non') => {
+    (value: string) => {
       if (busy || recording) return;
       void askRef.current(value);
     },
@@ -625,18 +631,18 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Mode Voix : parler à Sentinel"
+      aria-label={pick(ui, 'Mode Voix : parler à Sentinel', 'Voice Mode: talk to Sentinel')}
       className="fixed inset-0 z-[60] flex flex-col bg-canvas/95 backdrop-blur-md"
     >
       <div className="flex shrink-0 items-center justify-between px-4 pt-4 sm:px-6">
         <p aria-hidden="true" className="font-display text-lg font-bold tracking-tight">
-          Mode Voix
+          {pick(ui, 'Mode Voix', 'Voice Mode')}
         </p>
         <button
           type="button"
           onClick={close}
-          aria-label="Fermer le Mode Voix"
-          title="Fermer"
+          aria-label={pick(ui, 'Fermer le Mode Voix', 'Close Voice Mode')}
+          title={pick(ui, 'Fermer', 'Close')}
           className={`${roundBtn} h-14 w-14 border border-line bg-card text-ink`}
         >
           <Icon name="x" className="h-7 w-7" />
@@ -648,8 +654,8 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             onClick={stopAudio}
-            aria-label="Arrêter la lecture"
-            title="Arrêter la lecture"
+            aria-label={pick(ui, 'Arrêter la lecture', 'Stop playback')}
+            title={pick(ui, 'Arrêter la lecture', 'Stop playback')}
             className="mt-1 shrink-0 rounded-full focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           >
             <SentinelOrb state={orb} size="xl" />
@@ -700,7 +706,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
             <div className="rounded-2xl border border-line bg-card p-4 text-[16px] leading-7">
               {renderRichText(answer)}
             </div>
-            <AgentCardList cards={cards} onAsk={(q) => void askRef.current(q)} />
+            <AgentCardList cards={cards} onAsk={(q) => void askRef.current(q)} lang={cardsLang} />
             <FollowUps items={followUps} onAsk={(q) => void askRef.current(q)} />
           </div>
         )}
@@ -714,9 +720,9 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
               type="button"
               onClick={toggleTalk}
               disabled={busy}
-              aria-label={recording ? 'Arrêter et envoyer' : 'Parler à Sentinel'}
+              aria-label={recording ? pick(ui, 'Arrêter et envoyer', 'Stop and send') : pick(ui, 'Parler à Sentinel', 'Talk to Sentinel')}
               aria-pressed={recording}
-              title={recording ? 'Arrêter et envoyer' : 'Parler'}
+              title={recording ? pick(ui, 'Arrêter et envoyer', 'Stop and send') : pick(ui, 'Parler', 'Talk')}
               className={`${roundBtn} h-20 w-20 text-white shadow-lg ${
                 recording ? 'bg-red-600' : 'bg-teal-700 hover:bg-teal-600'
               }`}
@@ -724,7 +730,7 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
               {recording ? <StopSquareIcon /> : <MicIcon />}
             </button>
             <span aria-hidden="true" className="text-xs font-medium text-ink-soft">
-              {recording ? 'Envoyer' : 'Parler'}
+              {recording ? pick(ui, 'Envoyer', 'Send') : pick(ui, 'Parler', 'Talk')}
             </span>
           </span>
 
@@ -733,8 +739,8 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
               type="button"
               onClick={repeat}
               disabled={busy || recording || (!playing && lastKey === null)}
-              aria-label={playing ? 'Arrêter la lecture' : 'Réécouter la dernière réponse'}
-              title={playing ? 'Arrêter' : 'Réécouter'}
+              aria-label={playing ? pick(ui, 'Arrêter la lecture', 'Stop playback') : pick(ui, 'Réécouter la dernière réponse', 'Replay the last answer')}
+              title={playing ? pick(ui, 'Arrêter', 'Stop') : pick(ui, 'Réécouter', 'Replay')}
               className={`${roundBtn} h-20 w-20 border-2 border-line bg-card text-teal-700 dark:text-teal-300 ${
                 needsTap && !playing ? 'border-amber-400 ring-4 ring-amber-400/40 motion-safe:animate-pulse' : ''
               }`}
@@ -742,39 +748,39 @@ export function VoiceMode({ onClose }: { onClose: () => void }) {
               {playing ? <StopSquareIcon /> : <ReplayIcon />}
             </button>
             <span aria-hidden="true" className="text-xs font-medium text-ink-soft">
-              Réécouter
+              {pick(ui, 'Réécouter', 'Replay')}
             </span>
           </span>
 
-          <span role="group" aria-label="Répondre par oui ou par non" className="flex gap-3">
+          <span role="group" aria-label={pick(ui, 'Répondre par oui ou par non', 'Answer yes or no')} className="flex gap-3">
             <span className="flex flex-col items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => answerYesNo('Oui')}
+                onClick={() => answerYesNo(pick(ui, 'Oui', 'Yes'))}
                 disabled={busy || recording}
-                aria-label="Oui"
-                title="Oui"
+                aria-label={pick(ui, 'Oui', 'Yes')}
+                title={pick(ui, 'Oui', 'Yes')}
                 className={`${roundBtn} h-16 w-16 bg-teal-700 text-white shadow-lg hover:bg-teal-600`}
               >
                 <Icon name="check" className="h-8 w-8" />
               </button>
               <span aria-hidden="true" className="text-xs font-medium text-ink-soft">
-                Oui
+                {pick(ui, 'Oui', 'Yes')}
               </span>
             </span>
             <span className="flex flex-col items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => answerYesNo('Non')}
+                onClick={() => answerYesNo(pick(ui, 'Non', 'No'))}
                 disabled={busy || recording}
-                aria-label="Non"
-                title="Non"
+                aria-label={pick(ui, 'Non', 'No')}
+                title={pick(ui, 'Non', 'No')}
                 className={`${roundBtn} h-16 w-16 border-2 border-red-700/50 bg-card text-red-700 dark:text-red-400`}
               >
                 <Icon name="x" className="h-8 w-8" />
               </button>
               <span aria-hidden="true" className="text-xs font-medium text-ink-soft">
-                Non
+                {pick(ui, 'Non', 'No')}
               </span>
             </span>
           </span>

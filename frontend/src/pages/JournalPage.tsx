@@ -6,31 +6,68 @@ import { ErrorBanner, Pager, Pretty } from '../components/crud';
 import { Select } from '../components/controls';
 import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
-import { CATEGORY_FR, CHANNEL_FR, INPUT_CLS, URGENCY_FR, fmtDate, fmtNum, urgencyTone } from '../lib/wash';
+import { CATEGORY_FR, CHANNEL_FR, INPUT_CLS, URGENCY_EN, URGENCY_FR, fmtNum, urgencyTone } from '../lib/wash';
+import { localeFor } from '../lib/locale';
+import { pick, useUILang } from '../lib/i18n';
 import { DEFAULT_PER_PAGE } from '../lib/pagination';
+
+// Libellés EN (miroirs locaux : lib/wash.ts hors périmètre).
+const CATEGORY_EN: Record<string, string> = {
+  water_point: 'Water point',
+  toilets_latrines: 'Toilets / latrines',
+  handwashing: 'Handwashing',
+  sewage_drainage: 'Sewage / drainage',
+};
+const CHANNEL_EN: Record<string, string> = {
+  voice: 'Voice',
+  text: 'Text',
+  photo: 'Photo',
+  webrtc_call: 'Call',
+};
+
+/** Même format que wash.fmtDate, avec la locale de la langue UI. */
+const fmtDateL = (iso: string | null, lang: string | undefined): string =>
+  iso
+    ? new Date(iso).toLocaleString(localeFor(lang), {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '—';
+
+/** Retrouve le code urgence depuis son libellé FR ou EN (badge du résumé triage). */
+const urgencyCodeFromLabel = (label: string): string => {
+  for (const [code, fr] of Object.entries(URGENCY_FR)) if (fr === label) return code;
+  for (const [code, en] of Object.entries(URGENCY_EN)) if (en === label) return code;
+  return 'low';
+};
 
 // Valeurs réelles de `analysis_type` observées dans backend/app (lecture seule) :
 // triage (IncidentTriageService), repair (WashIncidentController),
 // copilot / equity / epidemic / agent (WashAgentController), agent_action (AgentProposalService).
 const ANALYSIS_TYPES = [
-  { value: 'triage', label: 'Triage', tone: 'info' },
-  { value: 'repair', label: 'Réparation', tone: 'warn' },
-  { value: 'copilot', label: 'Copilote', tone: 'accent' },
-  { value: 'equity', label: 'Équité', tone: 'success' },
-  { value: 'epidemic', label: 'Épidémie', tone: 'danger' },
-  { value: 'agent', label: 'Agent', tone: 'neutral' },
-  { value: 'agent_action', label: 'Action agent', tone: 'success' },
+  { value: 'triage', label: 'Triage', labelEn: 'Triage', tone: 'info' },
+  { value: 'repair', label: 'Réparation', labelEn: 'Repair', tone: 'warn' },
+  { value: 'copilot', label: 'Copilote', labelEn: 'Copilot', tone: 'accent' },
+  { value: 'equity', label: 'Équité', labelEn: 'Equity', tone: 'success' },
+  { value: 'epidemic', label: 'Épidémie', labelEn: 'Epidemic', tone: 'danger' },
+  { value: 'agent', label: 'Agent', labelEn: 'Agent', tone: 'neutral' },
+  { value: 'agent_action', label: 'Action agent', labelEn: 'Agent action', tone: 'success' },
 ] as const;
 
 type Tone = 'neutral' | 'accent' | 'success' | 'warn' | 'danger' | 'info';
 
-const typeMeta = (t: string): { label: string; tone: Tone } =>
-  (ANALYSIS_TYPES.find((e) => e.value === t) as { label: string; tone: Tone } | undefined) ?? {
-    label: t,
-    tone: 'neutral',
-  };
+const typeMeta = (t: string, lang?: string): { label: string; tone: Tone } => {
+  const found = ANALYSIS_TYPES.find((e) => e.value === t) as
+    | { label: string; labelEn: string; tone: Tone }
+    | undefined;
+  if (!found) return { label: t, tone: 'neutral' };
+  return { label: pick(lang, found.label, found.labelEn), tone: found.tone };
+};
 
-const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
+const errMsg = (e: unknown, lang?: string): string =>
+  (e instanceof ApiError ? e.message : pick(lang, 'Erreur réseau.', 'Network error.'));
 const confPct = (v: number | null): number => {
   if (v == null) return 0;
   return v > 1 ? v : v * 100;
@@ -42,10 +79,10 @@ const num = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) ? v : null;
 const obj = (v: unknown): Record<string, unknown> | null =>
   typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-const fmtScalar = (v: unknown): string | null => {
+const fmtScalar = (v: unknown, lang?: string): string | null => {
   if (typeof v === 'string' && v !== '') return v;
   if (typeof v === 'number' && Number.isFinite(v)) return fmtNum(Math.round(v * 100) / 100);
-  if (typeof v === 'boolean') return v ? 'Oui' : 'Non';
+  if (typeof v === 'boolean') return v ? pick(lang, 'Oui', 'Yes') : pick(lang, 'Non', 'No');
   return null;
 };
 
@@ -75,7 +112,10 @@ const pushRow = (rows: SummaryRow[], label: string, value: string | null): void 
 };
 
 /** Résumé lisible construit selon le type d'analyse et la forme réelle des payloads backend. */
-const buildSummary = (a: AiAnalysis): Summary => {
+const buildSummary = (a: AiAnalysis, lang: string | undefined): Summary => {
+  const catMap = lang === 'en' ? CATEGORY_EN : CATEGORY_FR;
+  const chanMap = lang === 'en' ? CHANNEL_EN : CHANNEL_FR;
+  const urgMap = lang === 'en' ? URGENCY_EN : URGENCY_FR;
   const rows: SummaryRow[] = [];
   const input = obj(a.input_payload);
   const output = obj(a.output_payload);
@@ -84,30 +124,30 @@ const buildSummary = (a: AiAnalysis): Summary => {
     const ext = obj(output?.extraction);
     const dup = obj(output?.duplicate);
     const headline = str(ext?.short_summary);
-    pushRow(rows, 'Canal', CHANNEL_FR[str(input?.channel) ?? ''] ?? str(input?.channel));
-    pushRow(rows, 'Infrastructure', CATEGORY_FR[str(ext?.infrastructure_type) ?? ''] ?? str(ext?.infrastructure_type));
-    pushRow(rows, 'Type de panne', str(ext?.issue_type));
+    pushRow(rows, pick(lang, 'Canal', 'Channel'), chanMap[str(input?.channel) ?? ''] ?? str(input?.channel));
+    pushRow(rows, 'Infrastructure', catMap[str(ext?.infrastructure_type) ?? ''] ?? str(ext?.infrastructure_type));
+    pushRow(rows, pick(lang, 'Type de panne', 'Failure type'), str(ext?.issue_type));
     const urg = str(ext?.urgency_level);
-    pushRow(rows, 'Urgence', urg ? (URGENCY_FR[urg] ?? urg) : null);
+    pushRow(rows, pick(lang, 'Urgence', 'Urgency'), urg ? (urgMap[urg] ?? urg) : null);
     const affected = num(ext?.estimated_affected_students);
-    pushRow(rows, 'Élèves concernés', affected !== null ? fmtNum(affected) : null);
+    pushRow(rows, pick(lang, 'Élèves concernés', 'Students affected'), affected !== null ? fmtNum(affected) : null);
     const score = num(ext?.recommended_priority_score);
-    pushRow(rows, 'Score de priorité', score !== null ? `${fmtNum(Math.round(score))} / 100` : null);
-    pushRow(rows, 'Risque sanitaire', str(ext?.health_hazard_risk));
+    pushRow(rows, pick(lang, 'Score de priorité', 'Priority score'), score !== null ? `${fmtNum(Math.round(score))} / 100` : null);
+    pushRow(rows, pick(lang, 'Risque sanitaire', 'Health risk'), str(ext?.health_hazard_risk));
     if (dup) {
       const isDup = dup.is_duplicate === true;
       const matched = num(dup.matched_incident_id);
       const sim = num(dup.similarity_score);
       pushRow(
         rows,
-        'Doublon',
+        pick(lang, 'Doublon', 'Duplicate'),
         isDup
-          ? `Oui${matched !== null ? ` — incident #${matched}` : ''}${sim !== null ? ` (${Math.round(sim * 100)} %)` : ''}`
-          : 'Non — nouvel incident',
+          ? pick(lang, `Oui${matched !== null ? ` — incident #${matched}` : ''}${sim !== null ? ` (${Math.round(sim * 100)} %)` : ''}`, `Yes${matched !== null ? ` — incident #${matched}` : ''}${sim !== null ? ` (${Math.round(sim * 100)}%)` : ''}`)
+          : pick(lang, 'Non — nouvel incident', 'No — new incident'),
       );
     }
     if (ext && typeof ext.human_overrides !== 'undefined' && ext.human_overrides !== null) {
-      pushRow(rows, 'Ajusté par un humain', 'Oui');
+      pushRow(rows, pick(lang, 'Ajusté par un humain', 'Adjusted by a human'), pick(lang, 'Oui', 'Yes'));
     }
     return { headline, rows };
   }
@@ -120,16 +160,16 @@ const buildSummary = (a: AiAnalysis): Summary => {
     const rawCards = output?.cards;
     const cards = Array.isArray(rawCards) ? rawCards : [];
     pushRow(rows, 'Question', str(input?.message));
-    pushRow(rows, 'Outils exécutés', tools.length > 0 ? tools.join(', ') : 'Aucun');
-    pushRow(rows, 'Cartes', cards.length > 0 ? fmtNum(cards.length) : null);
+    pushRow(rows, pick(lang, 'Outils exécutés', 'Tools run'), tools.length > 0 ? tools.join(', ') : pick(lang, 'Aucun', 'None'));
+    pushRow(rows, pick(lang, 'Cartes', 'Cards'), cards.length > 0 ? fmtNum(cards.length) : null);
     return { headline: findHeadline(output), rows };
   }
 
   if (a.analysis_type === 'agent_action') {
     pushRow(rows, 'Action', str(input?.action));
     const pid = num(input?.proposal_id);
-    pushRow(rows, 'Proposition', pid !== null ? `#${pid}` : null);
-    pushRow(rows, 'Statut', str(output?.status));
+    pushRow(rows, pick(lang, 'Proposition', 'Proposal'), pid !== null ? `#${pid}` : null);
+    pushRow(rows, pick(lang, 'Statut', 'Status'), str(output?.status));
     return { headline: str(output?.summary) ?? findHeadline(output), rows };
   }
 
@@ -142,14 +182,14 @@ const buildSummary = (a: AiAnalysis): Summary => {
   if (a.analysis_type === 'equity') {
     pushRow(rows, 'District', str(input?.district));
     const n = num(input?.schools);
-    pushRow(rows, 'Écoles analysées', n !== null ? fmtNum(n) : null);
+    pushRow(rows, pick(lang, 'Écoles analysées', 'Schools analyzed'), n !== null ? fmtNum(n) : null);
     return { headline: findHeadline(output), rows };
   }
 
   if (a.analysis_type === 'epidemic') {
     pushRow(rows, 'District', str(input?.district));
     const n = num(input?.incidents);
-    pushRow(rows, 'Incidents récents analysés', n !== null ? fmtNum(n) : null);
+    pushRow(rows, pick(lang, 'Incidents récents analysés', 'Recent incidents analyzed'), n !== null ? fmtNum(n) : null);
     return { headline: findHeadline(output), rows };
   }
 
@@ -159,17 +199,17 @@ const buildSummary = (a: AiAnalysis): Summary => {
       : Array.isArray(output?.tasks)
         ? (output?.tasks as unknown[])
         : null;
-    if (steps) pushRow(rows, 'Étapes', fmtNum(steps.length));
+    if (steps) pushRow(rows, pick(lang, 'Étapes', 'Steps'), fmtNum(steps.length));
     const cost = num(output?.total_cost) ?? num(output?.estimated_cost);
-    pushRow(rows, 'Coût estimé', cost !== null ? `${fmtNum(Math.round(cost))}${str(output?.currency) ? ` ${str(output?.currency)}` : ''}` : null);
-    pushRow(rows, 'Durée estimée', str(output?.duration) ?? str(output?.estimated_duration));
+    pushRow(rows, pick(lang, 'Coût estimé', 'Estimated cost'), cost !== null ? `${fmtNum(Math.round(cost))}${str(output?.currency) ? ` ${str(output?.currency)}` : ''}` : null);
+    pushRow(rows, pick(lang, 'Durée estimée', 'Estimated duration'), str(output?.duration) ?? str(output?.estimated_duration));
     return { headline: findHeadline(output), rows };
   }
 
   // Type inconnu : repli générique sur les scalaires du payload d'entrée.
   if (input) {
     for (const [k, v] of Object.entries(input).slice(0, 6)) {
-      const s = fmtScalar(v);
+      const s = fmtScalar(v, lang);
       if (s) rows.push({ label: k, value: s });
     }
   }
@@ -177,6 +217,7 @@ const buildSummary = (a: AiAnalysis): Summary => {
 };
 
 export default function JournalPage() {
+  const ui = useUILang();
   const [items, setItems] = useState<AiAnalysis[]>([]);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(DEFAULT_PER_PAGE);
@@ -209,11 +250,11 @@ export default function JournalPage() {
       setLastPage(res.last_page);
       setTotal(res.total);
     } catch (e) {
-      setError(errMsg(e));
+      setError(errMsg(e, ui));
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, typeF, incidentF]);
+  }, [page, perPage, typeF, incidentF, ui]);
 
   useEffect(() => {
     void load();
@@ -236,14 +277,14 @@ export default function JournalPage() {
     setSelected(null);
   };
 
-  const summary = selected ? buildSummary(selected) : null;
+  const summary = selected ? buildSummary(selected, ui) : null;
   const selectedIncidentId = selected?.incident_id ?? selected?.incident?.id ?? null;
 
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
-        title="Journal IA"
-        description={`Toutes les décisions de l'IA : confiance, modèle, traçabilité — ${fmtNum(total)} analyse(s).`}
+        title={pick(ui, 'Journal IA', 'AI journal')}
+        description={pick(ui, `Toutes les décisions de l'IA : confiance, modèle, traçabilité — ${fmtNum(total)} analyse(s).`, `Every AI decision: confidence, model, traceability — ${fmtNum(total)} analyse(s).`)}
       />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
@@ -255,34 +296,34 @@ export default function JournalPage() {
         }}
       >
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-ink-soft">Type d'analyse</span>
+          <span className="mb-1 block text-xs font-medium text-ink-soft">{pick(ui, "Type d'analyse", 'Analysis type')}</span>
           <Select
             value={typeV}
             onChange={(e) => setTypeV(e.target.value)}
             className="w-48"
-            options={[{ value: '', label: 'Tous les types' },
-              ...ANALYSIS_TYPES.map((t) => ({ value: t.value, label: t.label }))]}
+            options={[{ value: '', label: pick(ui, 'Tous les types', 'All types') },
+              ...ANALYSIS_TYPES.map((t) => ({ value: t.value, label: pick(ui, t.label, t.labelEn) }))]}
           />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-ink-soft">Incident (n°)</span>
+          <span className="mb-1 block text-xs font-medium text-ink-soft">{pick(ui, 'Incident (n°)', 'Incident (#)')}</span>
           <input
             type="number"
             min={1}
             step={1}
             inputMode="numeric"
-            placeholder="ex. 12"
+            placeholder={pick(ui, 'ex. 12', 'e.g. 12')}
             value={incidentV}
             onChange={(e) => setIncidentV(e.target.value)}
             className={`${INPUT_CLS} w-32`}
           />
         </label>
         <Button type="submit" variant="primary">
-          Filtrer
+          {pick(ui, 'Filtrer', 'Filter')}
         </Button>
         {hasFilter && (
           <Button type="button" variant="ghost" onClick={resetFilters}>
-            Réinitialiser
+            {pick(ui, 'Réinitialiser', 'Reset')}
           </Button>
         )}
       </form>
@@ -300,16 +341,16 @@ export default function JournalPage() {
             <Card>
               <EmptyState
                 icon="file"
-                title="Aucune analyse"
+                title={pick(ui, 'Aucune analyse', 'No analyses')}
                 description={
                   hasFilter
-                    ? "Aucune analyse ne correspond à ces filtres."
-                    : 'Le journal est vide.'
+                    ? pick(ui, "Aucune analyse ne correspond à ces filtres.", 'No analyses match these filters.')
+                    : pick(ui, 'Le journal est vide.', 'The journal is empty.')
                 }
                 action={
                   hasFilter ? (
                     <Button size="sm" onClick={resetFilters}>
-                      Réinitialiser les filtres
+                      {pick(ui, 'Réinitialiser les filtres', 'Reset filters')}
                     </Button>
                   ) : undefined
                 }
@@ -317,7 +358,7 @@ export default function JournalPage() {
             </Card>
           )}
           {items.map((a) => {
-            const meta = typeMeta(a.analysis_type);
+            const meta = typeMeta(a.analysis_type, ui);
             const active = selected?.id === a.id;
             return (
               <button
@@ -337,14 +378,14 @@ export default function JournalPage() {
                   <span className="font-mono text-xs text-ink-faint">#{a.id}</span>
                 </div>
                 <p className="mt-1 truncate font-mono text-xs">
-                  {a.incident?.reference_code ?? (a.incident_id ? `Incident #${a.incident_id}` : 'Sans incident')} ·{' '}
-                  {a.model_used ?? 'modèle ?'}
+                  {a.incident?.reference_code ?? (a.incident_id ? `Incident #${a.incident_id}` : pick(ui, 'Sans incident', 'No incident'))} ·{' '}
+                  {a.model_used ?? pick(ui, 'modèle ?', 'model?')}
                 </p>
                 <div className="mt-1.5 flex items-center justify-between gap-2">
                   <ConfidenceMeter value={confPct(a.confidence)} />
                   <span className="font-mono text-xs text-ink-faint">
                     {a.processing_ms != null ? `${fmtNum(a.processing_ms)} ms · ` : ''}
-                    {fmtDate(a.created_at)}
+                    {fmtDateL(a.created_at, ui)}
                   </span>
                 </div>
               </button>
@@ -368,8 +409,8 @@ export default function JournalPage() {
             <Card>
               <EmptyState
                 icon="file"
-                title="Sélectionnez une analyse"
-                description="Vérifiez les entrées et sorties de chaque décision IA."
+                title={pick(ui, 'Sélectionnez une analyse', 'Select an analysis')}
+                description={pick(ui, 'Vérifiez les entrées et sorties de chaque décision IA.', 'Check the inputs and outputs of each AI decision.')}
               />
             </Card>
           )}
@@ -377,14 +418,14 @@ export default function JournalPage() {
             <Card className="space-y-4 p-4">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone={typeMeta(selected.analysis_type).tone}>
-                    {typeMeta(selected.analysis_type).label}
+                  <Badge tone={typeMeta(selected.analysis_type, ui).tone}>
+                    {typeMeta(selected.analysis_type, ui).label}
                   </Badge>
-                  <ConfidenceMeter value={confPct(selected.confidence)} label="Confiance" />
+                  <ConfidenceMeter value={confPct(selected.confidence)} label={pick(ui, 'Confiance', 'Confidence')} />
                 </div>
                 <p className="mt-2 font-mono text-xs">
-                  {selected.incident?.reference_code ?? (selected.incident_id ? `Incident #${selected.incident_id}` : 'Sans incident')} ·{' '}
-                  {selected.model_used ?? 'modèle ?'} · {fmtDate(selected.created_at)}
+                  {selected.incident?.reference_code ?? (selected.incident_id ? `Incident #${selected.incident_id}` : pick(ui, 'Sans incident', 'No incident'))} ·{' '}
+                  {selected.model_used ?? pick(ui, 'modèle ?', 'model?')} · {fmtDateL(selected.created_at, ui)}
                   {selected.processing_ms != null ? ` · ${fmtNum(selected.processing_ms)} ms` : ''}
                 </p>
                 {selected.incident?.school && (
@@ -398,14 +439,14 @@ export default function JournalPage() {
                       size="sm"
                       onClick={() => setDetail({ kind: 'incident', id: selectedIncidentId })}
                     >
-                      Voir l'incident
+                      {pick(ui, "Voir l'incident", 'See incident')}
                     </Button>
                   </div>
                 )}
               </div>
 
               <div>
-                <h3 className="mb-1 text-sm font-semibold">Résumé</h3>
+                <h3 className="mb-1 text-sm font-semibold">{pick(ui, 'Résumé', 'Summary')}</h3>
                 {summary.headline !== null && (
                   <p className="text-sm leading-relaxed">{summary.headline}</p>
                 )}
@@ -415,8 +456,8 @@ export default function JournalPage() {
                       <div key={r.label} className="flex items-start justify-between gap-3">
                         <dt className="shrink-0 text-ink-soft">{r.label}</dt>
                         <dd className="text-right font-medium">
-                          {r.label === 'Urgence' && selected.analysis_type === 'triage' ? (
-                            <Badge tone={urgencyTone(r.value === 'Critique' ? 'critical' : r.value === 'Haute' ? 'high' : r.value === 'Moyenne' ? 'medium' : 'low')}>
+                          {(r.label === 'Urgence' || r.label === 'Urgency') && selected.analysis_type === 'triage' ? (
+                            <Badge tone={urgencyTone(urgencyCodeFromLabel(r.value))}>
                               {r.value}
                             </Badge>
                           ) : (
@@ -429,14 +470,14 @@ export default function JournalPage() {
                 )}
                 {summary.headline === null && summary.rows.length === 0 && (
                   <p className="text-sm text-ink-faint">
-                    Aucun résumé disponible — consultez les payloads ci-dessous.
+                    {pick(ui, 'Aucun résumé disponible — consultez les payloads ci-dessous.', 'No summary available — see the payloads below.')}
                   </p>
                 )}
               </div>
 
               <details>
                 <summary className="cursor-pointer text-sm font-semibold text-ink-soft">
-                  Entrée (données envoyées à l'IA)
+                  {pick(ui, "Entrée (données envoyées à l'IA)", 'Input (data sent to the AI)')}
                 </summary>
                 <div className="mt-2">
                   <Pretty data={selected.input_payload} />
@@ -444,7 +485,7 @@ export default function JournalPage() {
               </details>
               <details>
                 <summary className="cursor-pointer text-sm font-semibold text-ink-soft">
-                  Sortie (réponse brute de l'IA)
+                  {pick(ui, "Sortie (réponse brute de l'IA)", 'Output (raw AI response)')}
                 </summary>
                 <div className="mt-2">
                   <Pretty data={selected.output_payload} />
@@ -459,6 +500,7 @@ export default function JournalPage() {
         detail={detail}
         onClose={() => setDetail(null)}
         onDetail={(kind, id) => setDetail({ kind, id })}
+        lang={ui}
       />
     </div>
   );

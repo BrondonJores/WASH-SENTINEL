@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getCachedTtsUrl } from '../lib/ttsCache';
+import { pick, useUILang } from '../lib/i18n';
 import { MAX_RECORD_BYTES, MAX_RECORD_MS } from '../lib/voice-limits';
 
 /* ============================================================================
@@ -23,8 +24,8 @@ import { MAX_RECORD_BYTES, MAX_RECORD_MS } from '../lib/voice-limits';
  * ========================================================================== */
 
 /** Dictée trop lourde : guider vers un message plus court. */
-const TOO_HEAVY_GUIDANCE_MESSAGE =
-  'Enregistrement trop lourd : dictez un message plus court, puis réessayez.';
+const tooHeavyGuidance = (lang: string | undefined): string =>
+  pick(lang, 'Enregistrement trop lourd : dictez un message plus court, puis réessayez.', 'Recording too heavy: dictate a shorter message, then try again.');
 
 /** Types MIME préférés pour MediaRecorder, du plus au moins souhaité. */
 const PREFERRED_MIME_TYPES = [
@@ -114,40 +115,40 @@ interface RecorderGuidance {
   help?: string;
 }
 
-function micErrorGuidance(err: unknown): RecorderGuidance {
+function micErrorGuidance(err: unknown, lang: string | undefined): RecorderGuidance {
   if (err instanceof DOMException || err instanceof Error) {
     switch (err.name) {
       case 'NotAllowedError':
       case 'SecurityError':
         return {
-          message: 'Micro refusé. Autorisez le micro dans le navigateur, puis réessayez.',
+          message: pick(lang, 'Micro refusé. Autorisez le micro dans le navigateur, puis réessayez.', 'Microphone blocked. Allow the microphone in the browser, then try again.'),
           retry: false,
-          help: 'Cliquez sur l’icône du micro (ou le cadenas) dans la barre d’adresse, autorisez le microphone pour ce site, puis réessayez. Sur mobile : réglages du navigateur > autorisations > microphone.',
+          help: pick(lang, 'Cliquez sur l’icône du micro (ou le cadenas) dans la barre d’adresse, autorisez le microphone pour ce site, puis réessayez. Sur mobile : réglages du navigateur > autorisations > microphone.', 'Click the microphone (or padlock) icon in the address bar, allow the microphone for this site, then try again. On mobile: browser settings > permissions > microphone.'),
         };
       case 'NotFoundError':
       case 'OverconstrainedError':
         return {
-          message: 'Aucun microphone détecté sur cet appareil.',
+          message: pick(lang, 'Aucun microphone détecté sur cet appareil.', 'No microphone detected on this device.'),
           retry: true,
-          help: 'Branchez ou activez un microphone, vérifiez qu’il n’est pas coupé, puis réessayez.',
+          help: pick(lang, 'Branchez ou activez un microphone, vérifiez qu’il n’est pas coupé, puis réessayez.', 'Plug in or enable a microphone, check that it is not muted, then try again.'),
         };
       case 'NotReadableError':
         return {
-          message: 'Microphone déjà utilisé par une autre application. Fermez-la, puis réessayez.',
+          message: pick(lang, 'Microphone déjà utilisé par une autre application. Fermez-la, puis réessayez.', 'Microphone already used by another app. Close it, then try again.'),
           retry: true,
         };
       case 'AbortError':
-        return { message: 'Enregistrement interrompu. Réessayez quand vous êtes prêt.', retry: true };
+        return { message: pick(lang, 'Enregistrement interrompu. Réessayez quand vous êtes prêt.', 'Recording interrupted. Try again when ready.'), retry: true };
     }
   }
-  return { message: 'Impossible d’accéder au microphone. Vérifiez votre micro, puis réessayez.', retry: true };
+  return { message: pick(lang, 'Impossible d’accéder au microphone. Vérifiez votre micro, puis réessayez.', 'Cannot access the microphone. Check your microphone, then try again.'), retry: true };
 }
 
 /** Enregistrement sans aucun son capturé : guider vers une dictée audible. */
-const SILENCE_GUIDANCE: RecorderGuidance = {
-  message: 'On n’a rien entendu. Parlez plus près du micro, dans un endroit calme, puis réessayez.',
+const silenceGuidance = (lang: string | undefined): RecorderGuidance => ({
+  message: pick(lang, 'On n’a rien entendu. Parlez plus près du micro, dans un endroit calme, puis réessayez.', 'Heard nothing. Speak closer to the microphone, in a quiet place, then try again.'),
   retry: true,
-};
+});
 
 /**
  * Convertit la réponse TTS (WAV base64, voir contrat ci-dessus) en URL locale
@@ -211,6 +212,7 @@ export interface VoiceRecorderProps {
 }
 
 export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: VoiceRecorderProps) {
+  const ui = useUILang();
   const [recording, setRecording] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [guidance, setGuidanceState] = useState<RecorderGuidance | null>(null);
@@ -286,25 +288,25 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
     setGuidance(null);
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
       setGuidance({
-        message: 'Navigateur incompatible : l’enregistrement audio n’est pas pris en charge.',
+        message: pick(ui, 'Navigateur incompatible : l’enregistrement audio n’est pas pris en charge.', 'Unsupported browser: audio recording is not supported.'),
         retry: false,
-        help: 'Utilisez une version récente de Chrome, Edge, Firefox ou Safari pour dicter un message.',
+        help: pick(ui, 'Utilisez une version récente de Chrome, Edge, Firefox ou Safari pour dicter un message.', 'Use a recent version of Chrome, Edge, Firefox or Safari to dictate a message.'),
       });
       return;
     }
     if (typeof MediaRecorder === 'undefined') {
       setGuidance({
-        message: 'Navigateur incompatible : l’enregistrement audio n’est pas disponible.',
+        message: pick(ui, 'Navigateur incompatible : l’enregistrement audio n’est pas disponible.', 'Unsupported browser: audio recording is not available.'),
         retry: false,
-        help: 'Utilisez une version récente de Chrome, Edge, Firefox ou Safari pour dicter un message.',
+        help: pick(ui, 'Utilisez une version récente de Chrome, Edge, Firefox ou Safari pour dicter un message.', 'Use a recent version of Chrome, Edge, Firefox or Safari to dictate a message.'),
       });
       return;
     }
     if (typeof window !== 'undefined' && !window.isSecureContext) {
       setGuidance({
-        message: 'L’enregistrement audio exige une connexion sécurisée (HTTPS) ou localhost.',
+        message: pick(ui, 'L’enregistrement audio exige une connexion sécurisée (HTTPS) ou localhost.', 'Audio recording requires a secure connection (HTTPS) or localhost.'),
         retry: false,
-        help: 'Ouvrez la page en HTTPS (ou sur localhost) : les navigateurs bloquent le micro sur les pages non sécurisées.',
+        help: pick(ui, 'Ouvrez la page en HTTPS (ou sur localhost) : les navigateurs bloquent le micro sur les pages non sécurisées.', 'Open the page over HTTPS (or on localhost): browsers block the microphone on insecure pages.'),
       });
       return;
     }
@@ -312,7 +314,7 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
-      setGuidance(micErrorGuidance(err));
+      setGuidance(micErrorGuidance(err, ui));
       return;
     }
     const mimeType = pickMimeType();
@@ -322,7 +324,7 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
     } catch {
       stream.getTracks().forEach((t) => t.stop());
       setGuidance({
-        message: 'L’enregistrement n’a pas démarré. Vérifiez votre micro, puis réessayez.',
+        message: pick(ui, 'L’enregistrement n’a pas démarré. Vérifiez votre micro, puis réessayez.', 'Recording did not start. Check your microphone, then try again.'),
         retry: true,
       });
       return;
@@ -344,11 +346,11 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
       setElapsedMs(0);
       if (wasCancelled) return;
       if (blob.size === 0) {
-        setGuidance(SILENCE_GUIDANCE);
+        setGuidance(silenceGuidance(ui));
         return;
       }
       if (blob.size > MAX_RECORD_BYTES) {
-        setGuidance({ message: TOO_HEAVY_GUIDANCE_MESSAGE, retry: true });
+        setGuidance({ message: tooHeavyGuidance(ui), retry: true });
         return;
       }
       onAudioRef.current(blob);
@@ -357,7 +359,7 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
       cleanup();
       setRecording(false);
       setGuidance({
-        message: 'L’enregistrement a été interrompu. Vérifiez votre micro, puis réessayez.',
+        message: pick(ui, 'L’enregistrement a été interrompu. Vérifiez votre micro, puis réessayez.', 'Recording was interrupted. Check your microphone, then try again.'),
         retry: true,
       });
     };
@@ -366,7 +368,7 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
     } catch {
       cleanup();
       setGuidance({
-        message: 'L’enregistrement n’a pas démarré. Vérifiez votre micro, puis réessayez.',
+        message: pick(ui, 'L’enregistrement n’a pas démarré. Vérifiez votre micro, puis réessayez.', 'Recording did not start. Check your microphone, then try again.'),
         retry: true,
       });
       return;
@@ -406,7 +408,7 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
       };
       rafRef.current = window.requestAnimationFrame(tick);
     }
-  }, [cleanup, stop, setGuidance]);
+  }, [cleanup, stop, setGuidance, ui]);
 
   const toggle = () => {
     if (disabled) return;
@@ -422,18 +424,18 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
         disabled={disabled}
         aria-label={
           recording
-            ? 'Arrêter l’enregistrement'
+            ? pick(ui, 'Arrêter l’enregistrement', 'Stop recording')
             : languageLabel
-              ? `Dicter un message en ${languageLabel}`
-              : 'Dicter un message'
+              ? pick(ui, `Dicter un message en ${languageLabel}`, `Dictate a message in ${languageLabel}`)
+              : pick(ui, 'Dicter un message', 'Dictate a message')
         }
         aria-pressed={recording}
         title={
           recording
-            ? 'Arrêter l’enregistrement'
+            ? pick(ui, 'Arrêter l’enregistrement', 'Stop recording')
             : languageLabel
-              ? `Dicter un message en ${languageLabel}`
-              : 'Dicter un message'
+              ? pick(ui, `Dicter un message en ${languageLabel}`, `Dictate a message in ${languageLabel}`)
+              : pick(ui, 'Dicter un message', 'Dictate a message')
         }
         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none ${
           recording
@@ -444,7 +446,7 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
         {recording ? <StopIcon /> : <MicIcon />}
       </button>
       {recording && (
-        <span className="inline-flex items-center gap-2" role="status" aria-label="Enregistrement en cours">
+        <span className="inline-flex items-center gap-2" role="status" aria-label={pick(ui, 'Enregistrement en cours', 'Recording in progress')}>
           <span aria-hidden="true" className="relative flex h-2 w-2">
             <span className="absolute h-full w-full rounded-full bg-red-500 opacity-60 motion-safe:animate-ping" />
             <span className="relative h-2 w-2 rounded-full bg-red-500" />
@@ -460,11 +462,11 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
           <button
             type="button"
             onClick={cancel}
-            aria-label="Annuler l’enregistrement"
-            title="Annuler"
+            aria-label={pick(ui, 'Annuler l’enregistrement', 'Cancel recording')}
+            title={pick(ui, 'Annuler', 'Cancel')}
             className="rounded px-1 py-1 text-xs text-ink-faint underline-offset-2 hover:text-danger hover:underline focus-visible:outline-2 focus-visible:outline-accent"
           >
-            Annuler
+            {pick(ui, 'Annuler', 'Cancel')}
           </button>
         </span>
       )}
@@ -482,7 +484,7 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
                 disabled={disabled}
                 className="rounded px-1 py-0.5 font-medium text-danger underline underline-offset-2 hover:opacity-80 focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Réessayer
+                {pick(ui, 'Réessayer', 'Retry')}
               </button>
             </>
           )}
@@ -495,7 +497,7 @@ export function VoiceRecorder({ onAudio, disabled = false, languageLabel }: Voic
                 aria-expanded={showHelp}
                 className="rounded px-1 py-0.5 font-medium text-ink-soft underline underline-offset-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
               >
-                Aide
+                {pick(ui, 'Aide', 'Help')}
               </button>
             </>
           )}
@@ -528,6 +530,7 @@ export interface VoicePlayerProps {
 type PlayerStatus = 'idle' | 'loading' | 'playing';
 
 export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false, className = '', cacheKey = null }: VoicePlayerProps) {
+  const ui = useUILang();
   const [status, setStatus] = useState<PlayerStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -592,13 +595,13 @@ export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false,
         releaseOwned();
         if (mountedRef.current) {
           setStatus('idle');
-          setError('Lecture impossible : format audio non pris en charge.');
+          setError(pick(ui, 'Lecture impossible : format audio non pris en charge.', 'Cannot play: audio format not supported.'));
         }
       };
       audioRef.current = el;
     }
     return el;
-  }, [releaseOwned]);
+  }, [releaseOwned, ui]);
 
   const play = useCallback(async () => {
     setError(null);
@@ -614,11 +617,11 @@ export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false,
           sharedRef.current = true;
           src = cached;
         } else {
-          if (!onRequestAudio) throw new Error('Aucune source audio configurée pour ce message.');
+          if (!onRequestAudio) throw new Error(pick(ui, 'Aucune source audio configurée pour ce message.', 'No audio source configured for this message.'));
           const provided = await onRequestAudio();
           if (!mountedRef.current) return;
           if (provided === null || provided === '') {
-            throw new Error('Aucun audio disponible pour ce message.');
+            throw new Error(pick(ui, 'Aucun audio disponible pour ce message.', 'No audio available for this message.'));
           }
           releaseOwned();
           if (shared) {
@@ -638,9 +641,9 @@ export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false,
       releaseOwned();
       if (!mountedRef.current) return;
       setStatus('idle');
-      setError(err instanceof Error ? err.message : 'Lecture impossible.');
+      setError(err instanceof Error ? err.message : pick(ui, 'Lecture impossible.', 'Cannot play.'));
     }
-  }, [audioUrl, cacheKey, shared, onRequestAudio, ensureAudio, releaseOwned]);
+  }, [audioUrl, cacheKey, shared, onRequestAudio, ensureAudio, releaseOwned, ui]);
 
   const toggle = () => {
     if (disabled || status === 'loading') return;
@@ -649,10 +652,10 @@ export function VoicePlayer({ audioUrl = null, onRequestAudio, disabled = false,
   };
 
   const label = status === 'playing'
-    ? 'Arrêter la lecture'
+    ? pick(ui, 'Arrêter la lecture', 'Stop playback')
     : status === 'loading'
-      ? 'Chargement de l’audio…'
-      : 'Écouter la réponse';
+      ? pick(ui, 'Chargement de l’audio…', 'Loading audio…')
+      : pick(ui, 'Écouter la réponse', 'Listen to the answer');
 
   return (
     <span className={`inline-flex items-center gap-2 ${className}`}>

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useTheme } from '../theme';
-import { NAV_ITEMS } from '../nav';
+import { NAV_ITEMS, navLabel } from '../nav';
+import { pick, setUILang, useUILang } from '../lib/i18n';
 import { Icon } from './icons';
 import type { IconName } from './icons';
 import { SentinelAvatar } from './SentinelAvatar';
@@ -69,6 +70,7 @@ interface FanEntry {
 
 export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
   const { user, logout } = useAuth();
+  const ui = useUILang();
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
@@ -157,12 +159,12 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
         >
           {c.title}
         </span>
-        <span className="shrink-0 font-mono text-[10px] text-ink-faint">{fmtWhen(c.updatedAt)}</span>
+        <span className="shrink-0 font-mono text-[10px] text-ink-faint">{fmtWhen(c.updatedAt, ui)}</span>
       </button>
       <button
         onClick={() => deleteChat(c.id)}
-        title={`Supprimer « ${c.title} »`}
-        aria-label={`Supprimer ${c.title}`}
+        title={pick(ui, `Supprimer « ${c.title} »`, `Delete "${c.title}"`)}
+        aria-label={pick(ui, `Supprimer ${c.title}`, `Delete ${c.title}`)}
         className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-faint opacity-0 transition-opacity hover:bg-raised hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
       >
         <Icon name="trash" className="h-3.5 w-3.5" />
@@ -187,7 +189,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
     () => [
       ...fanNav.map((n) => ({
         key: n.path,
-        label: n.label,
+        label: navLabel(ui, n),
         num: String(NAV_ITEMS.indexOf(n) + 1).padStart(2, '0'),
         icon: n.icon,
         active: location.pathname === n.path,
@@ -196,7 +198,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
       })),
       {
         key: '__library',
-        label: 'Bibliothèque',
+        label: pick(ui, 'Bibliothèque', 'Library'),
         num: null,
         icon: 'chat',
         active: false,
@@ -205,7 +207,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
       },
       {
         key: '__search',
-        label: 'Rechercher',
+        label: pick(ui, 'Rechercher', 'Search'),
         num: null,
         icon: 'search',
         active: false,
@@ -213,7 +215,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
         onSelect: () => onSearch(),
       },
     ],
-    [fanNav, location.pathname, navigate, chats.length, onSearch],
+    [fanNav, location.pathname, navigate, chats.length, onSearch, ui],
   );
 
   const baseR = window.innerHeight < 720 ? 140 : 212;
@@ -244,7 +246,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
             if (canHover) scheduleClose();
           }}
           aria-expanded={fanOpen}
-          aria-label={fanOpen ? 'Fermer le menu' : 'Ouvrir le menu'}
+          aria-label={fanOpen ? pick(ui, 'Fermer le menu', 'Close the menu') : pick(ui, 'Ouvrir le menu', 'Open the menu')}
           title={fanOpen ? undefined : 'Menu'}
           style={{ filter: fanOpen ? 'drop-shadow(0 0 18px rgb(20 184 166 / 0.55))' : undefined }}
           className="glass pointer-events-auto absolute left-0 top-1/2 flex h-44 w-[52px] -translate-y-1/2 items-center justify-center rounded-r-full focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-accent focus-visible:outline-offset-2"
@@ -358,7 +360,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
         </nav>
       </div>
       <button
-        aria-label="Fermer le menu"
+        aria-label={pick(ui, 'Fermer le menu', 'Close the menu')}
         aria-hidden={!fanOpen}
         tabIndex={-1}
         onClick={() => setFanOpen(false)}
@@ -371,14 +373,14 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
       />
       {open && (
         <button
-          aria-label="Fermer le panneau"
+          aria-label={pick(ui, 'Fermer le panneau', 'Close the panel')}
           onClick={close}
           className="fixed inset-0 z-40 cursor-default bg-transparent"
         />
       )}
       <aside
         inert={!open}
-        aria-label="Bibliothèque"
+        aria-label={pick(ui, 'Bibliothèque', 'Library')}
         className={`dock-panel fixed bottom-2 left-2 top-2 z-50 flex w-72 flex-col glass rounded-xl ${
           open ? 'visible translate-x-0' : 'invisible -translate-x-[110%]'
         }`}
@@ -388,10 +390,10 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
           <div className="min-w-0 flex-1">
             <p className="text-[15px] font-bold leading-tight tracking-tight">WASH Sentinel</p>
             <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-              Console ops
+              {pick(ui, 'Console ops', 'Ops console')}
             </p>
           </div>
-          <button onClick={close} title="Fermer" aria-label="Fermer le menu" className={iconBtn}>
+          <button onClick={close} title={pick(ui, 'Fermer', 'Close')} aria-label={pick(ui, 'Fermer le menu', 'Close the menu')} className={iconBtn}>
             <Icon name="x" className="h-4 w-4" />
           </button>
         </div>
@@ -404,7 +406,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
             className="flex h-8 w-full items-center gap-2 rounded-md border border-line bg-raised px-2.5 text-[13px] text-ink-soft hover:border-accent"
           >
             <Icon name="search" className="h-3.5 w-3.5 shrink-0" />
-            <span className="flex-1 truncate text-left">Rechercher…</span>
+            <span className="flex-1 truncate text-left">{pick(ui, 'Rechercher…', 'Search…')}</span>
             <kbd className="shrink-0 rounded border border-line bg-card px-1.5 py-0.5 font-mono text-[10px] font-medium">
               Ctrl K
             </kbd>
@@ -414,13 +416,13 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
           <div>
             <div className="flex items-center justify-between px-2.5 pb-1">
               <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
-                Bibliothèque
+                {pick(ui, 'Bibliothèque', 'Library')}
               </p>
               <span className="flex items-center gap-0.5">
                 <button
                   onClick={() => newAndGo(null)}
-                  title="Nouvelle discussion"
-                  aria-label="Nouvelle discussion"
+                  title={pick(ui, 'Nouvelle discussion', 'New chat')}
+                  aria-label={pick(ui, 'Nouvelle discussion', 'New chat')}
                   className="flex h-6 w-6 items-center justify-center rounded-md text-ink-faint hover:bg-raised hover:text-ink"
                 >
                   <Icon name="plus" className="h-3.5 w-3.5" />
@@ -430,8 +432,8 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
                     setCreatingProject(true);
                     setDraft('');
                   }}
-                  title="Nouveau dossier"
-                  aria-label="Nouveau dossier"
+                  title={pick(ui, 'Nouveau dossier', 'New folder')}
+                  aria-label={pick(ui, 'Nouveau dossier', 'New folder')}
                   className="flex h-6 w-6 items-center justify-center rounded-md text-ink-faint hover:bg-raised hover:text-ink"
                 >
                   <Icon name="folder" className="h-4 w-4" />
@@ -442,7 +444,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
               <div className="px-0.5 pb-1">
                 <NameEditor
                   initial=""
-                  placeholder="Nom du dossier…"
+                  placeholder={pick(ui, 'Nom du dossier…', 'Folder name…')}
                   onCommit={(v) => {
                     setCreatingProject(false);
                     void createProject(v).then((id) => {
@@ -454,13 +456,13 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
               </div>
             )}
             {!loaded ? (
-              <p className="px-2.5 py-1 font-mono text-[11px] text-ink-faint">Chargement…</p>
+              <p className="px-2.5 py-1 font-mono text-[11px] text-ink-faint">{pick(ui, 'Chargement…', 'Loading…')}</p>
             ) : (
               chats.length === 0 &&
               projects.length === 0 &&
               !creatingProject && (
                 <p className="px-2.5 py-1 text-xs text-ink-faint">
-                  Aucune discussion — posez votre première question à Sentinel.
+                  {pick(ui, 'Aucune discussion — posez votre première question à Sentinel.', 'No chats yet — ask Sentinel your first question.')}
                 </p>
               )
             )}
@@ -491,16 +493,16 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
                         setEditingProject(p.id);
                         setDraft(p.name);
                       }}
-                      title="Renommer"
-                      aria-label={`Renommer ${p.name}`}
+                      title={pick(ui, 'Renommer', 'Rename')}
+                      aria-label={pick(ui, `Renommer ${p.name}`, `Rename ${p.name}`)}
                       className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-faint opacity-0 transition-opacity hover:bg-raised hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
                     >
                       <Icon name="edit" className="h-3.5 w-3.5" />
                     </button>
                     <button
                       onClick={() => deleteProject(p.id)}
-                      title="Supprimer le dossier (les discussions sont conservées)"
-                      aria-label={`Supprimer ${p.name}`}
+                      title={pick(ui, 'Supprimer le dossier (les discussions sont conservées)', 'Delete the folder (chats are kept)')}
+                      aria-label={pick(ui, `Supprimer ${p.name}`, `Delete ${p.name}`)}
                       className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-faint opacity-0 transition-opacity hover:bg-raised hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
                     >
                       <Icon name="trash" className="h-3.5 w-3.5" />
@@ -510,7 +512,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
                     <div className="px-0.5 py-1">
                       <NameEditor
                         initial={draft}
-                        placeholder="Nom du dossier…"
+                        placeholder={pick(ui, 'Nom du dossier…', 'Folder name…')}
                         onCommit={(v) => {
                           renameProject(p.id, v);
                           setEditingProject(null);
@@ -527,7 +529,7 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
                         className="flex w-full items-center gap-2 rounded-md px-2 py-[6px] text-[12px] text-ink-faint hover:bg-raised hover:text-ink"
                       >
                         <Icon name="plus" className="h-3.5 w-3.5" />
-                        Discussion
+                        {pick(ui, 'Discussion', 'New chat')}
                       </button>
                     </div>
                   )}
@@ -544,14 +546,24 @@ export default function EdgeDock({ onSearch }: { onSearch: () => void }) {
               <p className="truncate font-mono text-[11px] text-ink-faint">{user?.email}</p>
             </div>
             <button
+              onClick={() => setUILang(ui === 'en' ? 'fr' : 'en')}
+              title={pick(ui, 'Passer en anglais', 'Switch to French')}
+              aria-label={pick(ui, 'Langue : français. Passer en anglais.', 'Language: English. Switch to French.')}
+              className="flex h-8 items-center justify-center gap-1 rounded-md px-2 font-mono text-[11px] font-bold transition-[background-color,transform] duration-150 ease-snap hover:bg-raised active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
+            >
+              <span className={ui === 'fr' ? 'text-ink' : 'text-ink-faint'}>FR</span>
+              <span aria-hidden="true" className="font-normal text-ink-faint">/</span>
+              <span className={ui === 'en' ? 'text-ink' : 'text-ink-faint'}>EN</span>
+            </button>
+            <button
               onClick={toggle}
-              title={theme === 'dark' ? 'Passer en clair' : 'Passer en sombre'}
-              aria-label="Basculer clair / sombre"
+              title={theme === 'dark' ? pick(ui, 'Passer en clair', 'Switch to light') : pick(ui, 'Passer en sombre', 'Switch to dark')}
+              aria-label={pick(ui, 'Basculer clair / sombre', 'Toggle light / dark')}
               className={iconBtn}
             >
               <Icon name={theme === 'dark' ? 'sun' : 'moon'} className="h-[18px] w-[18px]" />
             </button>
-            <button onClick={quit} title="Se déconnecter" aria-label="Se déconnecter" className={iconBtn}>
+            <button onClick={quit} title={pick(ui, 'Se déconnecter', 'Sign out')} aria-label={pick(ui, 'Se déconnecter', 'Sign out')} className={iconBtn}>
               <Icon name="logout" className="h-4 w-4" />
             </button>
           </div>

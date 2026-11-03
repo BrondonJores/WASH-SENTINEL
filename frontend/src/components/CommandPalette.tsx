@@ -3,9 +3,10 @@ import type { KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useTheme } from '../theme';
-import { NAV_ITEMS } from '../nav';
+import { NAV_ITEMS, navLabel } from '../nav';
 import { Icon } from './icons';
 import type { IconName } from './icons';
+import { pick, useUILang } from '../lib/i18n';
 
 interface Entry {
   group: string;
@@ -24,20 +25,21 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const [prevQuery, setPrevQuery] = useState(query);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.roles.includes('wash_admin') ?? false;
+  const ui = useUILang();
 
   const entries = useMemo<Entry[]>(() => {
     const pages = NAV_ITEMS.filter((i) => !i.adminOnly || isAdmin).map((item) => ({
-      group: 'Pages',
-      label: item.label,
+      group: pick(ui, 'Pages', 'Pages'),
+      label: navLabel(ui, item),
       icon: item.icon,
       run: () => navigate(item.path),
     }));
     return [
       ...pages,
-      { group: 'Actions', label: 'Basculer clair / sombre', icon: 'moon', run: toggle },
+      { group: pick(ui, 'Actions', 'Actions'), label: pick(ui, 'Basculer clair / sombre', 'Toggle light / dark'), icon: 'moon', run: toggle },
       {
-        group: 'Actions',
-        label: 'Se déconnecter',
+        group: pick(ui, 'Actions', 'Actions'),
+        label: pick(ui, 'Se déconnecter', 'Sign out'),
         icon: 'logout',
         run: () => {
           logout();
@@ -45,7 +47,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
         },
       },
     ];
-  }, [isAdmin, navigate, logout, toggle]);
+  }, [isAdmin, navigate, logout, toggle, ui]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -98,8 +100,8 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
 
   let lastGroup = '';
   return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Recherche et actions">
-      <button aria-label="Fermer" onClick={onClose} className="absolute inset-0 cursor-default bg-stone-950/40" />
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={pick(ui, 'Recherche et actions', 'Search and actions')}>
+      <button aria-label={pick(ui, 'Fermer', 'Close')} onClick={onClose} className="absolute inset-0 cursor-default bg-stone-950/40" />
       <div className="relative mx-auto mt-[12vh] w-[calc(100%-2rem)] max-w-lg overflow-hidden rounded-xl border border-line bg-card shadow-2xl">
         <div className="flex items-center gap-2 border-b border-line px-3">
           <span className="shrink-0 font-mono text-base font-bold text-accent">›</span>
@@ -108,16 +110,16 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Rechercher une page ou une action…"
+            placeholder={pick(ui, 'Rechercher une page ou une action…', 'Search for a page or an action…')}
             className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-stone-400 dark:placeholder:text-stone-500"
           />
           <kbd className="shrink-0 rounded border border-line bg-raised px-1.5 py-0.5 text-[11px] font-medium text-ink-soft">
-            Échap
+            {pick(ui, 'Échap', 'Esc')}
           </kbd>
         </div>
         <div className="max-h-80 overflow-y-auto p-2">
           {filtered.length === 0 && (
-            <p className="px-3 py-6 text-center text-sm text-ink-soft">Aucun résultat.</p>
+            <p className="px-3 py-6 text-center text-sm text-ink-soft">{pick(ui, 'Aucun résultat.', 'No results.')}</p>
           )}
           {filtered.map((entry, i) => {
             const header = entry.group !== lastGroup ? entry.group : null;
@@ -147,9 +149,9 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
           })}
         </div>
         <div className="flex items-center gap-4 border-t border-line px-3 py-2 font-mono text-[11px] text-ink-faint">
-          <span>↑↓ naviguer</span>
-          <span>Entrée ouvrir</span>
-          <span>Échap fermer</span>
+          <span>↑↓ {pick(ui, 'naviguer', 'navigate')}</span>
+          <span>{pick(ui, 'Entrée ouvrir', 'Enter to open')}</span>
+          <span>{pick(ui, 'Échap fermer', 'Esc to close')}</span>
         </div>
       </div>
     </div>

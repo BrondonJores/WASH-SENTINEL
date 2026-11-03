@@ -8,10 +8,13 @@ import { DetailDrawer } from '../components/DetailDrawer';
 import type { DetailTarget } from '../components/DetailDrawer';
 import { Icon } from '../components/icons';
 import { INPUT_CLS, fmtNum } from '../lib/wash';
+import { localeFor } from '../lib/locale';
+import { pick, useUILang } from '../lib/i18n';
 import { DEFAULT_PER_PAGE } from '../lib/pagination';
 import { SEARCH_DEBOUNCE_MS } from '../lib/search';
 
-const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
+const errMsg = (e: unknown, lang?: string): string =>
+  (e instanceof ApiError ? e.message : pick(lang, 'Erreur réseau.', 'Network error.'));
 const toNum = (v: string): number | undefined => (v === '' ? undefined : Number(v));
 const errorCls = 'mt-1 text-xs font-medium text-danger';
 
@@ -27,6 +30,7 @@ type CostRef = { median: number; sources: string };
 
 export default function SchoolsPage() {
   const { user } = useAuth();
+  const ui = useUILang();
   const admin = user?.roles.includes('wash_admin') ?? false;
 
   const [items, setItems] = useState<School[]>([]);
@@ -152,11 +156,11 @@ export default function SchoolsPage() {
       setLastPage(res.last_page);
       setTotal(res.total);
     } catch (e) {
-      setError(errMsg(e));
+      setError(errMsg(e, ui));
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, search, district]);
+  }, [page, perPage, search, district, ui]);
 
   useEffect(() => {
     void load();
@@ -167,8 +171,8 @@ export default function SchoolsPage() {
     for (const s of items) {
       if (s.district.trim() !== '') set.add(s.district);
     }
-    return [...set].sort((a, b) => a.localeCompare(b, 'fr'));
-  }, [items]);
+    return [...set].sort((a, b) => a.localeCompare(b, localeFor(ui)));
+  }, [items, ui]);
 
   const hasFilters = searchV.trim() !== '' || districtV.trim() !== '';
   const resetFilters = () => {
@@ -189,23 +193,23 @@ export default function SchoolsPage() {
 
   const validate = (): Record<string, string> => {
     const errors: Record<string, string> = {};
-    if (fName.trim() === '') errors.name = 'Le nom est requis.';
-    if (fCode.trim() === '') errors.code = 'Le code est requis.';
-    if (fDistrict.trim() === '') errors.district = 'Le district est requis.';
+    if (fName.trim() === '') errors.name = pick(ui, 'Le nom est requis.', 'Name is required.');
+    if (fCode.trim() === '') errors.code = pick(ui, 'Le code est requis.', 'Code is required.');
+    if (fDistrict.trim() === '') errors.district = pick(ui, 'Le district est requis.', 'District is required.');
     if (fStudents.trim() !== '') {
       const n = Number(fStudents);
-      if (!Number.isInteger(n) || n < 0) errors.students = 'Indiquez un nombre entier positif (ou laissez vide).';
+      if (!Number.isInteger(n) || n < 0) errors.students = pick(ui, 'Indiquez un nombre entier positif (ou laissez vide).', 'Enter a positive whole number (or leave empty).');
     }
     if (fTeachers.trim() !== '') {
       const n = Number(fTeachers);
-      if (!Number.isInteger(n) || n < 0) errors.teachers = 'Indiquez un nombre entier positif (ou laissez vide).';
+      if (!Number.isInteger(n) || n < 0) errors.teachers = pick(ui, 'Indiquez un nombre entier positif (ou laissez vide).', 'Enter a positive whole number (or leave empty).');
     }
     if (fPhone.trim() !== '' && fPhone.trim().length < 6) {
-      errors.phone = 'Numéro de téléphone trop court.';
+      errors.phone = pick(ui, 'Numéro de téléphone trop court.', 'Phone number too short.');
     }
     if (fCost.trim() !== '') {
       const n = Number(fCost);
-      if (!Number.isFinite(n) || n < 0) errors.cost = 'Indiquez un montant positif en XAF (ou laissez vide).';
+      if (!Number.isFinite(n) || n < 0) errors.cost = pick(ui, 'Indiquez un montant positif en XAF (ou laissez vide).', 'Enter a positive amount in XAF (or leave empty).');
     }
     return errors;
   };
@@ -261,7 +265,7 @@ export default function SchoolsPage() {
       await load();
       setDetail({ kind: 'school', id: res.school.id });
     } catch (e) {
-      setMsg(errMsg(e));
+      setMsg(errMsg(e, ui));
     } finally {
       setBusy(false);
     }
@@ -271,13 +275,13 @@ export default function SchoolsPage() {
   // médiane du référentiel national (jamais de prix codé en dur ici).
   const costLine = (s: School): string => {
     if (typeof s.estimated_replacement_cost === 'number' && s.estimated_replacement_cost > 0) {
-      return `Neuf : ${fmtNum(s.estimated_replacement_cost)} XAF · Source : fiche école`;
+      return pick(ui, `Neuf : ${fmtNum(s.estimated_replacement_cost)} XAF · Source : fiche école`, `New: ${fmtNum(s.estimated_replacement_cost)} XAF · Source: school file`);
     }
     if (costRef !== null) {
       const src = costRef.sources.length > 64 ? `${costRef.sources.slice(0, 64)}…` : costRef.sources;
-      return `Neuf : ~${fmtNum(costRef.median)} XAF · Source : référentiel (${src})`;
+      return pick(ui, `Neuf : ~${fmtNum(costRef.median)} XAF · Source : référentiel (${src})`, `New: ~${fmtNum(costRef.median)} XAF · Source: reference (${src})`);
     }
-    return 'Neuf : non renseigné';
+    return pick(ui, 'Neuf : non renseigné', 'New: not provided');
   };
 
   const errorList = Object.values(fieldErrors).filter((v) => v !== '');
@@ -285,12 +289,12 @@ export default function SchoolsPage() {
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
-        title="Écoles"
-        description={`Établissements suivis — ${fmtNum(total)} au total.`}
+        title={pick(ui, 'Écoles', 'Schools')}
+        description={pick(ui, `Établissements suivis — ${fmtNum(total)} au total.`, `Tracked schools — ${fmtNum(total)} in total.`)}
         actions={
           admin ? (
             <Button variant="primary" onClick={() => setShowForm((v) => !v)}>
-              {showForm ? 'Fermer' : '+ Nouvelle école'}
+              {showForm ? pick(ui, 'Fermer', 'Close') : pick(ui, '+ Nouvelle école', '+ New school')}
             </Button>
           ) : undefined
         }
@@ -301,7 +305,7 @@ export default function SchoolsPage() {
         <Card className="mb-4 p-4">
           {errorList.length > 0 && (
             <div role="alert" className="mb-3 rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
-              <p className="font-semibold">Vérifiez {errorList.length} champ(s) :</p>
+              <p className="font-semibold">{pick(ui, `Vérifiez ${errorList.length} champ(s) :`, `Check ${errorList.length} field(s):`)}</p>
               <ul className="mt-1 list-disc pl-5">
                 {errorList.map((m) => (
                   <li key={m}>{m}</li>
@@ -310,7 +314,7 @@ export default function SchoolsPage() {
             </div>
           )}
           <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="Nom *">
+            <Field label={pick(ui, 'Nom *', 'Name *')}>
               <input
                 ref={nameRef}
                 value={fName}
@@ -349,7 +353,7 @@ export default function SchoolsPage() {
               />
               {fieldErrors.district && <p className={errorCls}>{fieldErrors.district}</p>}
             </Field>
-            <Field label="Élèves">
+            <Field label={pick(ui, 'Élèves', 'Students')}>
               <input
                 ref={studentsRef}
                 type="number"
@@ -365,7 +369,7 @@ export default function SchoolsPage() {
               />
               {fieldErrors.students && <p className={errorCls}>{fieldErrors.students}</p>}
             </Field>
-            <Field label="Enseignants">
+            <Field label={pick(ui, 'Enseignants', 'Teachers')}>
               <input
                 ref={teachersRef}
                 type="number"
@@ -381,7 +385,7 @@ export default function SchoolsPage() {
               />
               {fieldErrors.teachers && <p className={errorCls}>{fieldErrors.teachers}</p>}
             </Field>
-            <Field label="Téléphone">
+            <Field label={pick(ui, 'Téléphone', 'Phone')}>
               <input
                 ref={phoneRef}
                 value={fPhone}
@@ -394,7 +398,7 @@ export default function SchoolsPage() {
               />
               {fieldErrors.phone && <p className={errorCls}>{fieldErrors.phone}</p>}
             </Field>
-            <Field label="Coût neuf (XAF)">
+            <Field label={pick(ui, 'Coût neuf (XAF)', 'New cost (XAF)')}>
               <input
                 ref={costRefEl}
                 type="number"
@@ -413,10 +417,10 @@ export default function SchoolsPage() {
           </div>
           <div className="mt-3 flex gap-2">
             <Button variant="primary" disabled={busy} onClick={() => void create()}>
-              {busy ? 'Enregistrement…' : 'Enregistrer'}
+              {busy ? pick(ui, 'Enregistrement…', 'Saving…') : pick(ui, 'Enregistrer', 'Save')}
             </Button>
             <Button variant="ghost" onClick={() => setShowForm(false)}>
-              Annuler
+              {pick(ui, 'Annuler', 'Cancel')}
             </Button>
           </div>
         </Card>
@@ -435,19 +439,19 @@ export default function SchoolsPage() {
           />
           <input
             ref={searchInputRef}
-            placeholder="Rechercher une école…  ( / )"
-            title="Rechercher — raccourci : /"
+            placeholder={pick(ui, 'Rechercher une école…  ( / )', 'Search for a school…  ( / )')}
+            title={pick(ui, 'Rechercher — raccourci : /', 'Search — shortcut: /')}
             value={searchV}
             onChange={(e) => setSearchV(e.target.value)}
-            aria-label="Rechercher une école"
+            aria-label={pick(ui, 'Rechercher une école', 'Search for a school')}
             className={`${INPUT_CLS} pl-9 ${searchV !== '' ? 'pr-9' : ''}`}
           />
           {searchV !== '' && (
             <button
               type="button"
               onClick={() => setSearchV('')}
-              aria-label="Effacer la recherche"
-              title="Effacer"
+              aria-label={pick(ui, 'Effacer la recherche', 'Clear search')}
+              title={pick(ui, 'Effacer', 'Clear')}
               className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-ink-faint transition-colors hover:bg-raised hover:text-ink motion-reduce:transition-none"
             >
               <Icon name="x" className="h-4 w-4" />
@@ -456,10 +460,10 @@ export default function SchoolsPage() {
         </div>
         <div className="sm:max-w-xs sm:flex-1">
           <input
-            placeholder="Filtrer par district…"
+            placeholder={pick(ui, 'Filtrer par district…', 'Filter by district…')}
             value={districtV}
             onChange={(e) => setDistrictV(e.target.value)}
-            aria-label="Filtrer par district"
+            aria-label={pick(ui, 'Filtrer par district', 'Filter by district')}
             list="school-district-list"
             className={INPUT_CLS}
           />
@@ -471,12 +475,12 @@ export default function SchoolsPage() {
         </div>
         {hasFilters && (
           <Button variant="ghost" onClick={resetFilters}>
-            Réinitialiser
+            {pick(ui, 'Réinitialiser', 'Reset')}
           </Button>
         )}
       </div>
       <p aria-live="polite" className="mb-4 text-xs text-ink-soft">
-        {loading && items.length === 0 ? 'Recherche en cours…' : `${fmtNum(total)} résultat(s)`}
+        {loading && items.length === 0 ? pick(ui, 'Recherche en cours…', 'Searching…') : pick(ui, `${fmtNum(total)} résultat(s)`, `${fmtNum(total)} result(s)`)}
         {hasFilters && total > 0 ? ` — page ${page}/${lastPage}` : ''}
       </p>
 
@@ -493,19 +497,19 @@ export default function SchoolsPage() {
             {hasFilters ? (
               <EmptyState
                 icon="school"
-                title="Aucune école trouvée"
-                description="Aucun établissement ne correspond à ces critères."
-                action={<Button onClick={resetFilters}>Réinitialiser les filtres</Button>}
+                title={pick(ui, 'Aucune école trouvée', 'No schools found')}
+                description={pick(ui, 'Aucun établissement ne correspond à ces critères.', 'No school matches these criteria.')}
+                action={<Button onClick={resetFilters}>{pick(ui, 'Réinitialiser les filtres', 'Reset filters')}</Button>}
               />
             ) : (
               <EmptyState
                 icon="school"
-                title="Aucune école"
-                description="Aucun établissement suivi pour le moment."
+                title={pick(ui, 'Aucune école', 'No schools')}
+                description={pick(ui, 'Aucun établissement suivi pour le moment.', 'No schools tracked yet.')}
                 action={
                   admin ? (
                     <Button variant="primary" onClick={() => setShowForm(true)}>
-                      + Nouvelle école
+                      {pick(ui, '+ Nouvelle école', '+ New school')}
                     </Button>
                   ) : undefined
                 }
@@ -527,12 +531,12 @@ export default function SchoolsPage() {
               <div className="flex items-center justify-between gap-2">
                 <span className="font-mono text-xs text-ink-faint">{s.code}</span>
                 {(s.open_incidents_count ?? 0) > 0 && (
-                  <Badge tone="warn">{s.open_incidents_count} ouvert(s)</Badge>
+                  <Badge tone="warn">{pick(ui, `${s.open_incidents_count} ouvert(s)`, `${s.open_incidents_count} open`)}</Badge>
                 )}
               </div>
               <p className="mt-1 truncate text-sm font-semibold">{s.name}</p>
               <p className="mt-0.5 truncate text-xs text-ink-soft">
-                {s.district} · {fmtNum(s.student_count)} élèves · {s.reports_count ?? 0} signalement(s)
+                {s.district} · {pick(ui, `${fmtNum(s.student_count)} élèves`, `${fmtNum(s.student_count)} students`)} · {pick(ui, `${s.reports_count ?? 0} signalement(s)`, `${s.reports_count ?? 0} report(s)`)}
               </p>
               <p className="mt-0.5 truncate text-xs text-ink-soft">{costLine(s)}</p>
             </button>
@@ -551,7 +555,7 @@ export default function SchoolsPage() {
         />
       </div>
 
-      <DetailDrawer detail={detail} onClose={closeDetail} onDetail={(kind, id) => setDetail({ kind, id })} />
+      <DetailDrawer detail={detail} onClose={closeDetail} onDetail={(kind, id) => setDetail({ kind, id })} lang={ui} />
     </div>
   );
 }

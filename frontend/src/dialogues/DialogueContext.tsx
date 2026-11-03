@@ -3,6 +3,8 @@ import type { ReactNode } from 'react';
 import { api } from '../lib/api';
 import type { LibraryConversation } from '../lib/api';
 import { DialogueContext } from './context';
+import { localeFor } from '../lib/locale';
+import { getUILang } from '../lib/i18n';
 import { chatTitle, toMessagePayload } from '../lib/dialogues';
 import type { ChatItem, DialogueMessage, ProjectItem } from '../lib/dialogues';
 
@@ -185,7 +187,7 @@ export function DialogueProvider({ children }: { children: ReactNode }) {
         .then((p) => {
           setProjects((prev) =>
             [...prev, { id: p.id, name: p.name, createdAt: Date.parse(p.created_at) || 0 }].sort(
-              (a, b) => a.name.localeCompare(b.name, 'fr'),
+              (a, b) => a.name.localeCompare(b.name, localeFor(getUILang())),
             ),
           );
           return p.id;

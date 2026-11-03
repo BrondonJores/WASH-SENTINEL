@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { ChatItem, DialogueMessage, ProjectItem } from '../lib/dialogues';
+import { getUILang, pick } from '../lib/i18n';
 
 export interface DialogueApi {
   chats: ChatItem[];
@@ -21,6 +22,6 @@ export const DialogueContext = createContext<DialogueApi | null>(null);
 
 export function useDialogues(): DialogueApi {
   const ctx = useContext(DialogueContext);
-  if (!ctx) throw new Error('useDialogues utilisé hors DialogueProvider');
+  if (!ctx) throw new Error(pick(getUILang(), 'useDialogues utilisé hors DialogueProvider', 'useDialogues used outside DialogueProvider'));
   return ctx;
 }

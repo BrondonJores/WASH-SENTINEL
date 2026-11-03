@@ -9,6 +9,7 @@ import type {
   SttTestResult,
 } from '../lib/api';
 import ProfileForm from '../components/ProfileForm';
+import { pick, useUILang } from '../lib/i18n';
 import { Badge, Button, Card, EmptyState, PageHeader, Skeleton } from '../components/ui';
 import type { FormInitial } from '../components/ProfileForm';
 
@@ -20,6 +21,7 @@ function typeLabel(types: ProviderType[], id: string): string {
 }
 
 export default function SettingsPage() {
+  const ui = useUILang();
   const [llmTypes, setLlmTypes] = useState<ProviderType[]>([]);
   const [sttTypes, setSttTypes] = useState<ProviderType[]>([]);
   const [llmProfiles, setLlmProfiles] = useState<ModelProfile[]>([]);
@@ -49,11 +51,11 @@ export default function SettingsPage() {
       setSttTypes(st.drivers);
       setSttProfiles(sp);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Chargement impossible.');
+      setError(err instanceof Error ? err.message : pick(ui, 'Chargement impossible.', 'Loading failed.'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [ui]);
 
   useEffect(() => {
     void load();
@@ -105,7 +107,7 @@ export default function SettingsPage() {
       setEditing(null);
       await load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Enregistrement impossible.');
+      setFormError(err instanceof Error ? err.message : pick(ui, 'Enregistrement impossible.', 'Saving failed.'));
     } finally {
       setFormBusy(false);
     }
@@ -117,14 +119,14 @@ export default function SettingsPage() {
       await fn();
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Action impossible.');
+      setError(err instanceof Error ? err.message : pick(ui, 'Action impossible.', 'Action failed.'));
     } finally {
       setBusy(null);
     }
   };
 
   const remove = (kind: Kind, id: number, name: string) => {
-    if (!window.confirm(`Supprimer le profil « ${name} » ?`)) return;
+    if (!window.confirm(pick(ui, `Supprimer le profil « ${name} » ?`, `Delete profile "${name}"?`))) return;
     void run(`${kind}-del-${id}`, async () => {
       if (kind === 'llm') await api.deleteModelProfile(id);
       else await api.deleteSttProfile(id);
@@ -145,14 +147,14 @@ export default function SettingsPage() {
     <div className="space-y-10">
       <div>
         <PageHeader
-          title="Réglages IA"
-          description="Basculez le moteur entre modèle local et API externe, sans redémarrage. Un seul profil actif par famille."
+          title={pick(ui, 'Réglages IA', 'AI settings')}
+          description={pick(ui, 'Basculez le moteur entre modèle local et API externe, sans redémarrage. Un seul profil actif par famille.', 'Switch the engine between local model and external API, no restart needed. One active profile per family.')}
         />
         {error && (
           <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
             {error}{' '}
             <button onClick={() => void load()} className="font-semibold underline">
-              Réessayer
+              {pick(ui, 'Réessayer', 'Retry')}
             </button>
           </div>
         )}
@@ -160,8 +162,8 @@ export default function SettingsPage() {
 
       <ProfileSection
         kind="llm"
-        title="Modèles de langage"
-        description="Extraction, analyse, agent conversationnel et embeddings."
+        title={pick(ui, 'Modèles de langage', 'Language models')}
+        description={pick(ui, 'Extraction, analyse, agent conversationnel et embeddings.', 'Extraction, analysis, conversational agent and embeddings.')}
         types={llmTypes}
         profiles={llmProfiles}
         tests={llmTests}
@@ -184,8 +186,8 @@ export default function SettingsPage() {
 
       <ProfileSection
         kind="stt"
-        title="Transcription vocale"
-        description="Whisper local, Omnilingual Meta (langues locales) ou API cloud."
+        title={pick(ui, 'Transcription vocale', 'Voice transcription')}
+        description={pick(ui, 'Whisper local, Omnilingual Meta (langues locales) ou API cloud.', 'Local Whisper, Omnilingual Meta (local languages) or cloud API.')}
         types={sttTypes}
         profiles={sttProfiles}
         tests={sttTests}
@@ -204,7 +206,7 @@ export default function SettingsPage() {
         onTest={(id) => {
           const file = sttFiles[id];
           if (!file) {
-            setError('Choisissez un fichier audio pour tester ce profil.');
+            setError(pick(ui, 'Choisissez un fichier audio pour tester ce profil.', 'Choose an audio file to test this profile.'));
             return;
           }
           void run(`stt-test-${id}`, async () => {
@@ -243,6 +245,7 @@ interface SectionProps {
 }
 
 function ProfileSection(props: SectionProps) {
+  const ui = useUILang();
   const { kind, title, description, types, profiles, tests, busy, editing, editingInitial } = props;
   const driverOf = (p: ModelProfile | SttProfile) => ('provider' in p ? p.provider : p.driver);
   const modelOf = (p: ModelProfile | SttProfile) => p.model ?? '—';
@@ -255,7 +258,7 @@ function ProfileSection(props: SectionProps) {
           <p className="text-sm text-stone-600 dark:text-stone-400">{description}</p>
         </div>
         <Button variant="primary" onClick={props.onNew}>
-          Nouveau profil
+          {pick(ui, 'Nouveau profil', 'New profile')}
         </Button>
       </div>
 
@@ -280,17 +283,17 @@ function ProfileSection(props: SectionProps) {
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-semibold">{p.name}</h3>
               <Badge>{typeLabel(types, driverOf(p))}</Badge>
-              {p.is_active && <Badge tone="accent">ACTIF</Badge>}
+              {p.is_active && <Badge tone="accent">{pick(ui, 'ACTIF', 'ACTIVE')}</Badge>}
               {p.last_test_status && (
                 <Badge tone={p.last_test_status === 'success' ? 'success' : 'danger'} className="font-mono tabular-nums">
-                  test {p.last_test_status === 'success' ? 'réussi' : 'échoué'}
+                  test {p.last_test_status === 'success' ? pick(ui, 'réussi', 'passed') : pick(ui, 'échoué', 'failed')}
                   {p.last_test_latency_ms ? ` · ${p.last_test_latency_ms} ms` : ''}
                 </Badge>
               )}
             </div>
             <p className="mt-1 font-mono text-[13px] text-stone-600 dark:text-stone-400">
               {modelOf(p)}
-              {p.api_key_masked ? ` · clé ${p.api_key_masked}` : ''}
+              {p.api_key_masked ? pick(ui, ` · clé ${p.api_key_masked}`, ` · key ${p.api_key_masked}`) : ''}
             </p>
 
             {kind === 'stt' && (
@@ -306,22 +309,22 @@ function ProfileSection(props: SectionProps) {
 
             <div className="mt-3 flex flex-wrap gap-2">
               <Button variant="primary" onClick={() => props.onTest(p.id)} disabled={busy !== null}>
-                Tester
+                {pick(ui, 'Tester', 'Test')}
               </Button>
               {!p.is_active && (
                 <Button onClick={() => props.onActivate(p.id)} disabled={busy !== null}>
-                  Activer
+                  {pick(ui, 'Activer', 'Activate')}
                 </Button>
               )}
               <Button onClick={() => props.onEdit(p.id)} disabled={busy !== null}>
-                Modifier
+                {pick(ui, 'Modifier', 'Edit')}
               </Button>
               <Button
                 variant="danger"
                 onClick={() => props.onDelete(p.id, p.name)}
                 disabled={busy !== null || p.is_active}
               >
-                Supprimer
+                {pick(ui, 'Supprimer', 'Delete')}
               </Button>
             </div>
 
@@ -346,7 +349,7 @@ function ProfileSection(props: SectionProps) {
         ))}
         {profiles.length === 0 && (
           <Card>
-            <EmptyState icon="sliders" title="Aucun profil" description="Créez votre premier profil pour activer ce moteur." />
+            <EmptyState icon="sliders" title={pick(ui, 'Aucun profil', 'No profiles')} description={pick(ui, 'Créez votre premier profil pour activer ce moteur.', 'Create your first profile to enable this engine.')} />
           </Card>
         )}
       </div>
@@ -355,6 +358,7 @@ function ProfileSection(props: SectionProps) {
 }
 
 function TestResultView({ result }: { result: LlmTestResult | SttTestResult }) {
+  const ui = useUILang();
   const output = 'sample' in result ? result.sample : result.transcript;
   return (
     <div
@@ -365,7 +369,7 @@ function TestResultView({ result }: { result: LlmTestResult | SttTestResult }) {
       }`}
     >
       <p className="font-semibold">
-        {result.ok ? `Test réussi en ${result.latency_ms} ms` : 'Test échoué'}
+        {result.ok ? pick(ui, `Test réussi en ${result.latency_ms} ms`, `Test passed in ${result.latency_ms} ms`) : pick(ui, 'Test échoué', 'Test failed')}
       </p>
       {result.ok && output && <pre className="mt-1 whitespace-pre-wrap text-xs">{output.slice(0, 400)}</pre>}
       {!result.ok && result.error && <pre className="mt-1 whitespace-pre-wrap text-xs">{result.error}</pre>}

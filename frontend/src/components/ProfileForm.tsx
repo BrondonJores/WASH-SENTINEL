@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import type { ProfilePayload, ProviderType } from '../lib/api';
+import { pick, useUILang } from '../lib/i18n';
 import { Button } from './ui';
 
 export interface FormInitial {
@@ -31,6 +32,7 @@ const inputCls =
 const DEFAULT_PROFILE_TIMEOUT_S = 120;
 
 export default function ProfileForm({ framed = true, kind, types, initial, submitting, serverError, onSubmit, onCancel }: Props) {
+  const ui = useUILang();
   const isEdit = initial !== null;
   const [providerId, setProviderId] = useState(initial?.providerId ?? types[0]?.id ?? '');
   const [name, setName] = useState(initial?.name ?? '');
@@ -41,7 +43,7 @@ export default function ProfileForm({ framed = true, kind, types, initial, submi
   const [language, setLanguage] = useState(initial?.language ?? 'fr');
 
   const type = types.find((t) => t.id === providerId) ?? types[0];
-  if (!type) return <p className="text-sm text-stone-600 dark:text-stone-400">Types de providers indisponibles.</p>;
+  if (!type) return <p className="text-sm text-stone-600 dark:text-stone-400">{pick(ui, 'Types de providers indisponibles.', 'Provider types unavailable.')}</p>;
 
   const setValue = (field: string, v: string) => setValues((m) => ({ ...m, [field]: v }));
   const clean = (v: string | undefined) => (v && v.trim() !== '' ? v.trim() : undefined);
@@ -93,7 +95,7 @@ export default function ProfileForm({ framed = true, kind, types, initial, submi
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor={`name-${kind}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
-            Nom du profil
+            {pick(ui, 'Nom du profil', 'Profile name')}
           </label>
           <input
             id={`name-${kind}`}
@@ -106,7 +108,7 @@ export default function ProfileForm({ framed = true, kind, types, initial, submi
         </div>
         <div>
           <label htmlFor={`provider-${kind}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
-            Fournisseur
+            {pick(ui, 'Fournisseur', 'Provider')}
           </label>
           <select
             id={`provider-${kind}`}
@@ -147,21 +149,21 @@ export default function ProfileForm({ framed = true, kind, types, initial, submi
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor={`key-${kind}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
-            Clé API {type.api_key_required && !isEdit ? <span className="text-red-700 dark:text-red-400">*</span> : '(optionnelle)'}
+            {pick(ui, 'Clé API', 'API key')} {type.api_key_required && !isEdit ? <span className="text-red-700 dark:text-red-400">*</span> : pick(ui, '(optionnelle)', '(optional)')}
           </label>
           <input
             id={`key-${kind}`}
             type="password"
             autoComplete="off"
             value={apiKey}
-            placeholder={isEdit ? 'Vide = inchangée' : 'sk-…'}
+            placeholder={isEdit ? pick(ui, 'Vide = inchangée', 'Empty = unchanged') : 'sk-…'}
             onChange={(e) => setApiKey(e.target.value)}
             className={inputCls}
           />
         </div>
         <div>
           <label htmlFor={`timeout-${kind}`} className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
-            Timeout (secondes)
+            {pick(ui, 'Timeout (secondes)', 'Timeout (seconds)')}
           </label>
           <input
             id={`timeout-${kind}`}
@@ -179,7 +181,7 @@ export default function ProfileForm({ framed = true, kind, types, initial, submi
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label htmlFor="stt-language" className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Langue par défaut
+              {pick(ui, 'Langue par défaut', 'Default language')}
             </label>
             <input
               id="stt-language"
@@ -191,7 +193,7 @@ export default function ProfileForm({ framed = true, kind, types, initial, submi
           </div>
           <div>
             <label htmlFor="stt-threads" className="mb-1 block text-sm font-medium text-stone-700 dark:text-stone-300">
-              Threads CPU
+              {pick(ui, 'Threads CPU', 'CPU threads')}
             </label>
             <input
               id="stt-threads"
@@ -210,10 +212,10 @@ export default function ProfileForm({ framed = true, kind, types, initial, submi
 
       <div className="flex gap-2">
         <Button type="submit" variant="primary" disabled={submitting}>
-          {submitting ? 'Enregistrement…' : isEdit ? 'Mettre à jour' : 'Créer le profil'}
+          {submitting ? pick(ui, 'Enregistrement…', 'Saving…') : isEdit ? pick(ui, 'Mettre à jour', 'Update') : pick(ui, 'Créer le profil', 'Create profile')}
         </Button>
         <Button type="button" onClick={onCancel}>
-          Annuler
+          {pick(ui, 'Annuler', 'Cancel')}
         </Button>
       </div>
     </form>

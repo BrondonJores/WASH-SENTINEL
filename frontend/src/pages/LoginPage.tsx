@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { pick, useUILang } from '../lib/i18n';
 import { Button, Card, LiveClock, StatusDot } from '../components/ui';
 import { SentinelAvatar } from '../components/SentinelAvatar';
 
@@ -11,6 +12,7 @@ const labelCls = 'mb-1 block text-sm font-medium text-ink-soft';
 
 export default function LoginPage() {
   const { user, login } = useAuth();
+  const ui = useUILang();
   const [email, setEmail] = useState('admin@wash.cm');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +27,7 @@ export default function LoginPage() {
     try {
       await login(email, password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Échec de connexion.');
+      setError(err instanceof Error ? err.message : pick(ui, 'Échec de connexion.', 'Sign-in failed.'));
     } finally {
       setBusy(false);
     }
@@ -40,7 +42,7 @@ export default function LoginPage() {
           <div>
             <h1 className="font-display text-xl font-bold tracking-tight">WASH Sentinel</h1>
             <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-faint">
-              Console ops — accès restreint
+              {pick(ui, 'Console ops — accès restreint', 'Ops console — restricted access')}
             </p>
           </div>
         </div>
@@ -62,7 +64,7 @@ export default function LoginPage() {
             </div>
             <div>
               <label htmlFor="password" className={labelCls}>
-                Mot de passe
+                {pick(ui, 'Mot de passe', 'Password')}
               </label>
               <input
                 id="password"
@@ -76,13 +78,13 @@ export default function LoginPage() {
             </div>
             {error && <p className="text-sm font-medium text-danger">{error}</p>}
             <Button type="submit" variant="primary" disabled={busy} className="w-full">
-              {busy ? 'Connexion…' : 'Se connecter'}
+              {busy ? pick(ui, 'Connexion…', 'Signing in…') : pick(ui, 'Se connecter', 'Sign in')}
             </Button>
           </form>
         </Card>
         <div className="mt-4 flex items-center justify-between">
           <p className="font-mono text-[11px] text-ink-faint">
-            démo : admin@wash.cm / tech@wash.cm / directeur@ecole.cm
+            {pick(ui, 'démo : admin@wash.cm / tech@wash.cm / directeur@ecole.cm', 'demo: admin@wash.cm / tech@wash.cm / directeur@ecole.cm')}
           </p>
           <span className="flex items-center gap-1.5">
             <StatusDot tone="live" pulse />

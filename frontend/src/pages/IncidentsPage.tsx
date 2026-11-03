@@ -10,32 +10,59 @@ import type { DetailTarget } from '../components/DetailDrawer';
 import {
   CATEGORY_FR,
   INPUT_CLS,
+  STATUS_EN,
   STATUS_FR,
+  URGENCY_EN,
   URGENCY_FR,
-  fmtDate,
   fmtNum,
   statusTone,
   urgencyTone,
 } from '../lib/wash';
+import { localeFor } from '../lib/locale';
+import { pick, useUILang } from '../lib/i18n';
 import { DEFAULT_PER_PAGE } from '../lib/pagination';
 import { SEARCH_DEBOUNCE_MS } from '../lib/search';
 
-const errMsg = (e: unknown): string => (e instanceof ApiError ? e.message : 'Erreur réseau.');
+const errMsg = (e: unknown, lang?: string): string =>
+  (e instanceof ApiError ? e.message : pick(lang, 'Erreur réseau.', 'Network error.'));
+
+// Libellés EN des catégories (miroir local de CATEGORY_FR : lib/wash.ts hors périmètre).
+const CATEGORY_EN: Record<string, string> = {
+  water_point: 'Water point',
+  toilets_latrines: 'Toilets / latrines',
+  handwashing: 'Handwashing',
+  sewage_drainage: 'Sewage / drainage',
+};
+
+/** Même format que wash.fmtDate, avec la locale de la langue UI. */
+const fmtDateL = (iso: string | null, lang: string | undefined): string =>
+  iso
+    ? new Date(iso).toLocaleString(localeFor(lang), {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '—';
 
 const STATUSES = ['reported', 'triaged', 'assigned', 'in_progress', 'resolved', 'closed'];
 const URGENCIES = ['low', 'medium', 'high', 'critical'];
 const CATEGORIES = ['water_point', 'toilets_latrines', 'handwashing', 'sewage_drainage'];
 const SORTS = [
-  { value: '-priority_score', label: 'Score IA ↓' },
-  { value: '-created_at', label: 'Plus récents' },
-  { value: '-affected_students', label: 'Élèves affectés ↓' },
+  { value: '-priority_score', label: 'Score IA ↓', labelEn: 'AI score ↓' },
+  { value: '-created_at', label: 'Plus récents', labelEn: 'Most recent' },
+  { value: '-affected_students', label: 'Élèves affectés ↓', labelEn: 'Students affected ↓' },
 ];
 const DEFAULT_SORT = '-priority_score';
 
 export default function IncidentsPage() {
   const { user } = useAuth();
+  const ui = useUILang();
   const admin = user?.roles.includes('wash_admin') ?? false;
   const agent = admin || (user?.roles.includes('maintenance_agent') ?? false);
+  const statusMap = ui === 'en' ? STATUS_EN : STATUS_FR;
+  const urgencyMap = ui === 'en' ? URGENCY_EN : URGENCY_FR;
+  const categoryMap = ui === 'en' ? CATEGORY_EN : CATEGORY_FR;
 
   const [items, setItems] = useState<Incident[]>([]);
   const [page, setPage] = useState(1);
@@ -120,11 +147,11 @@ export default function IncidentsPage() {
       setLastPage(res.last_page);
       setTotal(res.total);
     } catch (e) {
-      setError(errMsg(e));
+      setError(errMsg(e, ui));
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, statusF, urgencyF, categoryF, searchQ, sortV]);
+  }, [page, perPage, statusF, urgencyF, categoryF, searchQ, sortV, ui]);
 
   useEffect(() => {
     void load();
@@ -154,12 +181,12 @@ export default function IncidentsPage() {
         }
       } catch (e) {
         setDetail(null);
-        setMsg(errMsg(e));
+        setMsg(errMsg(e, ui));
       } finally {
         setDetailLoading(false);
       }
     },
-    [admin],
+    [admin, ui],
   );
 
   const runAction = async (fn: () => Promise<{ message: string }>) => {
@@ -172,7 +199,7 @@ export default function IncidentsPage() {
       await selectForActions(detail.id);
       await load();
     } catch (e) {
-      setMsg(errMsg(e));
+      setMsg(errMsg(e, ui));
     } finally {
       setBusy(false);
     }
@@ -234,7 +261,7 @@ export default function IncidentsPage() {
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
         title="Interventions"
-        description={`Incidents triés par l'IA, vérifiés par l'humain — ${fmtNum(total)} au total.`}
+        description={pick(ui, `Incidents triés par l'IA, vérifiés par l'humain — ${fmtNum(total)} au total.`, `AI-triaged incidents, human-verified — ${fmtNum(total)} in total.`)}
       />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
@@ -250,15 +277,15 @@ export default function IncidentsPage() {
                 setSearchInput('');
               }
             }}
-            placeholder="Rechercher (titre, référence, école…) — « / » pour focus"
-            aria-label="Rechercher un incident"
+            placeholder={pick(ui, 'Rechercher (titre, référence, école…) — « / » pour focus', 'Search (title, reference, school…) — press "/" to focus')}
+            aria-label={pick(ui, 'Rechercher un incident', 'Search for an incident')}
             className={`${INPUT_CLS} pr-9`}
           />
           {searchInput !== '' && (
             <button
               type="button"
               onClick={() => setSearchInput('')}
-              aria-label="Effacer la recherche"
+              aria-label={pick(ui, 'Effacer la recherche', 'Clear search')}
               className="absolute top-1/2 right-2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-lg leading-none text-ink-faint transition-colors duration-150 ease-snap hover:bg-raised hover:text-ink motion-reduce:transition-none"
             >
               ×
@@ -266,62 +293,62 @@ export default function IncidentsPage() {
           )}
         </div>
         <p aria-live="polite" className="font-mono text-xs tabular-nums text-ink-soft">
-          {fmtNum(total)} résultat{total > 1 ? 's' : ''}
+          {pick(ui, `${fmtNum(total)} résultat${total > 1 ? 's' : ''}`, `${fmtNum(total)} result${total > 1 ? 's' : ''}`)}
         </p>
       </div>
 
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="flex items-center gap-2 text-sm">
-          <span className="text-ink-soft">Statut</span>
+          <span className="text-ink-soft">{pick(ui, 'Statut', 'Status')}</span>
           <Select
             value={statusF}
             onChange={(e) => {
               setStatusF(e.target.value);
               setPage(1);
             }}
-            ariaLabel="Filtrer par statut"
-            options={[{ value: '', label: 'Tous' }, ...STATUSES.map((s) => ({ value: s, label: STATUS_FR[s] }))]}
+            ariaLabel={pick(ui, 'Filtrer par statut', 'Filter by status')}
+            options={[{ value: '', label: pick(ui, 'Tous', 'All') }, ...STATUSES.map((s) => ({ value: s, label: statusMap[s] }))]}
           />
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <span className="text-ink-soft">Urgence</span>
+          <span className="text-ink-soft">{pick(ui, 'Urgence', 'Urgency')}</span>
           <Select
             value={urgencyF}
             onChange={(e) => {
               setUrgencyF(e.target.value);
               setPage(1);
             }}
-            ariaLabel="Filtrer par urgence"
-            options={[{ value: '', label: 'Toutes' }, ...URGENCIES.map((u) => ({ value: u, label: URGENCY_FR[u] }))]}
+            ariaLabel={pick(ui, 'Filtrer par urgence', 'Filter by urgency')}
+            options={[{ value: '', label: pick(ui, 'Toutes', 'All') }, ...URGENCIES.map((u) => ({ value: u, label: urgencyMap[u] }))]}
           />
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <span className="text-ink-soft">Catégorie</span>
+          <span className="text-ink-soft">{pick(ui, 'Catégorie', 'Category')}</span>
           <Select
             value={categoryF}
             onChange={(e) => {
               setCategoryF(e.target.value);
               setPage(1);
             }}
-            ariaLabel="Filtrer par catégorie"
-            options={[{ value: '', label: 'Toutes' }, ...CATEGORIES.map((c) => ({ value: c, label: CATEGORY_FR[c] }))]}
+            ariaLabel={pick(ui, 'Filtrer par catégorie', 'Filter by category')}
+            options={[{ value: '', label: pick(ui, 'Toutes', 'All') }, ...CATEGORIES.map((c) => ({ value: c, label: categoryMap[c] }))]}
           />
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <span className="text-ink-soft">Tri</span>
+          <span className="text-ink-soft">{pick(ui, 'Tri', 'Sort')}</span>
           <Select
             value={sortV}
             onChange={(e) => {
               setSortV(e.target.value);
               setPage(1);
             }}
-            ariaLabel="Trier les incidents"
-            options={SORTS.map((s) => ({ value: s.value, label: s.label }))}
+            ariaLabel={pick(ui, 'Trier les incidents', 'Sort incidents')}
+            options={SORTS.map((s) => ({ value: s.value, label: pick(ui, s.label, s.labelEn) }))}
           />
         </label>
         {filtersActive && (
           <Button size="sm" variant="ghost" onClick={resetFilters}>
-            Réinitialiser
+            {pick(ui, 'Réinitialiser', 'Reset')}
           </Button>
         )}
       </div>
@@ -331,10 +358,10 @@ export default function IncidentsPage() {
           {detailLoading && <Skeleton className="h-24" />}
           {!detailLoading && !detail && (
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-ink-soft">{msg ?? 'Détail indisponible.'}</p>
+              <p className="text-sm text-ink-soft">{msg ?? pick(ui, 'Détail indisponible.', 'Details unavailable.')}</p>
               <div className="flex gap-2">
                 <Button size="sm" onClick={() => void selectForActions(selectedId)}>
-                  Réessayer
+                  {pick(ui, 'Réessayer', 'Retry')}
                 </Button>
                 <Button
                   size="sm"
@@ -344,7 +371,7 @@ export default function IncidentsPage() {
                     setMsg(null);
                   }}
                 >
-                  Fermer
+                  {pick(ui, 'Fermer', 'Close')}
                 </Button>
               </div>
             </div>
@@ -355,10 +382,10 @@ export default function IncidentsPage() {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge tone={urgencyTone(detail.urgency)}>
-                      {URGENCY_FR[detail.urgency] ?? detail.urgency}
+                      {urgencyMap[detail.urgency] ?? detail.urgency}
                     </Badge>
                     <Badge tone={statusTone(detail.status)}>
-                      {STATUS_FR[detail.status] ?? detail.status}
+                      {statusMap[detail.status] ?? detail.status}
                     </Badge>
                     <span className="font-mono text-xs text-ink-faint">
                       {detail.reference_code}
@@ -369,10 +396,10 @@ export default function IncidentsPage() {
                   </h2>
                   <p className="text-xs text-ink-soft">
                     {detail.school?.name ?? '—'} ({detail.school?.district ?? '—'}) ·{' '}
-                    {CATEGORY_FR[detail.category] ?? detail.category} ·{' '}
-                    {fmtNum(detail.affected_students)} élèves · signalé le{' '}
-                    {fmtDate(detail.created_at)} · Assigné à : {detail.assignee?.name ?? 'personne'}{' '}
-                    · Score IA :{' '}
+                    {categoryMap[detail.category] ?? detail.category} ·{' '}
+                    {pick(ui, `${fmtNum(detail.affected_students)} élèves · signalé le`, `${fmtNum(detail.affected_students)} students · reported on`)}{' '}
+                    {fmtDateL(detail.created_at, ui)} · {pick(ui, 'Assigné à :', 'Assigned to:')} {detail.assignee?.name ?? pick(ui, 'personne', 'nobody')}{' '}
+                    · {pick(ui, 'Score IA :', 'AI score:')}{' '}
                     <span className="font-mono font-bold text-ink tabular-nums">
                       {detail.priority_score.toFixed(1)}
                     </span>
@@ -384,12 +411,12 @@ export default function IncidentsPage() {
                     variant="ghost"
                     onClick={() => setDrawer({ kind: 'incident', id: detail.id })}
                   >
-                    Voir le détail
+                    {pick(ui, 'Voir le détail', 'See details')}
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    aria-label="Fermer le panneau d'actions"
+                    aria-label={pick(ui, "Fermer le panneau d'actions", 'Close the actions panel')}
                     onClick={() => {
                       setSelectedId(null);
                       setDetail(null);
@@ -402,14 +429,14 @@ export default function IncidentsPage() {
               </div>
 
               <div className="grid gap-3 border-t border-line pt-3 sm:grid-cols-2">
-                <Field label="Changer le statut">
+                <Field label={pick(ui, 'Changer le statut', 'Change status')}>
                   <div className="flex gap-2">
                     <Select
                       value={statusV}
                       onChange={(e) => setStatusV(e.target.value)}
-                      ariaLabel="Changer le statut"
+                      ariaLabel={pick(ui, 'Changer le statut', 'Change status')}
                       disabled={busy}
-                      options={STATUSES.map((s) => ({ value: s, label: STATUS_FR[s] }))}
+                      options={STATUSES.map((s) => ({ value: s, label: statusMap[s] }))}
                     />
                     <Button
                       size="sm"
@@ -422,14 +449,14 @@ export default function IncidentsPage() {
                   </div>
                 </Field>
                 {admin && (
-                  <Field label="Assigner à">
+                  <Field label={pick(ui, 'Assigner à', 'Assign to')}>
                     <div className="flex gap-2">
                       <Select
                         value={assignV}
                         onChange={(e) => setAssignV(e.target.value)}
-                        ariaLabel="Assigner à"
+                        ariaLabel={pick(ui, 'Assigner à', 'Assign to')}
                         disabled={busy}
-                        options={[{ value: '', label: 'Choisir…' }, ...users.map((u) => ({ value: String(u.id), label: u.name }))]}
+                        options={[{ value: '', label: pick(ui, 'Choisir…', 'Choose…') }, ...users.map((u) => ({ value: String(u.id), label: u.name }))]}
                       />
                       <Button
                         size="sm"
@@ -445,7 +472,7 @@ export default function IncidentsPage() {
                   </Field>
                 )}
                 {admin && (
-                  <Field label="Forcer la priorité (score + urgence)">
+                  <Field label={pick(ui, 'Forcer la priorité (score + urgence)', 'Force priority (score + urgency)')}>
                     <div className="flex gap-2">
                       <input
                         type="number"
@@ -459,9 +486,9 @@ export default function IncidentsPage() {
                       <Select
                         value={scoreUrgencyV}
                         onChange={(e) => setScoreUrgencyV(e.target.value)}
-                        ariaLabel="Forcer l'urgence"
+                        ariaLabel={pick(ui, "Forcer l'urgence", 'Force urgency')}
                         disabled={busy}
-                        options={URGENCIES.map((u) => ({ value: u, label: URGENCY_FR[u] }))}
+                        options={URGENCIES.map((u) => ({ value: u, label: urgencyMap[u] }))}
                       />
                       <Button
                         size="sm"
@@ -481,12 +508,12 @@ export default function IncidentsPage() {
                     </div>
                   </Field>
                 )}
-                <Field label="Journaliser une intervention (coût XAF, jours, notes)">
+                <Field label={pick(ui, 'Journaliser une intervention (coût XAF, jours, notes)', 'Log an intervention (XAF cost, days, notes)')}>
                   <div className="flex gap-2">
                     <input
                       type="number"
                       min={0}
-                      placeholder="Coût"
+                      placeholder={pick(ui, 'Coût', 'Cost')}
                       value={logCost}
                       onChange={(e) => setLogCost(e.target.value)}
                       className={INPUT_CLS}
@@ -495,7 +522,7 @@ export default function IncidentsPage() {
                     <input
                       type="number"
                       min={0}
-                      placeholder="Jours"
+                      placeholder={pick(ui, 'Jours', 'Days')}
                       value={logDays}
                       onChange={(e) => setLogDays(e.target.value)}
                       className={INPUT_CLS}
@@ -537,7 +564,7 @@ export default function IncidentsPage() {
         <Card className="msg-in mb-4 p-3">
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-sm font-semibold tabular-nums">
-              {fmtNum(checked.length)} sélectionné{checked.length > 1 ? 's' : ''}
+              {pick(ui, `${fmtNum(checked.length)} sélectionné${checked.length > 1 ? 's' : ''}`, `${fmtNum(checked.length)} selected`)}
             </p>
             <Button
               size="sm"
@@ -548,10 +575,10 @@ export default function IncidentsPage() {
                 setBulkConfirm(false);
               }}
             >
-              Tout effacer
+              {pick(ui, 'Tout effacer', 'Clear all')}
             </Button>
             <label className="flex items-center gap-2 text-sm">
-              <span className="text-ink-soft">Statut</span>
+              <span className="text-ink-soft">{pick(ui, 'Statut', 'Status')}</span>
               <Select
                 value={bulkStatus}
                 onChange={(e) => {
@@ -559,8 +586,8 @@ export default function IncidentsPage() {
                   setBulkConfirm(false);
                 }}
                 disabled={bulkRunning}
-                ariaLabel="Statut à appliquer en masse"
-                options={[{ value: '', label: 'Choisir…' }, ...STATUSES.map((s) => ({ value: s, label: STATUS_FR[s] }))]}
+                ariaLabel={pick(ui, 'Statut à appliquer en masse', 'Status to apply in bulk')}
+                options={[{ value: '', label: pick(ui, 'Choisir…', 'Choose…') }, ...STATUSES.map((s) => ({ value: s, label: statusMap[s] }))]}
               />
             </label>
             <Button
@@ -569,20 +596,19 @@ export default function IncidentsPage() {
               disabled={bulkRunning || bulkStatus === ''}
               onClick={() => setBulkConfirm(true)}
             >
-              Appliquer
+              {pick(ui, 'Appliquer', 'Apply')}
             </Button>
           </div>
           {bulkConfirm && !bulkRunning && (
             <div className="msg-in mt-3 flex flex-wrap items-center gap-3 rounded-md bg-raised px-3 py-2 text-sm">
               <p>
-                Appliquer « {STATUS_FR[bulkStatus] ?? bulkStatus} » à {fmtNum(checked.length)}{' '}
-                incident{checked.length > 1 ? 's' : ''} ?
+                {pick(ui, `Appliquer « ${statusMap[bulkStatus] ?? bulkStatus} » à ${fmtNum(checked.length)} incident${checked.length > 1 ? 's' : ''} ?`, `Apply "${statusMap[bulkStatus] ?? bulkStatus}" to ${fmtNum(checked.length)} incident${checked.length > 1 ? 's' : ''}?`)}
               </p>
               <Button size="sm" variant="primary" onClick={() => void runBulk()}>
-                Confirmer
+                {pick(ui, 'Confirmer', 'Confirm')}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setBulkConfirm(false)}>
-                Annuler
+                {pick(ui, 'Annuler', 'Cancel')}
               </Button>
             </div>
           )}
@@ -606,11 +632,10 @@ export default function IncidentsPage() {
       {bulkSummary !== null && !bulkRunning && (
         <Card className="msg-in mb-4 flex flex-wrap items-center gap-3 p-3">
           <p className="text-sm">
-            {fmtNum(bulkSummary.ok)} réussi{bulkSummary.ok > 1 ? 's' : ''},{' '}
-            {fmtNum(bulkSummary.fail)} échoué{bulkSummary.fail > 1 ? 's' : ''}.
+            {pick(ui, `${fmtNum(bulkSummary.ok)} réussi${bulkSummary.ok > 1 ? 's' : ''}, ${fmtNum(bulkSummary.fail)} échoué${bulkSummary.fail > 1 ? 's' : ''}.`, `${fmtNum(bulkSummary.ok)} succeeded, ${fmtNum(bulkSummary.fail)} failed.`)}
           </p>
           <Button size="sm" variant="ghost" onClick={() => setBulkSummary(null)}>
-            Fermer
+            {pick(ui, 'Fermer', 'Close')}
           </Button>
         </Card>
       )}
@@ -620,7 +645,7 @@ export default function IncidentsPage() {
           <Checkbox
             checked={allPageChecked}
             onChange={toggleAllPage}
-            label="Tout sélectionner (page)"
+            label={pick(ui, 'Tout sélectionner (page)', 'Select all (page)')}
             className="text-xs text-ink-soft"
           />
         </div>
@@ -638,16 +663,16 @@ export default function IncidentsPage() {
         <Card>
           <EmptyState
             icon="alert"
-            title="Aucun incident"
+            title={pick(ui, 'Aucun incident', 'No incidents')}
             description={
               filtersActive
-                ? 'Aucun incident ne correspond à la recherche ou aux filtres.'
-                : 'Aucun incident pour le moment.'
+                ? pick(ui, 'Aucun incident ne correspond à la recherche ou aux filtres.', 'No incidents match the search or filters.')
+                : pick(ui, 'Aucun incident pour le moment.', 'No incidents yet.')
             }
             action={
               filtersActive ? (
                 <Button size="sm" onClick={resetFilters}>
-                  Réinitialiser
+                  {pick(ui, 'Réinitialiser', 'Reset')}
                 </Button>
               ) : undefined
             }
@@ -668,14 +693,14 @@ export default function IncidentsPage() {
               <Checkbox
                 checked={checked.includes(i.id)}
                 onChange={() => toggleCheck(i.id)}
-                ariaLabel={`Sélectionner ${i.reference_code}`}
+                ariaLabel={pick(ui, `Sélectionner ${i.reference_code}`, `Select ${i.reference_code}`)}
                 className="shrink-0"
               />
             )}
             <button
               type="button"
               onClick={() => setDrawer({ kind: 'incident', id: i.id })}
-              aria-label={`Voir le détail ${i.reference_code}`}
+              aria-label={pick(ui, `Voir le détail ${i.reference_code}`, `See details ${i.reference_code}`)}
               className="min-w-0 flex-1 rounded-lg p-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               <div className="flex items-center justify-between gap-2">
@@ -688,13 +713,13 @@ export default function IncidentsPage() {
                 {i.title}
               </p>
               <p className="mt-0.5 truncate text-xs text-ink-soft">
-                {i.school?.name ?? '—'} · {fmtNum(i.affected_students)} élèves ·{' '}
-                {i.reports_count ?? 0} signalement{(i.reports_count ?? 0) > 1 ? 's' : ''}
+                {i.school?.name ?? '—'} · {pick(ui, `${fmtNum(i.affected_students)} élèves`, `${fmtNum(i.affected_students)} students`)} ·{' '}
+                {pick(ui, `${i.reports_count ?? 0} signalement${(i.reports_count ?? 0) > 1 ? 's' : ''}`, `${i.reports_count ?? 0} report${(i.reports_count ?? 0) > 1 ? 's' : ''}`)}
               </p>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                <Badge tone={urgencyTone(i.urgency)}>{URGENCY_FR[i.urgency] ?? i.urgency}</Badge>
-                <Badge tone={statusTone(i.status)}>{STATUS_FR[i.status] ?? i.status}</Badge>
-                <Badge>{CATEGORY_FR[i.category] ?? i.category}</Badge>
+                <Badge tone={urgencyTone(i.urgency)}>{urgencyMap[i.urgency] ?? i.urgency}</Badge>
+                <Badge tone={statusTone(i.status)}>{statusMap[i.status] ?? i.status}</Badge>
+                <Badge>{categoryMap[i.category] ?? i.category}</Badge>
               </div>
             </button>
             {agent && (
@@ -703,10 +728,10 @@ export default function IncidentsPage() {
                 size="sm"
                 variant={selectedId === i.id ? 'primary' : 'secondary'}
                 onClick={() => void selectForActions(i.id)}
-                aria-label={`Gérer ${i.reference_code}`}
+                aria-label={pick(ui, `Gérer ${i.reference_code}`, `Manage ${i.reference_code}`)}
                 className="shrink-0"
               >
-                Gérer
+                {pick(ui, 'Gérer', 'Manage')}
               </Button>
             )}
           </li>
@@ -728,6 +753,7 @@ export default function IncidentsPage() {
         detail={drawer}
         onClose={() => setDrawer(null)}
         onDetail={(kind, id) => setDrawer({ kind, id })}
+        lang={ui}
       />
     </div>
   );

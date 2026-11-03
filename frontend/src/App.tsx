@@ -1,7 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { pick, useUILang } from './lib/i18n';
 import { ThemeProvider } from './theme';
 import { DialogueProvider } from './dialogues/DialogueContext';
 import Layout from './components/Layout';
@@ -26,10 +27,11 @@ function RequireAuth({ children }: { children: ReactNode }) {
 
 function RequireAdmin({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const ui = useUILang();
   if (!user?.roles.includes('wash_admin')) {
     return (
       <Layout>
-        <p className="text-sm text-stone-600 dark:text-stone-400">Accès réservé aux administrateurs WASH.</p>
+        <p className="text-sm text-stone-600 dark:text-stone-400">{pick(ui, 'Accès réservé aux administrateurs WASH.', 'Restricted to WASH administrators.')}</p>
       </Layout>
     );
   }
@@ -56,6 +58,11 @@ function adminOnly(node: ReactNode) {
 
 function AuthedApp() {
   const { user } = useAuth();
+  const ui = useUILang();
+  useEffect(() => {
+    document.documentElement.lang = ui;
+    document.title = pick(ui, 'WASH Sentinel — Console IA', 'WASH Sentinel — AI Console');
+  }, [ui]);
   return (
     <DialogueProvider key={user?.email ?? 'anon'}>
           <Routes>
@@ -63,7 +70,7 @@ function AuthedApp() {
             <Route
               path="/m"
               element={
-                <Suspense fallback={<p className="p-4 text-sm text-ink-soft">Chargement du relai terrain…</p>}>
+                <Suspense fallback={<p className="p-4 text-sm text-ink-soft">{pick(ui, 'Chargement du relai terrain…', 'Loading the field relay…')}</p>}>
                   <MeshFieldPage />
                 </Suspense>
               }
@@ -71,7 +78,7 @@ function AuthedApp() {
             <Route
               path="/signaler"
               element={
-                <Suspense fallback={<p className="p-4 text-sm text-ink-soft">Chargement du formulaire…</p>}>
+                <Suspense fallback={<p className="p-4 text-sm text-ink-soft">{pick(ui, 'Chargement du formulaire…', 'Loading the form…')}</p>}>
                   <PublicReportPage />
                 </Suspense>
               }

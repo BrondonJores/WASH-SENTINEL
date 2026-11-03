@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Button } from './ui';
 import { Select } from './controls';
 import { fmtNum } from '../lib/wash';
+import { pick, useUILang } from '../lib/i18n';
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -58,6 +59,7 @@ export function Pager({
   perPage?: number;
   onPerPage?: (n: number) => void;
 }) {
+  const ui = useUILang();
   const effectivePerPage = perPage ?? 20;
   if (lastPage <= 1 && (total === undefined || total <= effectivePerPage)) return null;
 
@@ -69,12 +71,10 @@ export function Pager({
     <nav aria-label="Pagination" className="mt-4 flex flex-wrap items-center justify-between gap-3">
       <p aria-live="polite" className="font-mono text-xs tabular-nums text-ink-faint">
         {total === undefined ? (
-          <>
-            Page {page} / {lastPage}
-          </>
+          <>{pick(ui, `Page ${page} / ${lastPage}`, `Page ${page} of ${lastPage}`)}</>
         ) : (
           <>
-            {fmtNum(from)}–{fmtNum(to)} sur {fmtNum(total)}
+            {fmtNum(from)}–{fmtNum(to)} {pick(ui, 'sur', 'of')} {fmtNum(total)}
           </>
         )}
       </p>
@@ -83,9 +83,9 @@ export function Pager({
           size="sm"
           disabled={page <= 1}
           onClick={() => onPage(page - 1)}
-          aria-label="Page précédente"
+          aria-label={pick(ui, 'Page précédente', 'Previous page')}
         >
-          ← Précédent
+          ← {pick(ui, 'Précédent', 'Previous')}
         </Button>
         {pageItems(page, lastPage).map((item, idx) =>
           item === '…' ? (
@@ -99,7 +99,7 @@ export function Pager({
               variant={item === page ? 'primary' : 'secondary'}
               disabled={item === page}
               onClick={() => onPage(item)}
-              aria-label={`Aller à la page ${item}`}
+              aria-label={pick(ui, `Aller à la page ${item}`, `Go to page ${item}`)}
               aria-current={item === page ? 'page' : undefined}
             >
               {item}
@@ -110,18 +110,18 @@ export function Pager({
           size="sm"
           disabled={page >= lastPage}
           onClick={() => onPage(page + 1)}
-          aria-label="Page suivante"
+          aria-label={pick(ui, 'Page suivante', 'Next page')}
         >
-          Suivant →
+          {pick(ui, 'Suivant', 'Next')} →
         </Button>
       </div>
       {showPerPage && (
         <label className="flex items-center gap-2 text-sm text-ink-soft">
-          <span aria-hidden="true">Afficher</span>
+          <span aria-hidden="true">{pick(ui, 'Afficher', 'Show')}</span>
           <Select
             value={String(perPage)}
             onChange={(e) => onPerPage(Number(e.target.value))}
-            ariaLabel="Nombre d'éléments par page"
+            ariaLabel={pick(ui, "Nombre d'éléments par page", 'Items per page')}
             options={PER_PAGE_OPTIONS.map((n) => ({ value: String(n), label: `${n} / page` }))}
           />
         </label>
@@ -131,12 +131,13 @@ export function Pager({
 }
 
 export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const ui = useUILang();
   return (
     <div className="mb-4 flex items-center justify-between gap-3 rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">
       <span>{message}</span>
       {onRetry && (
         <Button size="sm" variant="ghost" onClick={onRetry}>
-          Réessayer
+          {pick(ui, 'Réessayer', 'Retry')}
         </Button>
       )}
     </div>
