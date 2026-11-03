@@ -29,6 +29,9 @@ class WashAiEngineService implements AiEngineClient
     /** Timeout (secondes) du test d'un profil STT. */
     public const TIMEOUT_TEST_STT = 120;
 
+    /** Timeout (secondes) du chat agent (boucle outils, jusqu'à 5 appels LLM CPU). */
+    public const TIMEOUT_CHAT = 300;
+
     /** TTL (secondes) du cache profils actif LLM/STT. */
     public const PROFILE_CACHE_TTL = 60;
 
@@ -220,7 +223,9 @@ class WashAiEngineService implements AiEngineClient
             $payload['image_mime'] = $imageMime;
         }
 
-        return $this->client()->post($this->baseUrl . '/v1/agent/chat', $payload)->throw()->json();
+        $timeout = $this->adminTimeout('timeout_chat', self::TIMEOUT_CHAT);
+
+        return Http::withHeaders([...$this->profileHeaders(), ...$this->sttHeaders()])->timeout($timeout)->post($this->baseUrl . '/v1/agent/chat', $payload)->throw()->json();
     }
 
     public function dispatchPlan(string $district, array $schools): array

@@ -44,6 +44,7 @@ return [
         'timeout_provider_types' => env('AI_ENGINE_TIMEOUT_PROVIDER_TYPES', 15),
         'timeout_test_profile' => env('AI_ENGINE_TIMEOUT_TEST_PROFILE', 45),
         'timeout_test_stt' => env('AI_ENGINE_TIMEOUT_TEST_STT', 120),
+        'timeout_chat' => env('AI_ENGINE_TIMEOUT_CHAT', 300),
         'profile_cache_ttl' => env('AI_ENGINE_PROFILE_CACHE_TTL', 60),
         // Seuil cosinus décision doublon. MIROIR de DUPLICATE_DECISION_THRESHOLD
         // (ai-engine/app/thresholds.py, 0.80 hérité AXE 8) : même nom

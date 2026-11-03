@@ -78,6 +78,8 @@ if ! docker compose exec -T ollama ollama pull "${OLLAMA_MODEL:-llama3.2:3b}"; t
   echo "   ou relancez : docker compose exec ollama ollama pull ${OLLAMA_MODEL:-llama3.2:3b}"
 fi
 docker compose exec -T ollama ollama pull "${OLLAMA_EMBED_MODEL:-nomic-embed-text}" || echo "!! Echec du pull ${OLLAMA_EMBED_MODEL:-nomic-embed-text} (non bloquant, relancez-le plus tard)."
+say "Préchauffage du modèle LLM (sinon la 1re question rame puis timeout)"
+docker compose exec -T ollama ollama run "${OLLAMA_MODEL:-llama3.2:3b}" "Réponds OK" >/dev/null 2>&1 || echo "!! Warmup LLM impossible (non bloquant, la 1re question sera lente)."
 echo "Vision optionnelle : docker compose exec ollama ollama pull ${OLLAMA_VISION_MODEL:-llama3.2-vision:11b}"
 
 say "WASH Sentinel est prêt"
