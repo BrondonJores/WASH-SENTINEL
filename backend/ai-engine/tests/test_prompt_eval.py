@@ -354,6 +354,22 @@ ROUTING_CASES = [
         "present": ["list_maintenance_logs", "prepare_incident"],
         "absent": [],
     },
+    # -- EN : « prepare a report for X » = document analytique, pas création --
+    {
+        "id": "en_prepare_report_for_school",
+        "question": "Prepare a report for Bonanjo",
+        "intent": "list",
+        "present": ["document_briefing"],
+        "absent": ["prepare_report", "prepare_incident", "prepare_maintenance_log"],
+    },
+    # -- Garde : « report a ... » reste un dépôt de signalement --
+    {
+        "id": "en_report_a_leak",
+        "question": "Report a leaking tap at Bonanjo school",
+        "intent": "create",
+        "present": ["prepare_report"],
+        "absent": [],
+    },
 ]
 
 

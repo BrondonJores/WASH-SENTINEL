@@ -1845,7 +1845,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "prepare_report",
-            "description": "Prépare la création d'un signalement (nouvelle panne signalée par un usager), dossier complet ou partiel sans rien écrire.",
+            "description": "Prépare la création d'un signalement (panne inédite signalée par un usager), dossier complet ou partiel sans rien écrire. Réservé au dépôt d'une panne observée ; quand l'utilisateur demande un rapport ou document analytique sur une école ou un district, c'est document_briefing. Reserved for filing a newly observed breakdown; when the user asks for an analytical report or document about a school or district ('prepare a report for X'), that is document_briefing.",
             "short_description": "Prépare un signalement (création) : école, description, catégorie, urgence, élèves.",
             "parameters": {
                 "type": "object",

@@ -129,6 +129,12 @@ LIST_FEATURES: tuple[tuple[str, float], ...] = tuple(
         ("send", 1.5),
         ("emergency", 1.5),
         ("briefing", 1.5),
+        # Sens « document » (« prepare a report for X ») : avec le verbe
+        # « prepare » (création), le tiebreak bascule en consultation et
+        # masque les prepare_* — le LLM ne peut plus confondre avec
+        # l'outil prepare_report (dépôt d'une NOUVELLE panne).
+        (_phrase("report for"), 2.0),
+        (_phrase("report on"), 2.0),
         ("open", 1.0),
         ("week", 1.0),
         ("month", 1.0),

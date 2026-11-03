@@ -118,6 +118,26 @@ class PlaceSuggestEnglishTest(unittest.TestCase):
         self.assertTrue(out["from_marker"])
         self.assertTrue(out["suggestions"])
 
+    def test_english_insight_and_questions(self) -> None:
+        out = suggest_places("Prepare a report for Bonajo",
+                             {"schools": [{"school_name":
+                                            "École Publique de Bonanjo",
+                                            "district": "Wouri"}],
+                              "incidents": []},
+                             lang="en")
+        self.assertTrue(out["suggestions"])
+        self.assertIn("Bonanjo", out["insight"])
+        self.assertNotIn("vouliez-vous dire", out["insight"])
+        for s in out["suggestions"]:
+            self.assertIn(s["label"], s["question"])
+        school_q = next(s["question"] for s in out["suggestions"]
+                        if s["kind"] == "school")
+        self.assertTrue(school_q.startswith("Analyze"))
+
+    def test_french_default_unchanged(self) -> None:
+        out = suggest_places("panne à Zzzzxqw", CONTEXT)
+        self.assertIn("inconnu", out["insight"])
+
 
 if __name__ == "__main__":
     unittest.main()

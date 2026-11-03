@@ -27,7 +27,11 @@ TOOL_DEF = {
         "document_briefing avec topic=Mvila, format=diaporama. "
         "Ne JAMAIS utiliser pour un mini-briefing d'actions courtes ou un "
         "simple résumé en une phrase (répondre directement), ni pour créer "
-        "un signalement (outils prepare_*)."
+        "un signalement (outils prepare_*). "
+        "(EN: use when the user asks for a report, briefing, slide deck or "
+        "presentation with figures and actions about a school or district, "
+        "e.g. 'Prepare a report for Bonanjo'. Never use to file a NEW "
+        "breakdown — that is prepare_report.)"
     ),
     "parameters": {
         "type": "object",
@@ -61,6 +65,10 @@ INTENT_HINTS = frozenset({
     "rapport executif", "rapport exécutif",
     "genere un rapport", "génère un rapport",
     "redige un rapport", "rédige un rapport",
+    # EN documentaire (formes multi-mots uniquement : le « report » nu
+    # reste ambigu avec le dépôt « report a ... » -> création).
+    "prepare a report", "prepare the report", "write a report",
+    "generate a report", "make a report", "report for", "report on",
 })
 
 _OPEN_EXCLUDED = ("resolved", "closed")

@@ -3368,8 +3368,9 @@ class AgentLoop:
             answer, executed, cards, context,
             scope=scope_info, time_window=time_window))
         if not cards:
-            # Aucune carte (échec ou lieu inconnu) : suggestions cliquables.
-            suggest = suggest_places(req.message, context)
+            # Aucune carte (échec ou lieu inconnu) : suggestions cliquables
+            # dans la langue du fil (sinon pastilles FR en plein fil EN).
+            suggest = suggest_places(req.message, context, lang=lang)
             if suggest.get("suggestions") or (
                     suggest.get("fragment") and suggest.get("from_marker")):
                 cards.append(AgentCard(

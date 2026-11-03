@@ -104,8 +104,14 @@ def _extract_fragment(message: str) -> str:
     return ""
 
 
-def _question(kind: str, label: str) -> str:
-    """Question cliquable pré-remplie pour la suggestion."""
+def _question(kind: str, label: str, lang: str = "fr") -> str:
+    """Question cliquable pré-remplie pour la suggestion (langue du fil)."""
+    if str(lang or "fr").lower().startswith("en"):
+        if kind == "district":
+            return f"Summarize the district of {label}"
+        if fold(label).startswith("ecole"):
+            return f"Analyze {label}"
+        return f"Analyze the school of {label}"
     if kind == "district":
         return f"Résumer le district de {label}"
     if fold(label).startswith("ecole"):
@@ -113,24 +119,32 @@ def _question(kind: str, label: str) -> str:
     return f"Analyser l'école de {label}"
 
 
-def suggest_places(message: str, context: dict, limit: int = SUGGEST_DEFAULT_LIMIT) -> dict[str, Any]:
+def suggest_places(message: str, context: dict, limit: int = SUGGEST_DEFAULT_LIMIT,
+                   lang: str = "fr") -> dict[str, Any]:
     """Suggère des lieux connus proches du fragment cité (jamais un mur).
 
     Retourne {insight, fragment, suggestions[{label, kind, question}],
     ecoles_sample[3], districts_sample}.
     Contexte vide -> suggestions [] + aide générique.
+    lang='en' : insight et questions cliquables en anglais (défaut fr).
     """
     context = context or {}
+    use_en = str(lang or "fr").lower().startswith("en")
     schools, districts = _known_places(context)
     fragment = _extract_fragment(message)
     ecoles_sample = schools[:ECOLES_SAMPLE_SIZE]
     districts_sample = list(districts)
 
     if not schools and not districts:
+        insight = (("I don't know any school or district yet. "
+                    "Give a name (e.g. 'Analyze the school of Nkol') "
+                    "and I'll run the analysis.")
+                   if use_en else
+                   ("Je ne connais encore aucune école ni aucun district. "
+                    "Précisez un nom (ex. « Analyser l'école de Nkol ») "
+                    "et je lancerai l'analyse."))
         return {
-            "insight": ("Je ne connais encore aucune école ni aucun district. "
-                        "Précisez un nom (ex. « Analyser l'école de Nkol ») "
-                        "et je lancerai l'analyse."),
+            "insight": insight,
             "fragment": fragment,
             "from_marker": _has_marker(message),
             "suggestions": [],
@@ -150,21 +164,31 @@ def suggest_places(message: str, context: dict, limit: int = SUGGEST_DEFAULT_LIM
                 scored.append((s, "district", label))
     scored.sort(key=lambda t: t[0], reverse=True)
     suggestions = [
-        {"label": label, "kind": kind, "question": _question(kind, label)}
+        {"label": label, "kind": kind, "question": _question(kind, label, lang)}
         for _, kind, label in scored[: max(0, limit)]
     ]
 
     if suggestions:
         labels = ", ".join(s["label"] for s in suggestions)
-        insight = (f"« {fragment} » ne correspond à aucun lieu connu — "
-                   f"vouliez-vous dire : {labels} ? "
-                   f"Cliquez sur une suggestion ou précisez.")
+        insight = ((f"« {fragment} » doesn't match any known place — "
+                    f"did you mean: {labels}? "
+                    f"Click a suggestion or clarify.")
+                   if use_en else
+                   (f"« {fragment} » ne correspond à aucun lieu connu — "
+                    f"vouliez-vous dire : {labels} ? "
+                    f"Cliquez sur une suggestion ou précisez."))
     elif fragment:
-        insight = (f"« {fragment} » m'est inconnu. Voici des écoles "
-                   f"et districts connus — précisez votre demande.")
+        insight = ((f"« {fragment} » is unknown to me. Here are known "
+                    f"schools and districts — please clarify your request.")
+                   if use_en else
+                   (f"« {fragment} » m'est inconnu. Voici des écoles "
+                    f"et districts connus — précisez votre demande."))
     else:
-        insight = ("Je n'ai pas repéré de lieu connu dans votre message — "
-                   "voulez-vous parler d'une de ces écoles ou districts ?")
+        insight = (("I didn't spot a known place in your message — "
+                    "did you mean one of these schools or districts?")
+                   if use_en else
+                   ("Je n'ai pas repéré de lieu connu dans votre message — "
+                    "voulez-vous parler d'une de ces écoles ou districts ?"))
     return {
         "insight": insight,
         "fragment": fragment,
