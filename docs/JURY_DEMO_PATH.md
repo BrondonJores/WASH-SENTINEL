@@ -16,6 +16,13 @@
    one breakdown photo (tap/pipe), projector on the Sentinel console.
 4. Recommended: local models for the show (sovereignty story), Meta
    cloud already configured in Settings as the silent fallback.
+5. Check once, before the jury enters: the verified contact's school
+   has `default_language=bbj_Latn` (else the Ghomala' bridge won't
+   fire), `ollama list` shows `nomic-embed-text` (duplicate catch
+   needs it), and rehearse the golden note end-to-end once.
+6. Cards, badges and justifications render in French (field
+   language) — presenter narrates in English. It's the story,
+   not a bug.
 
 ## Act 1 — The field reports (2 min)
 
@@ -24,10 +31,12 @@ director in Cameroon reports a breakdown the way she actually
 communicates: a WhatsApp voice note, in her own language."
 
 1. Play the Ghomala' voice note to the WhatsApp number.
-2. Show the reply on the phone: transcription, incident ref
-   (`WASH-2026-XXXX`), priority, *"we will write to you here as soon
-   as it moves forward."*
-3. Send a second report of the same breakdown as plain text.
+2. Show the reply on the phone (in French — the field language):
+   transcription, incident ref (`WASH-2026-XXXX`), priority,
+   *"we will write to you here as it moves forward"*, plus Yes/No
+   confirmation buttons.
+3. Send a second report of the same breakdown as plain text,
+   **in French, closely paraphrasing the first message**.
    **Say:** "Five teachers report the same broken pump. Watch:"
    reply is *"Already received"* — merged, no duplicate ticket.
 
@@ -36,14 +45,17 @@ communicates: a WhatsApp voice note, in her own language."
 **Say:** "There is no dashboard to learn. Operators talk to Sentinel,
 and it generates cards, charts, maps and decks on demand."
 
-1. Type: *"Give me today's reports."*
+1. Type: *"Show me today's incident reports."* (exact wording —
+   answers in English, day-scoped).
    → incident list card, scoped to the day (not the repair journal).
-2. Type: *"Prepare a report."*
-   → report scoped to the school just discussed (not the whole
-   territory) — this is conversational scope, not keyword search.
+2. Type: *"Prepare a report for Bonanjo."* (school must be explicit
+   in English — the bare form only inherits scope in French).
+   → report scoped to Bonanjo, not the whole territory.
 3. Type: *"Trends for Bonanjo over 3 months."*
    → trend chart card (costs, breakdowns, days without service).
+   Fallback wording: *"Repair trends for Bonanjo, last 3 months."*
 4. Type: *"Show me the territory map."* → interactive map card.
+   Fallback wording: *"Map of schools with open incidents."*
 
 ## Act 3 — The decisions (3 min)
 
@@ -52,13 +64,17 @@ hard part. Three engines do that:"
 
 1. Type: *"Ngok school — repair or replace the equipment?"*
    → Capex/Opex matrix: repair ratio, breakdown frequency, 24-month
-   savings, replacement recommendation.
+   savings, replacement recommendation. (Justification labels render
+   in French — read them aloud in English.)
 2. Type: *"Which schools need help most?"*
-   → equity ranking (days without water × health risk × isolation ×
-   girls' schooling impact), grouped tour on the same road axis, and
-   the transparency note: *"why school X goes before school Y"* —
-   the shield against favoritism.
-3. Type: *"Build the decision file for Mvila."*
+   → equity ranking by need (urgency × pupils × waiting days),
+   with the point gap between schools shown on the card.
+   **Say:** "Need is scored, not shouted — the quiet rural school
+   outranks the loud downtown one."
+3. BEFORE this step, switch Settings → Meta cloud provider (the
+   poster cannot generate on local Ollama — no fallback).
+   Type: *"Prepare the decision dossier for Mvila."* (exact
+   wording — "decision file" does not trigger the branch).
    → decision-maker dossier: factual figures only, printable, with a
    generated poster. **Say:** "No invented numbers — every figure is
    traced to the database."
@@ -92,6 +108,7 @@ hard part. Three engines do that:"
 | WhatsApp message delayed | Queue worker lag — show the incident already created in the console, the message lands seconds later. |
 | No network for cloud | Everything runs local (Ollama + Whisper + Omnilingual) — say it, it's the sovereignty argument. |
 | Wrong tool answer | Rephrase simply ("Summarize district Mvila") — the guided fallbacks always propose the next step. |
+| Poster step errors | You skipped the cloud switch: Settings → Meta cloud provider, re-ask the exact dossier sentence. |
 
 ## One-line feature map (if the jury asks "what else?")
 
