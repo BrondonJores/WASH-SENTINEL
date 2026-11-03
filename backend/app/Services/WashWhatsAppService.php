@@ -1814,7 +1814,7 @@ class WashWhatsAppService
         $ask = config('wash_languages.ask', '');
         if (!is_string($ask) || trim($ask) === '') {
             // Repli de survie (config absente) : même phrase qu'en config.
-            $ask = 'En quelle langue préférez-vous continuer ? Répondez FR ou EN.';
+            $ask = 'En quelle langue préférez-vous continuer ? Répondez FR ou EN. / Which language do you prefer? Reply FR or EN.';
         }
 
         return $ask;

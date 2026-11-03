@@ -116,6 +116,21 @@ class WashWhatsAppLangChoiceTest extends TestCase
         return $reflection->invokeArgs(app(WashWhatsAppService::class), [$from]);
     }
 
+    /** Repli config absente : la question reste bilingue FR/EN. */
+    public function test_lang_ask_fallback_without_config_is_bilingual(): void
+    {
+        $this->seedContact();
+        config(['wash_languages.ask' => '']);
+        Http::fake(['*/v1/wash/triage' => $this->triageResponse()]);
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->textPayload('Citerne vide'))->assertOk();
+
+        $texts = $this->sentTexts();
+        $this->assertCount(1, $texts);
+        $this->assertStringContainsString('En quelle langue préférez-vous continuer', $texts[0]['message']);
+        $this->assertStringContainsString('Which language do you prefer', $texts[0]['message']);
+    }
+
     /** « Citerne vide » : indice WASH, aucun marqueur FR/EN → incertain. */
     public function test_uncertain_text_without_memory_asks_once(): void
     {
