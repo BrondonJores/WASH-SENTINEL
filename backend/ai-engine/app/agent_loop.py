@@ -110,7 +110,8 @@ NO_TOOL_NUDGE = (
     "Tu as répondu à une question de données sans appeler d'outil : "
     "appelle l'outil adapté maintenant "
     "(rank_schools_by_need, summarize_district, analyze_school, repair_trends, "
-    "explain_incident, territory_overview, build_briefing, list_maintenance_logs"
+    "explain_incident, territory_overview, build_briefing, list_maintenance_logs, "
+    "list_incidents"
     + "".join(f", {n}" for n in sorted(PLUGIN_READ_ONLY)) +
     "). N'écris aucun texte, appelle juste l'outil."
 )
@@ -849,6 +850,7 @@ PERIOD_EMPTY_TOOLS = frozenset({
     "repair_trends",
     "territory_overview",
     "build_briefing",
+    "list_incidents",
 })
 
 
@@ -880,6 +882,7 @@ PERIOD_TITLE_TYPES = frozenset({
     "calendar_heatmap",
     "budget_compare",
     "maintenance_logs",
+    "incident_list",
 })
 
 
@@ -1197,10 +1200,10 @@ def _blocked_by_scope(name: str, arguments: dict[str, Any] | None,
                 f"({target} est une autre école). "
                 f"N'appelle que des outils pour {school}."
             )
-    if name == "list_maintenance_logs" and not args.get("school"):
+    if name in ("list_maintenance_logs", "list_incidents") and not args.get("school"):
         return (
             f"Hors périmètre : la question porte uniquement sur {school} ; "
-            f"précise school={school} au lieu du journal global."
+            f"précise school={school} au lieu de la liste globale."
         )
     return None
 
@@ -1214,7 +1217,7 @@ def _no_tool_nudge(scope: dict[str, Any] | None) -> str:
         "Tu as répondu à une question de données sans appeler d'outil : "
         f"appelle maintenant l'outil adapté pour l'école {school} "
         "(analyze_school, repair_trends, explain_incident, "
-        "list_maintenance_logs). N'écris aucun texte, appelle juste l'outil."
+        "list_maintenance_logs, list_incidents). N'écris aucun texte, appelle juste l'outil."
     )
 
 
@@ -1226,7 +1229,7 @@ def _absence_nudge(scope: dict[str, Any] | None) -> str:
     return (
         "Tu viens d'affirmer une absence (aucun/aucune/rien/zéro) sans avoir "
         "observé un outil de lecture : appelle maintenant l'outil adapté "
-        f"pour l'école {school} (list_maintenance_logs, repair_trends, "
+        f"pour l'école {school} (list_incidents, list_maintenance_logs, repair_trends, "
         "explain_incident ou analyze_school) puis réponds à partir de "
         "son observation. N'écris aucun texte, appelle juste l'outil."
     )
@@ -1276,7 +1279,7 @@ def strip_other_school_mentions(answer: str, scope: dict[str, Any] | None,
 
 # Garde-fou abstention : outils de lecture dont l'observation autorise un constat.
 READ_TOOLS = frozenset({
-    "list_maintenance_logs", "summarize_district", "rank_schools_by_need",
+    "list_maintenance_logs", "list_incidents", "summarize_district", "rank_schools_by_need",
     "repair_trends", "explain_incident", "territory_overview",
     "analyze_school", "build_briefing",
 }) | PLUGIN_READ_ONLY
@@ -1286,10 +1289,11 @@ ABSENCE_RE = re.compile(r"aucun|aucune|pas d|rien|zéro|zero", re.IGNORECASE)
 ABSENCE_CORRECTION_NUDGE = (
     "Tu viens d'affirmer une absence (aucun/aucune/rien/zéro) sans avoir "
     "observé un outil de lecture : appelle maintenant "
-    "l'outil de liste adapté (list_maintenance_logs pour les interventions passées, "
-    "sinon summarize_district, rank_schools_by_need, repair_trends, explain_incident, "
-    "territory_overview, analyze_school ou build_briefing) puis réponds à partir de "
-    "son observation. N'écris aucun texte, appelle juste l'outil."
+    "l'outil de liste adapté (list_incidents pour les signalements déclarés, "
+    "list_maintenance_logs pour les interventions passées, sinon summarize_district, "
+    "rank_schools_by_need, repair_trends, explain_incident, territory_overview, "
+    "analyze_school ou build_briefing) puis réponds à partir de son observation. "
+    "N'écris aucun texte, appelle juste l'outil."
 )
 
 UNVERIFIED_HONEST_ANSWER = (
@@ -1320,8 +1324,9 @@ CONTRADICTION_CORRECTION_NUDGE = (
     "un total de 0 : c'est contradictoire. Relis tes observations : si une "
     "référence WASH-AAAA-XXXX existe vraiment, décris-la sans affirmer "
     "d'absence ; si le total est vraiment 0, ne cite aucune référence. "
-    "Rappelle maintenant l'outil de liste adapté (list_maintenance_logs pour "
-    "les interventions passées) sans filtre école parasite, puis réponds de "
+    "Rappelle maintenant l'outil de liste adapté (list_incidents pour les "
+    "signalements déclarés, list_maintenance_logs pour les interventions passées) "
+    "sans filtre école parasite, puis réponds de "
     "façon cohérente à partir de son observation. N'écris aucun texte, "
     "appelle juste l'outil."
 )
@@ -1803,6 +1808,20 @@ def _summarize_maintenance_logs(obs: dict[str, Any]) -> str:
     )
 
 
+def _summarize_incidents(obs: dict[str, Any]) -> str:
+    items = obs.get("items", []) or []
+    date = obs.get("date", "?")
+    n = int(obs.get("total", len(items)) or 0)
+    if not items and n == 0:
+        return f"Aucun signalement déclaré le {date}."
+    names = [str(i.get("school_name", "?")) for i in items[:3]]
+    suffix = f" : {', '.join(names)}" if names else ""
+    return (
+        f"{n} {_plural(n, 'signalement déclaré', 'signalements déclarés')} "
+        f"le {date}{suffix}. Le détail est dans la carte ci-dessous."
+    )
+
+
 def _summarize_territory(obs: dict[str, Any]) -> str:
     total = int(obs.get("total", 0) or 0)
     n = int(obs.get("open_incidents", 0) or 0)
@@ -1846,6 +1865,7 @@ def _summarize_briefing(obs: dict[str, Any]) -> str:
 
 FALLBACK_SUMMARIES = {
     "list_maintenance_logs": _summarize_maintenance_logs,
+    "list_incidents": _summarize_incidents,
     "summarize_district": _summarize_district,
     "repair_trends": _summarize_trends,
     "rank_schools_by_need": _summarize_ranking,
@@ -3288,6 +3308,25 @@ class AgentLoop:
                 cards.append(AgentCard(
                     type="maintenance_logs",
                     title=f"Interventions journalisées — {observation.get('date', '?')}",
+                    data=data,
+                ))
+            elif name == "list_incidents":
+                data = observation
+                if school is not None:
+                    items = [i for i in (observation.get("items") or [])
+                             if _obs_school_matches(i, school, other_schools)]
+                    removed = len(observation.get("items") or []) - len(items)
+                    if removed and not items:
+                        continue
+                    if removed:
+                        try:
+                            total = max(0, int(observation.get("total", len(items)) or 0) - removed)
+                        except (TypeError, ValueError):
+                            total = len(items)
+                        data = {**observation, "items": items, "total": total}
+                cards.append(AgentCard(
+                    type="incident_list",
+                    title=f"Signalements déclarés — {observation.get('date', '?')}",
                     data=data,
                 ))
             elif name in PLUGIN_CARDS:

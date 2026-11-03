@@ -1663,6 +1663,129 @@ function MaintenanceLogsCard({
   );
 }
 
+/** Liste des signalements déclarés par les écoles (list_incidents). Miroir de MaintenanceLogsCard : même coquille, mêmes relances date, badges urgence/statut par ligne. */
+function IncidentListCard({
+  title,
+  data,
+  onAsk,
+}: {
+  title: string;
+  data: Record<string, unknown>;
+  onAsk?: (q: string) => void;
+}) {
+  const items = asArray<Record<string, unknown>>(data.items);
+  const total =
+    typeof data.total === 'number' && Number.isFinite(data.total) ? Math.max(0, Math.round(data.total)) : items.length;
+  const empty = data.is_empty === true || items.length === 0;
+  const dayLabel = fmtDate(data.date);
+  const displayTitle = dayLabel === '—' ? title : `Signalements du ${dayLabel}`;
+  const insight = humanizeDates(fmtOpt(data.insight) ?? '');
+  const filters = asRecord(data.applied_filters);
+  const unknownSchool =
+    filters.school_matched === false &&
+    typeof filters.school_raw === 'string' &&
+    filters.school_raw.trim() !== ''
+      ? filters.school_raw.trim()
+      : undefined;
+  const schoolWarning =
+    unknownSchool !== undefined ? `École « ${unknownSchool} » non reconnue — filtre ignoré.` : undefined;
+
+  if (empty) {
+    const phrase = 'Aucun signalement ce jour-là.';
+    return (
+      <CardShell
+        title={displayTitle}
+        listenText={speak(
+          phrase,
+          dayLabel === '—' ? undefined : `Jour demandé : ${dayLabel}.`,
+          schoolWarning,
+          'Essaie hier ou cette semaine.',
+        )}
+      >
+        <GuideEmpty
+          phrase={phrase}
+          conseil={
+            schoolWarning !== undefined
+              ? `${schoolWarning} Essaie hier ou cette semaine.`
+              : dayLabel !== '—'
+                ? `${dayLabel} — essaie hier ou cette semaine.`
+                : 'Essaie hier ou cette semaine.'
+          }
+          actions={[
+            { label: 'Voir hier ?', question: 'Signalements déclarés hier ?' },
+            { label: 'Voir la semaine ?', question: 'Signalements déclarés cette semaine ?' },
+          ]}
+          onAsk={onAsk}
+        />
+      </CardShell>
+    );
+  }
+
+  const rest = Math.max(0, total - items.length);
+  return (
+    <CardShell
+      title={displayTitle}
+      listenText={speak(
+        total <= 1 ? '1 signalement ce jour-là.' : `${total} signalements ce jour-là.`,
+        insight !== '' ? insight : undefined,
+        schoolWarning,
+      )}
+    >
+      <HeroStat
+        label={total <= 1 ? 'Signalement ce jour-là' : 'Signalements ce jour-là'}
+        value={fmtInt(total)}
+      />
+      {insight !== '' && (
+        <div className="mt-3">
+          <InsightLine text={insight} />
+        </div>
+      )}
+      {schoolWarning !== undefined && (
+        <p className="mb-3 text-sm text-amber-700 dark:text-amber-400">{schoolWarning}</p>
+      )}
+      <ul className="divide-y divide-stone-200 dark:divide-stone-800">
+        {items.map((it, i) => {
+          const school = fmtOpt(it.school_name) ?? 'École non précisée';
+          const ref = fmtOpt(it.reference_code);
+          const itemTitle = fmtOpt(it.title);
+          const urgency = typeof it.urgency === 'string' ? it.urgency : 'medium';
+          const status = fmtOpt(it.status);
+          const affected = typeof it.affected_students === 'number' ? it.affected_students : undefined;
+          return (
+            <li key={String(it.id ?? ref ?? i)} className="flex gap-3 py-3 first:pt-0 last:pb-0">
+              <span className="pt-1.5">
+                <UrgencyDot level={urgency} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold leading-snug">{school}</p>
+                {itemTitle !== undefined && (
+                  <p className="mt-0.5 text-sm leading-snug text-stone-600 dark:text-stone-400">{itemTitle}</p>
+                )}
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {ref !== undefined && <Badge>{ref}</Badge>}
+                  <Badge tone={urgencyTone(urgency)}>{URGENCY_FR[urgency] ?? urgency}</Badge>
+                  {status !== undefined && <Badge tone="info">{STATUS_FR[status] ?? status}</Badge>}
+                  {affected !== undefined && affected > 0 && (
+                    <span className="font-mono text-[11px] text-stone-500 dark:text-stone-400">
+                      {affected} élève{affected > 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {rest > 0 && (
+        <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+          {rest === 1 ? '+ 1 autre signalement' : `+ ${rest} autres signalements`}
+        </p>
+      )}
+      <FollowUps onAsk={onAsk} items={['Signalements déclarés hier ?', 'Signalements déclarés cette semaine ?']} />
+    </CardShell>
+  );
+}
+
 // ---------- Nouveaux rendus : calendrier, suivi, budgets ----------
 
 /** Nombre sûr (0 si absent) pour les cumuls de rendus. */
@@ -2737,7 +2860,8 @@ function AgentCardViewInner({ card, onAsk, onAppend, onDetail }: { card: AgentCa
     case 'briefing_deck':
       return <BriefingDeckCard title={card.title} data={data} />;
     case 'maintenance_logs':
-      return <MaintenanceLogsCard title={card.title} data={data} onAsk={onAsk} />;
+          case 'incident_list':
+      return <IncidentListCard title={card.title} data={data} onAsk={onAsk} />;
     case 'calendar_heatmap':
       return <HeatmapCard title={card.title} data={data} onAsk={onAsk} />;
     case 'incident_timeline':

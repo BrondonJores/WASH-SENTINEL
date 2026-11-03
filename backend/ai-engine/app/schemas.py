@@ -470,6 +470,7 @@ CardType = Literal[
     "calendar_heatmap",
     "budget_compare",
     "maintenance_logs",
+    "incident_list",
     # Divers.
     "guidance",
     "place_suggestions",

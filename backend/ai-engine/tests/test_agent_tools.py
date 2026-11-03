@@ -889,3 +889,99 @@ class ResolveSchoolFuzzyTest(unittest.TestCase):
             {"district": "vallee-du-ntem"}, ctx)
         self.assertEqual(res["total"], 1)
         self.assertEqual(res["schools"][0]["school_name"], "E1")
+
+
+class ListIncidentsTest(unittest.TestCase):
+    """list_incidents : lecture seule des SIGNALEMENTS déclarés (≠ travaux réalisés)."""
+
+    INCIDENT_CONTEXT = {
+        "schools": [
+            {"school_id": 1, "school_name": "École Publique de Bonanjo", "district": "Wouri"},
+            {"school_id": 2, "school_name": "École Rurale de Ngok", "district": "Mvila"},
+        ],
+        "incidents": [
+            {"id": 5, "school_id": 1, "school_name": "École Publique de Bonanjo",
+             "reference_code": "WASH-2026-0005", "title": "Pompe cassée",
+             "urgency": "critical", "status": "triaged", "affected_students": 450,
+             "reported_at": "2026-10-31T08:15:00+00:00"},
+            {"id": 6, "school_id": 2, "school_name": "École Rurale de Ngok",
+             "reference_code": "WASH-2026-0006", "title": "Fuite robinet",
+             "urgency": "medium", "status": "reported", "affected_students": 50,
+             "reported_at": "2026-10-31T14:40:00+00:00"},
+            {"id": 7, "school_id": 2, "school_name": "École Rurale de Ngok",
+             "reference_code": "WASH-2026-0007", "title": "Dalle latrines",
+             "urgency": "low", "status": "reported", "affected_students": 0,
+             "reported_at": "2026-10-30T09:00:00+00:00"},
+        ],
+    }
+
+    def test_filters_by_reported_day(self) -> None:
+        res = TOOL_EXECUTORS["list_incidents"]({"date": "2026-10-31"}, self.INCIDENT_CONTEXT)
+        self.assertEqual(res["total"], 2)
+        self.assertEqual(len(res["items"]), 2)
+        self.assertIn("2 signalements", res["insight"])
+
+    def test_empty_day_is_honest(self) -> None:
+        res = TOOL_EXECUTORS["list_incidents"]({"date": "2026-10-29"}, self.INCIDENT_CONTEXT)
+        self.assertEqual(res["items"], [])
+        self.assertEqual(res["insight"], "Aucun signalement le 2026-10-29.")
+
+    def test_school_filter_matches_name_fragment(self) -> None:
+        res = TOOL_EXECUTORS["list_incidents"](
+            {"date": "2026-10-31", "school": "Ngok"}, self.INCIDENT_CONTEXT)
+        self.assertEqual(res["total"], 1)
+        self.assertEqual(res["items"][0]["school_name"], "École Rurale de Ngok")
+
+    def test_urgency_filter(self) -> None:
+        res = TOOL_EXECUTORS["list_incidents"](
+            {"date": "2026-10-31", "urgency": "critical"}, self.INCIDENT_CONTEXT)
+        self.assertEqual(res["total"], 1)
+        self.assertEqual(res["items"][0]["reference_code"], "WASH-2026-0005")
+
+    def test_limit_caps_items_but_keeps_total(self) -> None:
+        res = TOOL_EXECUTORS["list_incidents"](
+            {"date": "2026-10-31", "limit": 1}, self.INCIDENT_CONTEXT)
+        self.assertEqual(len(res["items"]), 1)
+        self.assertEqual(res["total"], 2)
+
+    def test_default_date_is_today(self) -> None:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        ctx = {"schools": [], "incidents": [
+            {"id": 1, "school_name": "E1", "reported_at": f"{today}T07:00:00+00:00"},
+            {"id": 2, "school_name": "E2", "reported_at": "2000-01-01T07:00:00+00:00"},
+        ]}
+        res = TOOL_EXECUTORS["list_incidents"]({}, ctx)
+        self.assertEqual(res["date"], today)
+        self.assertEqual(res["total"], 1)
+
+    def test_registered_with_contrastive_description(self) -> None:
+        from app.agent_tools import AGENT_TOOLS
+        desc = next(t["function"]["description"] for t in AGENT_TOOLS
+                    if t["function"]["name"] == "list_incidents")
+        self.assertIn("lecture seule", desc.lower())
+        self.assertIn("list_maintenance_logs", desc)
+        self.assertIn("Exemple", desc)
+
+    def test_loop_wiring(self) -> None:
+        from app.agent_loop import (FALLBACK_SUMMARIES, PERIOD_EMPTY_TOOLS,
+                                    PERIOD_TITLE_TYPES, READ_TOOLS,
+                                    _summarize_incidents, route_intent,
+                                    tools_for_intent)
+        self.assertIn("list_incidents", READ_TOOLS)
+        self.assertIn("list_incidents", PERIOD_EMPTY_TOOLS)
+        self.assertIn("incident_list", PERIOD_TITLE_TYPES)
+        self.assertIs(FALLBACK_SUMMARIES["list_incidents"], _summarize_incidents)
+        self.assertEqual(_summarize_incidents({"items": [], "total": 0, "date": "2026-11-03"}),
+                         "Aucun signalement déclaré le 2026-11-03.")
+        self.assertEqual(route_intent("Donne moi les signalements d'aujourd'hui stp"), "list")
+        names = [t["function"]["name"] for t in tools_for_intent("list")]
+        self.assertIn("list_incidents", names)
+
+    def test_card_built(self) -> None:
+        from app.agent_loop import AgentLoop
+        obs = TOOL_EXECUTORS["list_incidents"]({"date": "2026-10-31"}, self.INCIDENT_CONTEXT)
+        loop = AgentLoop.__new__(AgentLoop)
+        cards = AgentLoop._build_cards(loop, [("list_incidents", obs)])
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].type, "incident_list")

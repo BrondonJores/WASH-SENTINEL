@@ -71,6 +71,13 @@ MAINTENANCE_LOGS_DEFAULT_LIMIT = _env_int("AGENT_TOOLS_MAINTENANCE_LOGS_LIMIT", 
 #: Overrides ENV : AGENT_TOOLS_MAINTENANCE_LOGS_MIN/MAX (défauts 1/50).
 MAINTENANCE_LOGS_LIMIT_MIN = _env_int("AGENT_TOOLS_MAINTENANCE_LOGS_MIN", 1)
 MAINTENANCE_LOGS_LIMIT_MAX = _env_int("AGENT_TOOLS_MAINTENANCE_LOGS_MAX", 50)
+#: Limite par défaut de list_incidents (signalements déclarés).
+#: Override ENV : AGENT_TOOLS_LIST_INCIDENTS_LIMIT (défaut 10).
+LIST_INCIDENTS_DEFAULT_LIMIT = _env_int("AGENT_TOOLS_LIST_INCIDENTS_LIMIT", 10)
+#: Bornes de clamp de cette limite.
+#: Overrides ENV : AGENT_TOOLS_LIST_INCIDENTS_MIN/MAX (défauts 1/50).
+LIST_INCIDENTS_LIMIT_MIN = _env_int("AGENT_TOOLS_LIST_INCIDENTS_MIN", 1)
+LIST_INCIDENTS_LIMIT_MAX = _env_int("AGENT_TOOLS_LIST_INCIDENTS_MAX", 50)
 #: Seuil de tendance des coûts (ratio mois courant vs moyenne passée).
 #: Override ENV : AGENT_TOOLS_TREND_RATIO_THRESHOLD (défaut historique 0.15).
 TREND_RATIO_THRESHOLD = _env_float("AGENT_TOOLS_TREND_RATIO_THRESHOLD", 0.15)
@@ -1405,6 +1412,82 @@ def tool_list_maintenance_logs(args: dict[str, Any], context: dict[str, Any]) ->
             "applied_filters": applied_filters, "is_empty": False}
 
 
+def tool_list_incidents(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Liste les SIGNALEMENTS déclarés par les écoles (lecture seule).
+
+    Jour civil via reported_at (défaut : aujourd'hui), filtres école
+    (fragment ou id), urgence, statut, limite. Ne confondre avec
+    list_maintenance_logs (travaux RÉALISÉS par les techniciens).
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    raw_date = str(args.get("date") or "").strip()
+    candidate = raw_date[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", raw_date) else ""
+    try:
+        date = datetime.strptime(candidate, "%Y-%m-%d").date().isoformat() if candidate else today
+    except ValueError:
+        date = today
+    hint = args.get("school")
+    matched = _school_hint_matches_known(hint, context)
+    effective_hint = hint if matched else None
+    urgency = str(args.get("urgency") or "").strip().lower() or None
+    status = str(args.get("status") or "").strip().lower() or None
+    try:
+        limit = int(args.get("limit", LIST_INCIDENTS_DEFAULT_LIMIT)
+                    or LIST_INCIDENTS_DEFAULT_LIMIT)
+    except (TypeError, ValueError):
+        limit = LIST_INCIDENTS_DEFAULT_LIMIT
+    limit = min(max(limit, LIST_INCIDENTS_LIMIT_MIN), LIST_INCIDENTS_LIMIT_MAX)
+
+    filtered = []
+    for incident in context.get("incidents", []):
+        day = incident_window_day(incident)
+        if day is None or day.isoformat() != date:
+            continue
+        if not _log_matches_school(incident, effective_hint, context):
+            continue
+        if urgency and str(incident.get("urgency") or "").lower() != urgency:
+            continue
+        if status and str(incident.get("status") or "").lower() != status:
+            continue
+        filtered.append(incident)
+    total = len(filtered)
+    applied_filters = {"date": date, "school_raw": hint, "school_matched": matched,
+                       "urgency": urgency, "status": status}
+    prefix = ""
+    if not matched:
+        prefix = f"École {str(hint).strip()} non reconnue — filtre ignoré. "
+    if not filtered:
+        return {"date": date, "items": [], "total": 0,
+                "insight": f"{prefix}Aucun signalement le {date}.",
+                "applied_filters": applied_filters, "is_empty": True}
+    names: list[str] = []
+    for incident in filtered:
+        name = str(incident.get("school_name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    head = (f"{total} {_plural(total, 'signalement', 'signalements')} le {date}")
+    if names:
+        shown = ", ".join(names[:3])
+        extra = f" (+{len(names) - 3})" if len(names) > 3 else ""
+        insight = f"{head} : {shown}{extra}."
+    else:
+        insight = f"{head}."
+    items = [{
+        "id": incident.get("id"),
+        "reference_code": incident.get("reference_code"),
+        "title": incident.get("title"),
+        "school_name": incident.get("school_name"),
+        "district": incident.get("district"),
+        "category": incident.get("category"),
+        "urgency": incident.get("urgency"),
+        "status": incident.get("status"),
+        "affected_students": incident.get("affected_students"),
+        "reported_at": incident.get("reported_at"),
+    } for incident in filtered[:limit]]
+    return {"date": date, "items": items, "total": total, "insight": f"{prefix}{insight}",
+            "applied_filters": applied_filters, "is_empty": False}
+
+
 TOOL_EXECUTORS = {
     "analyze_school": tool_analyze_school,
     "rank_schools_by_need": tool_rank_schools_by_need,
@@ -1417,6 +1500,7 @@ TOOL_EXECUTORS = {
     "territory_overview": tool_territory_overview,
     "build_briefing": tool_build_briefing,
     "list_maintenance_logs": tool_list_maintenance_logs,
+    "list_incidents": tool_list_incidents,
 }
 
 AGENT_TOOLS: list[dict[str, Any]] = [
@@ -1468,7 +1552,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_maintenance_logs",
-            "description": "Liste les interventions DEJA réalisées et journalisées (lecture seule) : filtres date AAAA-MM-JJ défaut aujourd'hui, école, limite. Pour toute question sur les interventions passées. Ne crée rien. Exemple : « donne-moi les interventions réalisées aujourd'hui » → list_maintenance_logs avec la date du jour.",
+            "description": "Liste les interventions DEJA réalisées et journalisées par les TECHNICIENS (travaux finis, lecture seule). Pour toute question sur les interventions passées : filtres date AAAA-MM-JJ défaut aujourd'hui, école, limite. Ne crée rien. Exemple : « donne-moi les interventions réalisées aujourd'hui » → list_maintenance_logs. Si l'usager demande les SIGNALEMENTS ou pannes DÉCLARÉES par les écoles (pas les travaux réalisés), utilise list_incidents, jamais cet outil.",
             "short_description": "Liste les interventions réalisées (lecture seule) : date, école, limite.",
             "parameters": {
                 "type": "object",
@@ -1476,6 +1560,24 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                     "date": {"type": "string", "description": "Jour filtré au format AAAA-MM-JJ (défaut : aujourd'hui)"},
                     "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école (optionnel)"},
                     "limit": {"type": "integer", "description": "Nombre max d'interventions (défaut 10)"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_incidents",
+            "description": "Liste les SIGNALEMENTS et pannes DÉCLARÉS par les écoles (lecture seule) : filtres date AAAA-MM-JJ défaut aujourd'hui, école, urgence, statut, limite. Pour toute question « signalements / pannes déclarées / incidents du jour ». Ne crée rien. Exemple : « donne-moi les signalements d'aujourd'hui » → list_incidents avec la date du jour. Si l'usager demande les travaux/interventions RÉALISÉS par les techniciens, utilise list_maintenance_logs, jamais cet outil.",
+            "short_description": "Liste les signalements déclarés (lecture seule) : date, école, urgence, statut, limite.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Jour filtré au format AAAA-MM-JJ (défaut : aujourd'hui)"},
+                    "school": {"type": "string", "description": "Nom (ou fragment) ou identifiant de l'école (optionnel)"},
+                    "urgency": {"type": "string", "description": "Filtre urgence : low, medium, high, critical (optionnel)"},
+                    "status": {"type": "string", "description": "Filtre statut (optionnel)"},
+                    "limit": {"type": "integer", "description": "Nombre max de signalements (défaut 10)"},
                 },
             },
         },
