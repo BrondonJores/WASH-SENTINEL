@@ -82,6 +82,7 @@ return [
         'english_markers' => [
             'where is', 'my report', 'track', 'tracking',
             'follow up', 'follow-up', 'followup',
+            'update', 'status', 'my incident', 'my case',
         ],
     ],
 

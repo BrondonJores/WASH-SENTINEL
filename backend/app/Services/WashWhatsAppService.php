@@ -86,6 +86,7 @@ class WashWhatsAppService
         'avancé', 'avance', 'réparé', 'reparé', 'répare', 'repare',
         'where is', 'my report', 'track', 'tracking',
         'follow up', 'follow-up', 'followup',
+        'update', 'my incident', 'my case',
     ];
 
     // Marqueurs de langue (suivi + signalement) : pilotés par données,
@@ -310,7 +311,12 @@ class WashWhatsAppService
             if ($clarify) {
                 $pendingIncident = Incident::find($clarify['incident_id']);
                 if ($pendingIncident) {
-                    return $this->applyClarification($from, $contact->school, $pendingIncident, $channel, $text, $audio, $photo, $clarify['lang'] === 'en');
+                    $clarifyEn = is_string($text) && $text !== ''
+                        ? $this->stepEnglish($text, (string) ($clarify['lang'] ?? 'fr'))
+                        : ($clarify['lang'] ?? 'fr') === 'en';
+                    $this->rememberClarification($from, (int) $clarify['incident_id'], $clarifyEn ? 'en' : 'fr');
+
+                    return $this->applyClarification($from, $contact->school, $pendingIncident, $channel, $text, $audio, $photo, $clarifyEn);
                 }
                 // Incident pending disparu (supprimé) : repli triage normal + note FR.
                 // (Clé expirée/silence = plus rien en cache : triage normal pur.)
@@ -808,6 +814,23 @@ class WashWhatsAppService
         return 'wash.whatsapp.suivi.' . SchoolContact::normalizePhone($from);
     }
 
+    /**
+     * Langue d'un slot en cours : le message courant l'emporte quand sa
+     * langue est certaine, sinon on garde la langue stockée au 1er tour.
+     */
+    protected function stepEnglish(string $text, string $storedLang): bool
+    {
+        $detected = $this->detectTextLang($text);
+        if ($detected === self::LANG_EN) {
+            return true;
+        }
+        if ($detected === self::LANG_FR) {
+            return false;
+        }
+
+        return $storedLang === 'en';
+    }
+
     protected function rememberSuivi(string $from, array $state): void
     {
         Cache::put($this->suiviKey($from), $state, (int) config('whatsapp.pending_ttl', self::DEFAULT_PENDING_TTL));
@@ -832,7 +855,11 @@ class WashWhatsAppService
      */
     protected function handleSuiviStep(string $from, SchoolContact $contact, string $text, array $state): ?array
     {
-        $english = ($state['lang'] ?? 'fr') === 'en';
+        // Le message courant prime sur la langue stockée (doctrine) : un
+        // directeur peut changer de langue en cours de suivi.
+        $english = $this->stepEnglish($text, (string) ($state['lang'] ?? 'fr'));
+        $state['lang'] = $english ? 'en' : 'fr';
+        $this->rememberSuivi($from, $state);
         $step = (string) ($state['step'] ?? '');
 
         if ($this->isSuiviCancel($text)) {

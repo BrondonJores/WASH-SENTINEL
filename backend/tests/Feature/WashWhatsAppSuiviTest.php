@@ -832,4 +832,44 @@ class WashWhatsAppSuiviTest extends TestCase
         $this->assertArrayNotHasKey('incident_id', $results[0]);
         $this->assertStringContainsString('numéro WASH', $this->lastText());
     }
+
+    /** « update about my incident » : intention suivie + réponse EN. */
+    public function test_suivi_update_about_my_incident_replies_english(): void
+    {
+        $school = $this->seedContact();
+        $this->seedIncident($school);
+
+        $result = $this->send('hello i want to have update about my incident');
+
+        $this->assertEquals('suivi', $result['status'] ?? null);
+        $this->assertEquals('awaiting_id', $result['step'] ?? null);
+        $this->assertStringContainsString('WASH number', $this->lastText());
+    }
+
+    /** Slot EN en cours de suivi FR : le message courant gagne, état rafraîchi. */
+    public function test_suivi_step_english_message_wins_over_french_state(): void
+    {
+        $school = $this->seedContact();
+        $this->seedIncident($school);
+
+        $this->send('je voudrais suivre mon dossier');
+        $this->assertStringContainsString('numéro WASH', $this->lastText());
+
+        FakeWhatsAppService::$sent = [];
+        $this->send('NO, I do not have it, my incident update please');
+
+        $this->assertStringContainsString('Which school is it', $this->lastText());
+    }
+
+    /** Garde FR : « le status de mon dossier » reste en français (veto). */
+    public function test_suivi_french_status_stays_french(): void
+    {
+        $school = $this->seedContact();
+        $this->seedIncident($school);
+
+        $result = $this->send('le status de mon dossier ?');
+
+        $this->assertEquals('suivi', $result['status'] ?? null);
+        $this->assertStringContainsString('numéro WASH', $this->lastText());
+    }
 }
