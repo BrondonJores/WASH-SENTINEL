@@ -161,6 +161,30 @@ function CardShell({
   );
 }
 
+/** Origine d'un coût du neuf : fiche école, médiane référentiel (+ liens), ou non communiqué. */
+function SourceLine({ source, names, urls }: { source: unknown; names: unknown; urls: unknown }) {
+  if (typeof source !== 'string' || source === '') return null;
+  const nameList = asArray<unknown>(names).filter((n): n is string => typeof n === 'string' && n !== '');
+  const urlList = asArray<unknown>(urls).filter((u): u is string => typeof u === 'string' && u.startsWith('http'));
+  const cited = nameList.length > 0 ? ` (${nameList.slice(0, 2).join(', ')})` : '';
+  const label =
+    source === 'ecole'
+      ? 'Source : fiche école'
+      : source === 'referentiel'
+        ? `Source : médiane référentiel${cited}`
+        : 'Source : non communiqué';
+  return (
+    <p className="mt-2 font-mono text-[11px] text-stone-500 dark:text-stone-400">
+      {label}
+      {urlList.slice(0, 2).map((u) => (
+        <a key={u} href={u} target="_blank" rel="noreferrer" className="ml-2 underline">
+          voir
+        </a>
+      ))}
+    </p>
+  );
+}
+
 function Stat({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
   return (
     <div>
@@ -699,7 +723,20 @@ function AnalysisCard({
         </div>
         <Stat label="Pannes / an" value={fmtNum1(data.annualized_failure_rate)} />
         <Stat label="Économies potentielles" value={fmtInt(data.financial_saving_potential)} />
+        <Stat
+          label="Coût du neuf"
+          value={
+            typeof data.estimated_replacement_cost === 'number'
+              ? `${fmtInt(data.estimated_replacement_cost)} XAF`
+              : '—'
+          }
+        />
       </div>
+      <SourceLine
+        source={data.replacement_source}
+        names={data.replacement_source_names}
+        urls={data.replacement_source_urls}
+      />
       {typeof data.justification === 'string' && data.justification !== '' && (
         <p className="mt-3 text-sm leading-relaxed">{data.justification}</p>
       )}
@@ -2450,6 +2487,7 @@ function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Rec
   const insight = fmtOpt(data.insight) ?? '';
   const budgetVerdict = fmtOpt(data.budget_verdict);
   const verdict = asRecord(data.verdict);
+  const verdictFigures = asRecord(verdict.figures);
   const kit = asRecord(data.repair_kit);
   const teamChoices = strList(data.team_choices);
   const spares = strList(kit.spare_parts_needed);
@@ -2484,6 +2522,11 @@ function InterventionPrepCard({ title, data, onAsk }: { title: string; data: Rec
       {budgetVerdict !== undefined && (
         <p className="mt-2 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{budgetVerdict}</p>
       )}
+      <SourceLine
+        source={verdictFigures.replacement_source}
+        names={verdictFigures.replacement_source_names}
+        urls={verdictFigures.replacement_source_urls}
+      />
       {(spares.length > 0 || tools.length > 0) && (
         <div className="mt-2.5 rounded-lg border border-line p-2.5">
           <p className="text-[11px] font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400">Kit réparation{duration !== undefined ? ` · ${duration}` : ''}</p>

@@ -22,7 +22,10 @@ return new class extends Migration
             $table->float('distance_from_center_km')->default(10.0);
             $table->string('equipment_type')->default('pompe_manuelle');
             $table->unsignedSmallInteger('installation_year')->nullable();
-            $table->float('estimated_replacement_cost')->default(1500000.0);
+            // Coût sourcé : 0.0 = non communiqué (le 1 500 000 silencieux
+            // est banni ; bases existantes : voir migration
+            // 2026_11_03_130000_default_replacement_cost_unknown).
+            $table->float('estimated_replacement_cost')->default(0.0);
             $table->string('contact_phone')->nullable();
             $table->timestamps();
 

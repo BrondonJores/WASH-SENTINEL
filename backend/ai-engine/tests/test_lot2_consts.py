@@ -84,7 +84,8 @@ class SchemasConstsTest(unittest.TestCase):
         self.assertEqual(schemas.RAG_K_MIN, 1)
         self.assertEqual(schemas.RAG_K_MAX, 10)
         self.assertEqual(schemas.DEFAULT_INSTALLATION_YEAR, 2021)
-        self.assertEqual(schemas.DEFAULT_REPLACEMENT_COST, 1500000.0)
+        # Coût sourcé : 0.0 = non communiqué (le 1 500 000 silencieux est banni).
+        self.assertEqual(schemas.DEFAULT_REPLACEMENT_COST, 0.0)
         self.assertEqual(schemas.DEFAULT_EQUITY_DISTANCE_KM, 10.0)
         self.assertEqual(schemas.DEFAULT_EQUITY_DAYS_WITHOUT_WATER, 0)
         self.assertEqual(schemas.DEFAULT_EQUITY_TOTAL_STUDENTS, 300)

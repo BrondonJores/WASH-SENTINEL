@@ -16,6 +16,7 @@ except Exception:
     _DOUALA_TZ_NAME = "UTC (repli, base Afrique/Douala indisponible)"
 
 from .decision_agent import DecisionAgent
+from .replacement_cost import resolve_replacement_cost
 from .schemas import SchoolMaintenanceHistory
 from .textnorm import (
     PLACE_CUTOFF,
@@ -530,13 +531,16 @@ def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[s
         return {"error": f"École '{args.get('school', args.get('school_id'))}' introuvable. Écoles valides : {_school_choices(context)}. Réessaie avec un nom ou un id exact."}
     school_id = school["school_id"]
     open_incs = [i for i in _open_incidents(context) if i.get("school_id") == school_id]
+    # Coût sourcé (fiche école > référentiel > inconnu) : jamais de 1 500 000
+    # silencieux ; à None, le verdict se passe du ratio (fréquence/jours).
+    resolved = resolve_replacement_cost(school, context)
     history = SchoolMaintenanceHistory(
         school_id=school["school_id"],
         school_name=school.get("school_name", "?"),
         district=school.get("district", "?"),
         equipment_type=school.get("equipment_type", "pompe_manuelle"),
         installation_year=school.get("installation_year"),
-        estimated_replacement_cost=float(school.get("estimated_replacement_cost", 1500000.0)),
+        estimated_replacement_cost=resolved.cost if resolved.cost is not None else 0.0,
         incident_count=int(school.get("incident_count", len(open_incs))),
         total_repair_cost=float(school.get("total_repair_cost", 0.0)),
         total_days_without_service=int(school.get("total_days_without_service", 0)),
@@ -546,6 +550,10 @@ def tool_analyze_school(args: dict[str, Any], context: dict[str, Any]) -> dict[s
         "school_id": school["school_id"],
         "school_name": school.get("school_name"),
         "district": school.get("district"),
+        "estimated_replacement_cost": resolved.cost,
+        "replacement_source": resolved.source,
+        "replacement_source_names": resolved.source_names,
+        "replacement_source_urls": resolved.source_urls,
         "open_incidents": [
             {"id": i.get("id"), "title": i.get("title"), "urgency": i.get("urgency"),
              "category": i.get("category"), "affected_students": i.get("affected_students", 0)}

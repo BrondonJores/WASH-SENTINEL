@@ -270,7 +270,7 @@ export default function SchoolsPage() {
   // Coût de remplacement + sa source : fiche école si renseigné, sinon
   // médiane du référentiel national (jamais de prix codé en dur ici).
   const costLine = (s: School): string => {
-    if (typeof s.estimated_replacement_cost === 'number') {
+    if (typeof s.estimated_replacement_cost === 'number' && s.estimated_replacement_cost > 0) {
       return `Neuf : ${fmtNum(s.estimated_replacement_cost)} XAF · Source : fiche école`;
     }
     if (costRef !== null) {

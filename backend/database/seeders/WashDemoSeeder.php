@@ -255,6 +255,10 @@ class WashDemoSeeder extends Seeder
 
     protected function schools(): array
     {
+        // Coûts DÉCLARÉS de démo (valeurs fictives assumées pour le jury) :
+        // pompe manuelle ≈ 1,5 M, forage équipé ≈ 3,2 M, système complet
+        // ≈ 4,5 M XAF. En production : coût réel de la fiche école, sinon
+        // médiane du référentiel sourcé (WashEquipmentCostSeeder).
         return [
             [
                 'name' => 'École Publique de Bonanjo', 'code' => 'DOU-BON-001', 'district' => 'Wouri',

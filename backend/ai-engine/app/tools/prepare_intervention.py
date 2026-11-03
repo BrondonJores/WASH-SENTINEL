@@ -356,6 +356,18 @@ def _school_of(context: dict[str, Any], school_hint: Any,
     return None
 
 
+def _verdict_source_suffix(figures: dict[str, Any]) -> str:
+    """Suffixe d'origine du coût du neuf (« , source : … » ou vide)."""
+    source = str((figures or {}).get("replacement_source") or "")
+    if source == "ecole":
+        return ", source : fiche école"
+    if source == "referentiel":
+        names = (figures or {}).get("replacement_source_names") or []
+        cited = ", ".join(names[:2]) if names else "référentiel national"
+        return f", médiane référentiel ({cited})"
+    return ""
+
+
 def _candidate_card(incident: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "reference_code", "title", "school_name", "district",
             "category", "urgency", "status", "affected_students",
@@ -412,6 +424,8 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
         budget_verdict: str | None = None
         figures = (verdict or {}).get("figures", {}) or {}
+        # Origine du coût du neuf : fiche école déclarée ou médiane
+        # référentiel citée (jury : « d'après quel site ? »).
         replacement = figures.get("estimated_replacement_cost") or 0
         try:
             replacement = float(replacement)
@@ -419,14 +433,15 @@ def execute(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             replacement = 0.0
         if budget is not None:
             if replacement > 0:
+                cited = _verdict_source_suffix(figures)
                 if budget >= replacement:
                     budget_verdict = (
                         f"Budget {_fmt_xaf(budget)} XAF : couvre même un remplacement "
-                        f"(~{_fmt_xaf(replacement)} XAF).")
+                        f"(~{_fmt_xaf(replacement)} XAF{cited}).")
                 elif (verdict or {}).get("recommendation") == "REPLACE":
                     budget_verdict = (
                         f"Budget {_fmt_xaf(budget)} XAF insuffisant pour le remplacement "
-                        f"recommandé (~{_fmt_xaf(replacement)} XAF) : couvre une réparation "
+                        f"recommandé (~{_fmt_xaf(replacement)} XAF{cited}) : couvre une réparation "
                         "d'attente, pas le neuf.")
                 else:
                     budget_verdict = (

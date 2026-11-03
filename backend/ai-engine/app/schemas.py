@@ -23,7 +23,9 @@ RAG_K_MAX = 10
 DEFAULT_INSTALLATION_YEAR = 2021
 
 #: Coût d'un remplacement à neuf quand Laravel ne le fournit pas (FCFA/USD).
-DEFAULT_REPLACEMENT_COST = 1500000.0
+#: Coût de remplacement par défaut : 0.0 = non communiqué. Le 1 500 000
+#: silencieux est banni (jury : chaque montant affiché est sourcé).
+DEFAULT_REPLACEMENT_COST = 0.0
 
 #: Défauts du profil d'équité territoriale (école "moyenne" supposée).
 DEFAULT_EQUITY_DISTANCE_KM = 10.0
@@ -212,7 +214,8 @@ class SchoolMaintenanceHistory(BaseModel):
     district: str
     equipment_type: str = "pompe_manuelle"
     installation_year: int | None = DEFAULT_INSTALLATION_YEAR
-    estimated_replacement_cost: float = Field(DEFAULT_REPLACEMENT_COST, description="Coût d'un remplacement à neuf (ex: en FCFA ou USD)")
+    # 0.0 = inconnu (jamais de valeur inventée : le verdict s'en passe).
+    estimated_replacement_cost: float = Field(0.0, description="Coût d'un remplacement à neuf (ex: en FCFA ou USD) ; 0.0 = non communiqué")
     incident_count: int = Field(0, description="Nombre de pannes enregistrées")
     total_repair_cost: float = Field(0.0, description="Somme totale des factures de réparations passées")
     total_days_without_service: int = Field(0, description="Nombre cumulé de jours où l'école a été privée d'eau")
@@ -222,7 +225,7 @@ class ReplaceVsRepairAnalysis(BaseModel):
     school_name: str
     equipment_type: str
     recommendation: Literal["REPLACE_EQUIPMENT", "CONTINUE_REPAIR", "MONITOR_CLOSELY"]
-    repair_to_replacement_ratio_percent: float = Field(..., description="Pourcentage du coût d'un équipement neuf déjà dépensé en réparations")
+    repair_to_replacement_ratio_percent: float | None = Field(default=None, description="Pourcentage du coût d'un équipement neuf déjà dépensé en réparations ; None = coût du neuf non communiqué")
     annualized_failure_rate: float = Field(..., description="Fréquence moyenne de pannes par an")
     total_days_lost: int
     financial_saving_potential: str
