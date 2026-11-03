@@ -90,6 +90,9 @@ HISTORY_TURN_MAX_CHARS = _env_int("AGENT_HISTORY_TURN_MAX_CHARS", 1200)
 HISTORY_MAX_CHARS = _env_int("AGENT_HISTORY_MAX_CHARS", 4000)
 #: Override ENV : AGENT_OBS_LIST_MAX_ITEMS (défaut historique 12).
 OBS_LIST_MAX_ITEMS = _env_int("AGENT_OBS_LIST_MAX_ITEMS", 12)
+#: Tours d'historique remontés pour hériter le sujet d'un rapport en suivi.
+#: Override ENV : AGENT_REPORT_FOLLOWUP_TURNS (défaut 4).
+REPORT_FOLLOWUP_TURNS = _env_int("AGENT_REPORT_FOLLOWUP_TURNS", 4)
 #: Override ENV : AGENT_OBS_STR_MAX_CHARS (défaut historique 2000).
 OBS_STR_MAX_CHARS = _env_int("AGENT_OBS_STR_MAX_CHARS", 2000)
 # Petits modèles locaux : descriptions d'outils compactées (le prompt
@@ -144,7 +147,8 @@ def tools_for_intent(intent: str, scope: dict[str, Any] | None = None) -> list[d
         tools = list(AGENT_TOOLS)
     if _single_school_scope(scope) is not None:
         tools = [t for t in tools
-                 if t.get("function", {}).get("name", "") not in DISTRICT_SCOPE_TOOLS]
+                 if t.get("function", {}).get("name", "") not in DISTRICT_SCOPE_TOOLS
+                 or t.get("function", {}).get("name", "") in SCHOOL_TOPIC_TOOLS]
     return tools
 
 
@@ -247,6 +251,13 @@ DISTRICT_SCOPE_TOOLS = frozenset({
     "relances_proactives",
     "document_briefing",
     "compare_schools",
+})
+
+#: Outils district/territoire capables d'un sujet école (topic ciblé) :
+#: visibles en périmètre école unique, le garde-fou exige alors un topic
+#: désignant l'école (build_briefing, sans paramètre école, reste masqué).
+SCHOOL_TOPIC_TOOLS = frozenset({
+    "document_briefing",
 })
 
 
@@ -1100,6 +1111,78 @@ def resolve_bare_place_followup(
     return f"{base} {label}"
 
 
+#: Noms de livrables (texte normalisé) : rapport, diaporama, briefing...
+_REPORT_NOUNS_RE = re.compile(
+    r"\brapports?\b|\bdiaporamas?\b|\bbriefings?\b|\bdossiers?\b"
+    r"|\bpresentations?\b|\bslides?\b|\bdocuments?\b")
+
+#: Verbes de génération (un livrable à PRODUIRE, pas une liste à afficher).
+_REPORT_GEN_VERBS_RE = re.compile(
+    r"\bprepare\w*|\bgenere\w*|\bfais\b|\bfaites\b|\bcree\w*"
+    r"|\bredige\w*|\bconstruis\w*|\bassemble\w*|\becris\b|\becrire\b")
+
+#: Listings exclus (« donne-moi les rapports », « quels dossiers ? ») : le
+#: sujet hérité transformerait un inventaire global en inventaire d'école.
+_REPORT_LIST_RE = re.compile(
+    r"\b(donne\w*|montre\w*|affiche\w*|liste\w*|quels?|combien)\b"
+    r".*\b(rapports|dossiers|documents|diaporamas|briefings)\b"
+    r"|\b(les|des|mes|ces)\s+(rapports|dossiers|documents|diaporamas|briefings)\b")
+
+
+def _turn_text(turn: Any) -> str:
+    """Contenu texte d'un tour d'historique (ChatTurn ou dict), '' sinon."""
+    if isinstance(turn, dict):
+        content = turn.get("content")
+    else:
+        content = getattr(turn, "content", None)
+    return str(content) if content and str(content).strip() else ""
+
+
+def resolve_report_followup(
+    message: str,
+    history: Any,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Rattache un rapport sans lieu au sujet discuté (fonction pure).
+
+    « Prépare un rapport » après un tour ne citant que Bonanjo ->
+    « Prépare un rapport Bonanjo » (le périmètre école s'applique, le
+    rapport est spécifique au lieu de couvrir tout le territoire).
+    Inchangé si : lieu explicite dans le message, listing (« donne-moi
+    les rapports »), pas de génération demandée, historique vide, ou
+    contexte ambigu (2+ lieux dans le premier tour qui en cite).
+    Sans état serveur : que l'historique (REPORT_FOLLOWUP_TURNS tours).
+    """
+    text = message or ""
+    normed = _norm(text)
+    if (not normed.strip() or not _REPORT_NOUNS_RE.search(normed)
+            or not _REPORT_GEN_VERBS_RE.search(normed)
+            or _REPORT_LIST_RE.search(normed)):
+        return text
+    schools, districts = mentioned_places(text, context or {})
+    if schools or districts:
+        return text
+    turns = list(reversed(history or []))[:REPORT_FOLLOWUP_TURNS]
+    for turn in turns:
+        content = _turn_text(turn)
+        if not content:
+            continue
+        turn_schools, turn_districts = mentioned_places(content, context or {})
+        if not turn_schools and not turn_districts:
+            continue
+        if len(turn_schools) == 1 and not turn_districts:
+            label = short_school_name(turn_schools[0])
+        elif len(turn_districts) == 1 and not turn_schools:
+            label = turn_districts[0]
+        else:
+            return text
+        base = text.strip()
+        while base and base[-1] in "?!":
+            base = base[:-1].rstrip()
+        return f"{base} {label}"
+    return text
+
+
 def _single_school_scope(scope: dict[str, Any] | None) -> str | None:
     """Nom de l'école si périmètre restreint à une seule école, sinon None.
 
@@ -1162,8 +1245,9 @@ def _blocked_by_scope(name: str, arguments: dict[str, Any] | None,
 
     Bloque les outils district/territoire/comparaison, les appels globaux des
     outils mixtes (repair_trends sans école ou avec district, journal sans
-    école) et les appels visant une autre école. Périmètre photo : TOUS les
-    outils sont bloqués (commentaire de la photo seule). Fonction pure.
+    école, rapport sans topic) et les appels visant une autre école. Périmètre
+    photo : TOUS les outils sont bloqués (commentaire de la photo seule).
+    Fonction pure.
     """
     if _is_photo_scope(scope):
         return (
@@ -1175,6 +1259,20 @@ def _blocked_by_scope(name: str, arguments: dict[str, Any] | None,
     if school is None:
         return None
     args = arguments or {}
+    if name in SCHOOL_TOPIC_TOOLS:
+        topic = args.get("topic")
+        if not topic:
+            return (
+                f"Hors périmètre : la question porte uniquement sur {school} ; "
+                f"précise topic={school} au lieu d'un rapport global."
+            )
+        if not _school_arg_matches(topic, school):
+            return (
+                f"Hors périmètre : la question porte uniquement sur {school} "
+                f"({topic} est un autre lieu). "
+                f"N'appelle que des outils pour {school}."
+            )
+        return None
     if name in DISTRICT_SCOPE_TOOLS:
         return (
             f"Hors périmètre : la question porte uniquement sur {school} ; "
@@ -2474,6 +2572,12 @@ class AgentLoop:
         memo_message = resolve_bare_place_followup(req.message, req.history, context)
         if memo_message != req.message:
             req = req.model_copy(update={"message": memo_message})
+        # Mémo rapport : un livrable sans lieu (« Prépare un rapport »)
+        # reprend le sujet discuté (un seul lieu récent) au lieu de couvrir
+        # tout le territoire. Sans état serveur : que l'historique.
+        report_message = resolve_report_followup(req.message, req.history, context)
+        if report_message != req.message:
+            req = req.model_copy(update={"message": report_message})
         # CANAL 3 : dialogue guidé vocal (opt-in). Hors signalement, guided_turn
         # retourne None et le flux normal ci-dessous est strictement inchangé.
         if getattr(req, "guided", False):
@@ -3192,7 +3296,11 @@ class AgentLoop:
                 if guide is not None:
                     cards.append(guide)
                 continue
-            if school is not None and name in DISTRICT_SCOPE_TOOLS:
+            if school is not None and name in DISTRICT_SCOPE_TOOLS \
+                    and name not in SCHOOL_TOPIC_TOOLS:
+                continue
+            if school is not None and name in SCHOOL_TOPIC_TOOLS \
+                    and not _school_arg_matches(observation.get("topic"), school):
                 continue
             if name == "analyze_school":
                 if school is not None and not _obs_school_matches(observation, school, other_schools):

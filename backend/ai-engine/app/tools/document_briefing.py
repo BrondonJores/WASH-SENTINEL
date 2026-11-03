@@ -34,7 +34,7 @@ TOOL_DEF = {
         "properties": {
             "topic": {
                 "type": "string",
-                "description": "District ou école ciblé(e), nom approximatif accepté (optionnel, sinon tout le territoire)",
+                "description": "District ou école ciblé(e), nom approximatif accepté (optionnel, sinon tout le territoire ; obligatoire quand la question porte sur une école précise, sinon l'appel est refusé)",
             },
             "format": {
                 "type": "string",

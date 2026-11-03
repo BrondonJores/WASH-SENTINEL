@@ -16,6 +16,7 @@ from app.agent_loop import (
     _follow_ups,
     detect_scope,
     mentioned_places,
+    resolve_report_followup,
     strip_other_school_mentions,
     tools_for_intent,
 )
@@ -283,7 +284,101 @@ class SchoolFallbackTest(unittest.TestCase):
         self.assertNotIn("district", joined.lower())
 
 
+class ReportFollowupTest(unittest.TestCase):
+    """« Prépare un rapport » en suivi reprend le sujet discuté, jamais le global."""
+
+    HISTORY_BONANJO = [
+        {"role": "user", "content": "Donne moi les signalements d'aujourd'hui stp"},
+        {"role": "assistant",
+         "content": ("Pour aujourd'hui, je compte 1 signalement. "
+                     "Il concerne l'École Publique de Bonanjo.")},
+    ]
+
+    def test_inherits_school_from_assistant_turn(self) -> None:
+        self.assertEqual(
+            resolve_report_followup("Prépare un rapport", self.HISTORY_BONANJO, CTX),
+            "Prépare un rapport Bonanjo")
+
+    def test_rewritten_message_is_school_scoped(self) -> None:
+        rewritten = resolve_report_followup(
+            "Prépare un rapport", self.HISTORY_BONANJO, CTX)
+        scope = detect_scope(rewritten, CTX)
+        self.assertEqual(scope["scope"], "school")
+        self.assertEqual(scope["school"], BONANJO)
+
+    def test_explicit_place_unchanged(self) -> None:
+        self.assertEqual(
+            resolve_report_followup("Prépare un rapport pour Ngok",
+                                    self.HISTORY_BONANJO, CTX),
+            "Prépare un rapport pour Ngok")
+
+    def test_report_listing_not_rewritten(self) -> None:
+        self.assertEqual(
+            resolve_report_followup("Donne-moi les rapports",
+                                    self.HISTORY_BONANJO, CTX),
+            "Donne-moi les rapports")
+
+    def test_ambiguous_context_unchanged(self) -> None:
+        history = [
+            {"role": "assistant",
+             "content": "2 incidents : un à Ngok et un à Bonanjo."},
+        ]
+        self.assertEqual(
+            resolve_report_followup("Prépare un rapport", history, CTX),
+            "Prépare un rapport")
+
+    def test_no_history_unchanged(self) -> None:
+        self.assertEqual(
+            resolve_report_followup("Prépare un rapport", [], CTX),
+            "Prépare un rapport")
+
+    def test_district_inherited(self) -> None:
+        history = [
+            {"role": "assistant",
+             "content": "Le district Mvila compte 2 incidents ouverts."},
+        ]
+        self.assertEqual(
+            resolve_report_followup("Fais-moi un diaporama", history, CTX),
+            "Fais-moi un diaporama Mvila")
+
+    def test_briefing_guard_requires_matching_topic(self) -> None:
+        scope = _scope_single()
+        blocked = _blocked_by_scope("document_briefing", {}, scope)
+        self.assertIsNotNone(blocked)
+        self.assertIn("topic=", blocked)
+        self.assertIsNone(
+            _blocked_by_scope("document_briefing", {"topic": "Ngok"}, scope))
+        self.assertIsNotNone(
+            _blocked_by_scope("document_briefing", {"topic": "Bonanjo"}, scope))
+
+    def test_briefing_visible_but_build_hidden_in_school_scope(self) -> None:
+        names = [t.get("function", {}).get("name", "")
+                 for t in tools_for_intent("other", _scope_single())]
+        self.assertIn("document_briefing", names)
+        self.assertNotIn("build_briefing", names)
+
+
 class SchoolChatIntegrationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_report_followup_stays_on_discussed_school(self) -> None:
+        history = [
+            {"role": "user", "content": "Donne moi les signalements d'aujourd'hui stp"},
+            {"role": "assistant",
+             "content": ("Pour aujourd'hui, je compte 1 signalement. "
+                         "Il concerne l'École Publique de Bonanjo.")},
+        ]
+        loop = AgentLoop(StubLLM([
+            _call("document_briefing", {}),
+            _call("document_briefing", {"topic": "Bonanjo"}),
+            _text("Rapport ciblé sur Bonanjo."),
+        ]))
+        res = await loop.chat(AgentChatRequest(
+            message="Prépare un rapport", context=CONTEXT, history=history))
+        self.assertIn("document_briefing", res.tools_executed)
+        self.assertIn("document_briefing", [c.type for c in res.cards])
+        card = next(c for c in res.cards if c.type == "document_briefing")
+        self.assertEqual(card.data.get("topic"), "Bonanjo")
+        self.assertNotIn("tout le territoire", (card.data.get("insight") or "").lower())
+
     async def test_district_tool_not_executed_for_school_question(self) -> None:
         loop = AgentLoop(StubLLM([
             _call("summarize_district", {}),
