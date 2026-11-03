@@ -1138,6 +1138,34 @@ def _turn_text(turn: Any) -> str:
     return str(content) if content and str(content).strip() else ""
 
 
+def recent_single_place(
+    history: Any,
+    context: dict[str, Any] | None = None,
+) -> tuple[str, str] | None:
+    """Sujet lieu unique des tours récents : ("school"|"district", label).
+
+    Premier tour (en remontant, REPORT_FOLLOWUP_TURNS max) qui cite un lieu
+    décide : une seule école -> son nom court, un seul district -> son nom.
+    2+ lieux (ambigu) ou aucun lieu cité -> None : on ne devine jamais.
+    Fonction pure, sans état serveur. Partagée par les mémos rapport et
+    préparation d'intervention.
+    """
+    turns = list(reversed(history or []))[:REPORT_FOLLOWUP_TURNS]
+    for turn in turns:
+        content = _turn_text(turn)
+        if not content:
+            continue
+        turn_schools, turn_districts = mentioned_places(content, context or {})
+        if not turn_schools and not turn_districts:
+            continue
+        if len(turn_schools) == 1 and not turn_districts:
+            return ("school", short_school_name(turn_schools[0]))
+        if len(turn_districts) == 1 and not turn_schools:
+            return ("district", turn_districts[0])
+        return None
+    return None
+
+
 def resolve_report_followup(
     message: str,
     history: Any,
@@ -1162,25 +1190,41 @@ def resolve_report_followup(
     schools, districts = mentioned_places(text, context or {})
     if schools or districts:
         return text
-    turns = list(reversed(history or []))[:REPORT_FOLLOWUP_TURNS]
-    for turn in turns:
-        content = _turn_text(turn)
-        if not content:
-            continue
-        turn_schools, turn_districts = mentioned_places(content, context or {})
-        if not turn_schools and not turn_districts:
-            continue
-        if len(turn_schools) == 1 and not turn_districts:
-            label = short_school_name(turn_schools[0])
-        elif len(turn_districts) == 1 and not turn_schools:
-            label = turn_districts[0]
-        else:
-            return text
-        base = text.strip()
-        while base and base[-1] in "?!":
-            base = base[:-1].rstrip()
-        return f"{base} {label}"
-    return text
+    place = recent_single_place(history, context)
+    if place is None:
+        return text
+    base = text.strip()
+    while base and base[-1] in "?!":
+        base = base[:-1].rstrip()
+    return f"{base} {place[1]}"
+
+
+def resolve_prep_followup(
+    message: str,
+    history: Any,
+    context: dict[str, Any] | None = None,
+) -> str:
+    """Rattache une prépa sans lieu au sujet discuté (fonction pure).
+
+    « Prépare une intervention pour le robinet... » après un tour ne
+    citant que Bonanjo -> « ... Bonanjo » (la branche déterministe
+    scope le dossier au lieu de rendre la main au listing). Inchangé
+    si : lieu explicite, pas une demande de planification, ou sujet
+    récent ambigu/absent. Miroir de resolve_report_followup.
+    """
+    text = message or ""
+    if not is_intervention_prep_request(text):
+        return text
+    schools, districts = mentioned_places(text, context or {})
+    if schools or districts:
+        return text
+    place = recent_single_place(history, context)
+    if place is None:
+        return text
+    base = text.strip()
+    while base and base[-1] in "?!":
+        base = base[:-1].rstrip()
+    return f"{base} {place[1]}"
 
 
 def _single_school_scope(scope: dict[str, Any] | None) -> str | None:
@@ -2481,6 +2525,9 @@ _INTERVENTION_STRIP_RES = (
     re.compile(r"\d[\d\s\u00a0.,]*\s*(?:xaf|fcfa|francs?|k\b)"),
     re.compile(r"budget(?:\s+de)?\s+\d[\d\s\u00a0.,]*"),
     re.compile(r"\ble\s+\d{1,2}\b"),
+    # Mot « budget » orphelin (montant déjà retiré par les motifs
+    # ci-dessus) : il polluerait l'indice incident (« robinet budget »).
+    re.compile(r"\bbudgets?\b"),
 )
 _INTERVENTION_STOPWORDS = frozenset({
     "pour", "avec", "une", "les", "des", "sur", "dans", "aux", "ces",
@@ -2578,6 +2625,11 @@ class AgentLoop:
         report_message = resolve_report_followup(req.message, req.history, context)
         if report_message != req.message:
             req = req.model_copy(update={"message": report_message})
+        # Mémo prépa : une planification sans lieu reprend le sujet discuté
+        # (même helper, même règle d'ambiguïté que le mémo rapport).
+        prep_message = resolve_prep_followup(req.message, req.history, context)
+        if prep_message != req.message:
+            req = req.model_copy(update={"message": prep_message})
         # CANAL 3 : dialogue guidé vocal (opt-in). Hors signalement, guided_turn
         # retourne None et le flux normal ci-dessous est strictement inchangé.
         if getattr(req, "guided", False):
@@ -2661,13 +2713,16 @@ class AgentLoop:
         # PRÉPARATION d'intervention à venir : dossier ciblé déterministe
         # (incident/date/budget/équipe + kit + verdict), sans boucle LLM.
         # Évite la carte large « Analyse école » sur une demande précise.
-        if (not photo_only and clarify_kind is None
-                and is_intervention_prep_request(req.message)):
+        prep_request = (not photo_only and clarify_kind is None
+                        and is_intervention_prep_request(req.message))
+        if prep_request:
             prepared = await self._run_intervention_prep(
                 req, context, scope_info, lang, today)
             if prepared is not None:
                 return prepared
-        intent = route_intent(req.message)
+        # Une planification qui rend la main (erreur plugin) ne doit JAMAIS
+        # retomber sur un listing : les outils prepare_* restent visibles.
+        intent = "create" if prep_request else route_intent(req.message)
         active_tools = compact_tools(tools_for_intent(intent, scope_info), self.llm.model)
         messages: list[dict[str, Any]] = [
             {"role": "system",
@@ -2887,9 +2942,10 @@ class AgentLoop:
             today: Any = None) -> AgentChatResponse | None:
         """Dossier de préparation d'intervention (déterministe, sans LLM).
 
-        Retourne None quand le dossier est inexploitable (ni école ni
-        incident) : le flux normal (modèle + outil) prend le relais et
-        demande le chaînon manquant.
+        Ne rend la main (None) que sur erreur plugin : les cas métier
+        (école manquante, incident non résolu) retournent une réponse
+        guidée déterministe — une planification ne retombe JAMAIS sur un
+        listing du flux normal.
         """
         from .tools.prepare_intervention import CARD_BUILDERS
         from .tools.prepare_intervention import execute as prep_execute
@@ -2915,10 +2971,11 @@ class AgentLoop:
         if not isinstance(obs, dict) or obs.get("error"):
             return None
         fields = obs.get("fields") or {}
-        if fields.get("incident_id") is None and not school:
-            # Ni école nommée ni incident unique : laisser le modèle demander.
-            if not obs.get("candidates"):
-                return None
+        if fields.get("incident_id") is None and not school \
+                and not obs.get("candidates"):
+            # Ni école ni incident : question guidée + choix écoles.
+            return self._prep_missing_school_response(
+                req, context, obs, lang, scope)
         incident = None
         for row in context.get("incidents", []) or []:
             if isinstance(row, dict) and row.get("id") == fields.get("incident_id"):
@@ -2936,6 +2993,27 @@ class AgentLoop:
                       "hint": obs.get("hint_unmatched"),
                       "action": "prepare_intervention"},
             ))
+        elif fields.get("incident_id") is None and school:
+            # École connue, incident non résolu (synonymes type « robinet »
+            # vs « tap ») : picker des incidents ouverts de l'école.
+            open_here = [
+                {key: row.get(key) for key in (
+                    "id", "reference_code", "title", "school_name",
+                    "district", "category", "urgency", "status",
+                    "affected_students", "priority_score", "reported_at")}
+                for row in context.get("incidents", []) or []
+                if isinstance(row, dict)
+                and str(row.get("status") or "").lower() not in ("resolved", "closed")
+                and _school_arg_matches(str(row.get("school_name") or ""), school)
+            ]
+            if open_here:
+                cards.append(AgentCard(
+                    type="incident_picker",
+                    title=f"Quel incident réparer à {short_school_name(school)} ?",
+                    data={"candidates": open_here[:5],
+                          "hint": obs.get("hint_unmatched"),
+                          "action": "prepare_intervention"},
+                ))
         builder = CARD_BUILDERS.get("intervention_prep")
         card = builder(obs) if builder is not None else None
         if card is not None:
@@ -2948,6 +3026,32 @@ class AgentLoop:
                 follow_ups.insert(0, chip)
         return AgentChatResponse(
             answer=_intervention_answer(obs, lang or "fr"),
+            tools_executed=["prepare_intervention"],
+            cards=cards,
+            model_used=self.llm.model,
+            follow_ups=follow_ups,
+        )
+
+    def _prep_missing_school_response(
+            self, req: AgentChatRequest, context: dict[str, Any],
+            obs: dict[str, Any], lang: str,
+            scope: dict[str, Any]) -> AgentChatResponse:
+        """Prépa sans école ni incident : question + choix écoles, jamais None."""
+        from .tools.prepare_intervention import CARD_BUILDERS
+        cards: list[AgentCard] = []
+        builder = CARD_BUILDERS.get("intervention_prep")
+        card = builder(obs) if builder is not None else None
+        if card is not None:
+            cards.append(card)
+        use_lang = lang or "fr"
+        answer = _with_clarify_question(
+            _intervention_answer(obs, use_lang), "school", use_lang)
+        follow_ups = (clarify_follow_ups(
+            "school", req.message, context, use_lang)
+            or _follow_ups(req.message, [("prepare_intervention", obs)],
+                           context, scope))
+        return AgentChatResponse(
+            answer=answer,
             tools_executed=["prepare_intervention"],
             cards=cards,
             model_used=self.llm.model,

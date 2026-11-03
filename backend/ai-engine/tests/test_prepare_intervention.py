@@ -269,5 +269,67 @@ class LoopBranchTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("prepare_intervention", res.tools_executed)
 
 
+def _req_history(message, history):
+    return AgentChatRequest(
+        message=message,
+        context=AgentContext(schools=[dict(SCHOOL)],
+                             incidents=[dict(PUMP), dict(LATRINES)]),
+        history=history,
+    )
+
+
+class PrepMissingPieceTest(unittest.IsolatedAsyncioTestCase):
+    """Prépa sans lieu : sujet hérité ou question guidée, JAMAIS un listing."""
+
+    MESSAGE = ("Ok prépare une intervention pour la réparation du robinet "
+               "et des toilettes budget 100 000 francs")
+
+    HISTORY_BONANJO = [
+        {"role": "user", "content": "Donne moi les signalements d'aujourd'hui stp"},
+        {"role": "assistant",
+         "content": ("Pour aujourd'hui, je compte 1 signalement. "
+                     "Il concerne l'École Publique de Bonanjo.")},
+    ]
+
+    def test_hint_strips_orphan_budget(self) -> None:
+        from app.agent_loop import _intervention_hint
+        hint = _intervention_hint(self.MESSAGE, CONTEXT)
+        self.assertNotIn("budget", hint)
+        self.assertIn("robinet", hint)
+        self.assertIn("toilettes", hint)
+
+    async def test_followup_inherits_school_never_lists(self) -> None:
+        stub = PrepStubLLM()
+        res = await AgentLoop(stub).chat(
+            _req_history(self.MESSAGE, self.HISTORY_BONANJO))
+        self.assertEqual(stub.chat_calls, 0)
+        self.assertIn("prepare_intervention", res.tools_executed)
+        self.assertNotIn("list_incidents", res.tools_executed)
+        self.assertNotIn("list_maintenance_logs", res.tools_executed)
+        types = [c.type for c in res.cards]
+        self.assertIn("intervention_prep", types)
+        self.assertNotIn("incident_list", types)
+        self.assertIn("Bonanjo", res.answer)
+
+    async def test_cold_without_school_asks_school(self) -> None:
+        stub = PrepStubLLM()
+        res = await AgentLoop(stub).chat(_req(self.MESSAGE))
+        self.assertEqual(stub.chat_calls, 0)
+        self.assertIn("De quelle école s'agit-il ?", res.answer)
+        self.assertTrue(any("Bonanjo" in chip for chip in res.follow_ups))
+        self.assertNotIn("list_incidents", res.tools_executed)
+
+    async def test_school_known_offers_incident_picker(self) -> None:
+        stub = PrepStubLLM()
+        res = await AgentLoop(stub).chat(
+            _req_history(self.MESSAGE, self.HISTORY_BONANJO))
+        types = [c.type for c in res.cards]
+        self.assertIn("incident_picker", types)
+        picker = next(c for c in res.cards if c.type == "incident_picker")
+        refs = [c.get("reference_code") for c in picker.data.get("candidates", [])]
+        self.assertIn("WASH-2026-PUMP", refs)
+        self.assertIn("WASH-2026-LAT", refs)
+
+
 if __name__ == "__main__":
     unittest.main()
