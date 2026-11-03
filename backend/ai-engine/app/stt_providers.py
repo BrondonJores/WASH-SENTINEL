@@ -74,8 +74,8 @@ _WHISPER_DETECTED_RE = re.compile(
 _WHISPER_JSON_FLAGS: dict[str, list[str]] = {}
 
 #: Cache du style d'entrée audio par binaire : "flag" (-f fichier,
-#: whisper.cpp < 1.7) ou "positional" (fichier en fin d'argv, v1.7+ où
-#: -f/--file a disparu au profit de `whisper-cli [options] file0.wav...`).
+#: présent jusqu'en v1.7.4 au moins) ou "positional" (fichier en fin
+#: d'argv, style moderne `whisper-cli [options] file0.wav...`).
 #: Sniffé via --help, jamais supposé (un -f inconnu = échec systématique).
 _WHISPER_INPUT_STYLE: dict[str, str] = {}
 
@@ -117,6 +117,15 @@ def _raise_for_whisper_exit(res: Any, binary: str) -> None:
         raise RuntimeError(f"whisper-cli a échoué (code {res.returncode}) : {detail}")
 
 
+#: Ligne d'aide déclarant le flag JSON : "-ojson" littéral (très vieux
+#: binaires) ou "-oj" (moderne, v1.7 : "-oj, --output-json"). Ancré en
+#: début de ligne : la mention "--output-json" SEULE ne doit jamais
+#: sélectionner "-ojson" (v1.7.4 ne connaît pas -ojson : bug réel, chaque
+#: appel échouait sur flag inconnu).
+_WHISPER_JSON_OJSON_RE = re.compile(r"(?m)^\s*-ojson\b")
+_WHISPER_JSON_OJ_RE = re.compile(r"(?m)^\s*-oj[,\s]")
+
+
 def whisper_json_flags(binary: str, timeout: float = 15.0) -> list[str]:
     """Flags JSON du binaire whisper.cpp (sniffés, cache par chemin).
 
@@ -131,9 +140,9 @@ def whisper_json_flags(binary: str, timeout: float = 15.0) -> list[str]:
             [binary, "--help"], capture_output=True, text=True,
             check=False, timeout=timeout)
         help_text = f"{res.stdout}\n{res.stderr}"
-        if "-ojson" in help_text or "output-json" in help_text:
+        if _WHISPER_JSON_OJSON_RE.search(help_text):
             flags = ["-ojson"]
-        elif re.search(r"(?<!o)-oj\b", help_text):
+        elif _WHISPER_JSON_OJ_RE.search(help_text):
             flags = ["-oj"]
     except Exception:
         flags = []

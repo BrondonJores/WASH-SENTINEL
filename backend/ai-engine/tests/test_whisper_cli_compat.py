@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from app import stt_providers as stt
-from app.stt_providers import WhisperCppProvider, whisper_input_args
+from app.stt_providers import WhisperCppProvider, whisper_input_args, whisper_json_flags
 from app.voice_service import VoiceService
 
 OLD_HELP = """usage: main [options] ...
@@ -58,6 +58,36 @@ class InputStyleTest(unittest.TestCase):
             whisper_input_args("/bin/whisper-cached", "/tmp/a.wav")
             whisper_input_args("/bin/whisper-cached", "/tmp/b.wav")
             self.assertEqual(m.call_count, 1)
+
+
+V17_JSON_HELP = """usage: whisper-cli [options] file0.wav ...
+
+  -f FNAME,  --file FNAME        [       ] input WAV file path
+  -oj,       --output-json       [false  ] output result in a JSON file
+  -ojf,      --output-json-full  [false  ] include more information in the JSON file
+"""
+
+OLD_JSON_HELP = """usage: main [options] ...
+
+  -f FNAME,  --file FNAME        [       ] input file
+  -ojson                         output result in a JSON file
+"""
+
+
+class JsonFlagSniffTest(unittest.TestCase):
+    def test_v17_selects_dash_oj_not_ojson(self) -> None:
+        # Régression réelle : "--output-json" seul sélectionnait "-ojson"
+        # (inconnu en v1.7.4) et chaque appel échouait.
+        with patch.object(stt.subprocess, "run", return_value=_completed(V17_JSON_HELP)):
+            self.assertEqual(whisper_json_flags("/bin/whisper-v17"), ["-oj"])
+
+    def test_legacy_selects_ojson(self) -> None:
+        with patch.object(stt.subprocess, "run", return_value=_completed(OLD_JSON_HELP)):
+            self.assertEqual(whisper_json_flags("/bin/whisper-legacy"), ["-ojson"])
+
+    def test_no_json_flag_means_empty(self) -> None:
+        with patch.object(stt.subprocess, "run", return_value=_completed("usage: x\n  -l LANG")):
+            self.assertEqual(whisper_json_flags("/bin/whisper-nojson"), [])
 
 
 class WhisperExitCodeTest(unittest.TestCase):
