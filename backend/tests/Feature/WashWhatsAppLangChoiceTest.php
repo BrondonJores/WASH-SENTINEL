@@ -245,6 +245,24 @@ class WashWhatsAppLangChoiceTest extends TestCase
         ))->once();
     }
 
+    public function test_voice_double_stt_failure_guides_without_incident(): void
+    {
+        config(['filesystems.disks.public.root' => sys_get_temp_dir().'/wash-test-public']);
+        $this->seedContact();
+        Http::fake([
+            '*/v1/wash/triage' => Http::response(['detail' => 'boom'], 500),
+            '*/v1/voice/transcribe' => Http::response(['detail' => 'boom'], 500),
+            '*/v1/voice/synthesize' => $this->synthesizeResponse(),
+        ]);
+
+        $this->postJson('/api/v1/whatsapp/webhook', $this->audioPayload('wamid.LANGC80'))->assertOk();
+
+        // Pas d'incident '[message vocal]' fantôme, guidage réenregistrer.
+        $this->assertSame(0, Incident::count());
+        $texts = $this->sentTexts();
+        $this->assertStringContainsString('Réenregistrez', $texts[0]['message']);
+    }
+
     public function test_voice_detected_bbj_keeps_default_flow(): void
     {
         config(['filesystems.disks.public.root' => sys_get_temp_dir() . '/wash-test-public']);

@@ -12,6 +12,7 @@ use App\Models\School;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class IncidentTriageService implements IncidentTriage
@@ -57,7 +58,9 @@ class IncidentTriageService implements IncidentTriage
         try {
             $triage = $this->ai->triage(
                 $message,
-                $audio ? storage_path('app/public/' . $audioPath) : null,
+                // Chemin via le disque (jamais storage_path en dur) : honore
+                // la racine configurée (tests, volumes, S3...).
+                $audio ? Storage::disk('public')->path($audioPath) : null,
                 $school->name,
                 $school->default_language,
             );
@@ -66,6 +69,14 @@ class IncidentTriageService implements IncidentTriage
             $modelUsed = (string) ($triage['extraction']['model_used'] ?? 'llama3.2:3b');
             $confidence = (float) ($triage['extraction']['confidence_score'] ?? 0.9);
         } catch (\Throwable $e) {
+            // Double panne vocale (STT explicite + triage) : AUCUN signal
+            // réel. Créer un incident '[message vocal]' produirait un
+            // doublon fantôme qui « renvoie le message précédent ».
+            // L'appelant vocal guide l'usager (réenregistrer) au lieu de
+            // stocker du vide. Texte/photo : repli inchangé.
+            if ($audio && ($message === null || trim($message) === '')) {
+                throw new \RuntimeException('VOICE_STT_FAILED: ' . $e->getMessage(), 0, $e);
+            }
             Log::warning('AI triage fallback: ' . $e->getMessage());
             $rawText = (string) ($message ?? '[message vocal]');
             $extraction = $this->fallbackExtraction($rawText);
@@ -80,7 +91,7 @@ class IncidentTriageService implements IncidentTriage
         $visual = null;
         if ($photo) {
             try {
-                $visual = $this->ai->analyzeImage(storage_path('app/public/' . $photoPath));
+                $visual = $this->ai->analyzeImage(Storage::disk('public')->path($photoPath));
             } catch (\Throwable $e) {
                 Log::warning('AI vision fallback: ' . $e->getMessage());
             }
