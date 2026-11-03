@@ -3,6 +3,7 @@ import type { ReactNode, RefObject } from 'react';
 import { api, ApiError } from '../lib/api';
 import type { Incident, School } from '../lib/api';
 import { localeFor } from '../lib/locale';
+import { Translated } from './Translated';
 import { STATUS_EN, STATUS_FR, URGENCY_EN, URGENCY_FR, urgencyTone } from '../lib/wash';
 import { Badge, Button, Skeleton } from './ui';
 import { Icon } from './icons';
@@ -110,7 +111,7 @@ function IncidentView({
       <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-teal-700 dark:text-teal-300">
         Incident · {incident.reference_code}
       </p>
-      <h2 className="mt-1 font-display text-xl font-bold leading-snug tracking-tight">{incident.title}</h2>
+      <h2 className="mt-1 font-display text-xl font-bold leading-snug tracking-tight"><Translated text={incident.title} lang={lang} /></h2>
       <div className="mt-2 flex flex-wrap gap-1.5">
         <Badge tone={urgencyTone(incident.urgency)}>
           {en ? `${urgencyLabel[incident.urgency] ?? incident.urgency} urgency` : `Urgence ${urgencyLabel[incident.urgency] ?? incident.urgency}`}
@@ -188,7 +189,7 @@ function IncidentView({
       {incident.ai_summary !== null && incident.ai_summary !== '' && (
         <div className="mt-4 rounded-xl border border-line bg-raised/60 p-3">
           <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-ink-faint">{en ? 'AI summary' : 'Résumé IA'}</p>
-          <p className="mt-1 text-sm leading-relaxed">{incident.ai_summary}</p>
+          <p className="mt-1 text-sm leading-relaxed"><Translated text={incident.ai_summary} lang={lang} /></p>
         </div>
       )}
       {incident.ai_tags !== null && incident.ai_tags.length > 0 && (
@@ -214,7 +215,7 @@ function IncidentView({
                   </span>
                 </span>
                 {l.notes !== null && l.notes !== '' && (
-                  <span className="mt-0.5 block text-[13px] text-stone-600 dark:text-stone-400">{l.notes}</span>
+                  <span className="mt-0.5 block text-[13px] text-stone-600 dark:text-stone-400"><Translated text={l.notes} lang={lang} /></span>
                 )}
               </li>
             ))}

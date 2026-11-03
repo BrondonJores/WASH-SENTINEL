@@ -43,6 +43,9 @@ interface AiEngineClient
 
     public function agentChat(string $message, array $history, array $context, bool $guided = false, ?string $imageBase64 = null, ?string $imageMime = null): array;
 
+    /** Traduit un lot de textes terrain pour affichage (aligné, originaux en repli). */
+    public function translate(array $texts, string $target): array;
+
     public function dispatchPlan(string $district, array $schools): array;
 
     public function synthesize(string $text, string $voice = 'fr_FR-upmc-medium', string $language = 'fr'): array;

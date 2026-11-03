@@ -18,6 +18,7 @@ import type { DeckSlide } from './SlideDeck';
 import type { TerritoryPoint } from './TerritoryMap';
 import type { DetailKind } from './DetailDrawer';
 import { localeFor } from '../lib/locale';
+import { Translated } from './Translated';
 import { STATUS_EN, STATUS_FR, URGENCY_EN, URGENCY_FR, urgencyTone } from '../lib/wash';
 
 // ---------- Helpers défensifs (les observations tools varient) ----------
@@ -557,7 +558,7 @@ function IncidentCard({
       </div>
       <InsightLine text={fmtOpt(data.insight) ?? ''} />
       {typeof data.summary === 'string' && data.summary !== '' && (
-        <p className="mt-3 text-sm leading-relaxed">{data.summary}</p>
+        <p className="mt-3 text-sm leading-relaxed"><Translated text={data.summary} lang={lang} /></p>
       )}
       <p className="mt-1 font-mono text-xs text-stone-500 dark:text-stone-400">
         {fmtText(data.school_name)} · {fmtText(data.district)}
@@ -792,7 +793,7 @@ function AnalysisCard({
                 <span className="w-16 shrink-0 text-xs text-stone-600 dark:text-stone-400">
                   {urgencyLabel[urg] ?? urg}
                 </span>
-                <span className="min-w-0 flex-1 truncate">{fmtText(inc.title)}</span>
+                <span className="min-w-0 flex-1 truncate"><Translated text={fmtText(inc.title)} lang={lang} /></span>
                 <span className="shrink-0 font-mono text-xs text-stone-500 dark:text-stone-400">
                   {fmtInt(inc.affected_students, lang)} {en ? 'pupils' : 'élèves'}
                 </span>
@@ -1756,7 +1757,7 @@ function IncidentListCard({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold leading-snug">{school}</p>
                 {itemTitle !== undefined && (
-                  <p className="mt-0.5 text-sm leading-snug text-stone-600 dark:text-stone-400">{itemTitle}</p>
+                  <p className="mt-0.5 text-sm leading-snug text-stone-600 dark:text-stone-400"><Translated text={itemTitle} lang={lang} /></p>
                 )}
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {ref !== undefined && <Badge>{ref}</Badge>}
@@ -2676,7 +2677,7 @@ function OfflineQueueCard({ title, data, onAsk, lang }: { title: string; data: R
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold leading-snug">{fmtOpt(p.school) ?? fmtOpt(p.school_name) ?? (en ? `Report ${i + 1}` : `Signalement ${i + 1}`)}</p>
                   {(fmtOpt(p.summary) ?? fmtOpt(p.title)) !== undefined && (
-                    <p className="mt-0.5 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400">{fmtOpt(p.summary) ?? fmtOpt(p.title)}</p>
+                    <p className="mt-0.5 text-[13px] leading-relaxed text-stone-600 dark:text-stone-400"><Translated text={fmtOpt(p.summary) ?? fmtOpt(p.title) ?? ''} lang={lang} /></p>
                   )}
                   <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     <Badge tone={urgencyTone(urg)}>{urgencyLabel[urg] ?? urg}</Badge>
@@ -2739,7 +2740,9 @@ function RelancesCard({ title, data, onAsk, lang }: { title: string; data: Recor
               )}
             </div>
             <p className="mt-0.5 text-[13px] text-stone-600 dark:text-stone-400">
-              {[fmtOpt(it.incident_title) ?? fmtOpt(it.title), fmtOpt(it.reference_code)].filter((s) => s !== undefined).join(' · ')}
+              {(fmtOpt(it.incident_title) ?? fmtOpt(it.title)) !== undefined && (<Translated text={fmtOpt(it.incident_title) ?? fmtOpt(it.title) ?? ''} lang={lang} />)}
+              {(fmtOpt(it.incident_title) ?? fmtOpt(it.title)) !== undefined && fmtOpt(it.reference_code) !== undefined && ' · '}
+              {fmtOpt(it.reference_code)}
             </p>
             {fmtOpt(it.draft_message) !== undefined && (
               <p className="mt-1.5 border-l-2 border-teal-700/40 pl-2 text-[13px] italic leading-relaxed dark:border-teal-300/40">« {fmtOpt(it.draft_message)} »</p>

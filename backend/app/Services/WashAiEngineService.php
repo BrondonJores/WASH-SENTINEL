@@ -204,6 +204,14 @@ class WashAiEngineService implements AiEngineClient
         return $this->client()->post($this->baseUrl . '/v1/wash/copilot/replace-vs-repair', $schoolHistory)->throw()->json();
     }
 
+    public function translate(array $texts, string $target): array
+    {
+        return $this->client()->post($this->baseUrl . '/v1/wash/translate', [
+            'texts' => array_values($texts),
+            'target' => $target,
+        ])->throw()->json();
+    }
+
     public function agentChat(string $message, array $history, array $context, bool $guided = false, ?string $imageBase64 = null, ?string $imageMime = null): array
     {
         $payload = [

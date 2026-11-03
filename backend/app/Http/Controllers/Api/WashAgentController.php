@@ -17,6 +17,7 @@ use App\Services\AgentProposalService;
 use App\Services\DossierPosterService;
 use GuzzleHttp\Exception\ConnectException as GuzzleConnectException;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
@@ -35,6 +36,12 @@ class WashAgentController extends Controller
     public const EPIDEMIC_WINDOW_DAYS = 7;
 
     public const EPIDEMIC_INCIDENT_LIMIT = 50;
+
+    public const TRANSLATE_TEXTS_MAX = 20;
+
+    public const TRANSLATE_TEXT_MAX_CHARS = 2000;
+
+    public const TRANSLATE_CACHE_TTL_SECONDS = 2592000;
 
     public const CONVERSE_HISTORY_MAX = 20;
 
@@ -209,6 +216,49 @@ class WashAgentController extends Controller
             $validated['language'] ?? null,
         ));
     }
+    /**
+     * Traduit des libellés terrain pour affichage (titres, résumés saisis).
+     * Cache par hash source : un seul appel moteur par texte inédit, réponse
+     * alignée sur l'ordre reçu. La source en base n'est jamais modifiée.
+     */
+    public function translate(Request $request, AiEngineClient $ai)
+    {
+        $validated = $request->validate([
+            'texts' => ['required', 'array', 'min:1', 'max:' . self::TRANSLATE_TEXTS_MAX],
+            'texts.*' => ['required', 'string', 'max:' . self::TRANSLATE_TEXT_MAX_CHARS],
+            'target' => ['required', 'string', 'in:en,fr'],
+        ]);
+        $target = $validated['target'];
+        $misses = [];
+        $cached = [];
+        foreach (array_values($validated['texts']) as $text) {
+            $key = 'wash.translate.' . $target . '.' . sha1($text);
+            $hit = Cache::get($key);
+            if (is_string($hit) && $hit !== '') {
+                $cached[$text] = $hit;
+            } else {
+                $misses[] = $text;
+            }
+        }
+        $fresh = [];
+        $unique = array_values(array_unique($misses));
+        if ($unique !== []) {
+            $response = $ai->translate($unique, $target);
+            $got = is_array($response['translations'] ?? null) ? array_values($response['translations']) : [];
+            foreach ($unique as $i => $text) {
+                $translated = isset($got[$i]) && is_string($got[$i]) && $got[$i] !== '' ? $got[$i] : $text;
+                $fresh[$text] = $translated;
+                Cache::put('wash.translate.' . $target . '.' . sha1($text), $translated, self::TRANSLATE_CACHE_TTL_SECONDS);
+            }
+        }
+        $out = [];
+        foreach (array_values($validated['texts']) as $text) {
+            $out[] = $fresh[$text] ?? $cached[$text] ?? $text;
+        }
+
+        return response()->json(['translations' => $out]);
+    }
+
     public function converse(Request $request, AiEngineClient $ai, AgentProposalService $proposals)
     {
         // Rate-limit doux : répond en guidage 200 avant le throttle:30,1 dur (429).

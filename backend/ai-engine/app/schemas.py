@@ -76,6 +76,15 @@ class WashExtractionRequest(BaseModel):
     school_name: str | None = Field(None, description="Nom de l'école (optionnel si mentionné dans le texte)")
 
 
+class WashTranslateRequest(BaseModel):
+    texts: list[str] = Field(..., description="Textes terrain à traduire pour affichage (lot)")
+    target: str = Field("en", description="Langue cible : en ou fr")
+
+
+class WashTranslateResponse(BaseModel):
+    translations: list[str] = Field(..., description="Traductions alignées (originaux en repli)")
+
+
 class ExtractedWashIncident(BaseModel):
     school_detected: str | None = Field(None, description="Nom de l'établissement scolaire identifié")
     infrastructure_type: Literal[

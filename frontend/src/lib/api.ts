@@ -577,6 +577,11 @@ export const api = {
     req<{ message: string; result: ProposalResult }>(`/v1/wash/agent/proposals/${id}/cancel`, {
       method: 'POST',
     }),
+  translateFieldTexts: (texts: string[], target: string) =>
+    req<{ translations: string[] }>('/v1/wash/agent/translate', {
+      method: 'POST',
+      body: JSON.stringify({ texts, target }),
+    }),
 };
 
 export interface Paginated<T> {

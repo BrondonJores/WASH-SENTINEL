@@ -18,6 +18,7 @@ from .stt_providers import STT_PROVIDER_TYPES, stt_from_headers, stt_from_profil
 from .tts_providers import TTS_PROVIDER_TYPES, tts_from_headers
 from .rag_store import RAGStore
 from .recurrence_watch import watch_recurrence
+from .translator import WashTranslator
 from .repair_advisor import RepairAdvisor
 from .schemas import (
     SCORE_MAX,
@@ -49,6 +50,8 @@ from .schemas import (
     VoiceTranscriptionResponse,
     WashExtractionRequest,
     WashExtractionResponse,
+    WashTranslateRequest,
+    WashTranslateResponse,
 )
 
 #: Troncature des détails d'erreur renvoyés au relais (triage vision).
@@ -128,6 +131,20 @@ async def extract_wash_data(request: Request, payload: WashExtractionRequest) ->
         raise HTTPException(
             status_code=500,
             detail=f"Erreur d'extraction IA : {str(exc)}"
+        ) from exc
+
+@app.post("/v1/wash/translate", response_model=WashTranslateResponse)
+async def translate_field_texts(request: Request, payload: WashTranslateRequest) -> WashTranslateResponse:
+    """Traduit un lot de textes terrain pour affichage (1 appel LLM, repli originaux)."""
+    try:
+        llm = _llm(request)
+        with timed("translate", model=llm.model, provider=llm.provider_name):
+            translations = await WashTranslator(llm).translate(payload.texts, payload.target)
+        return WashTranslateResponse(translations=translations)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur de traduction IA : {str(exc)}"
         ) from exc
 
 # ==========================================
