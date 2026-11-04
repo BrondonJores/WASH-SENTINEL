@@ -13,3 +13,4 @@ desktop/resources/
 desktop/node_modules/
 desktop/.tmp/
 desktop/bin/
+frontend/.env

@@ -57,6 +57,11 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
+if [ ! -f backend/vendor/autoload.php ]; then
+  say "Installation des dépendances PHP (premier démarrage depuis un clone)"
+  docker compose exec -T -u www-data laravel composer install --no-dev --optimize-autoloader
+fi
+
 say "Migrations + seeders (écoles du Cameroun, rôles, profils IA)"
 docker compose exec -T -u www-data laravel php artisan storage:link >/dev/null 2>&1 || true
 docker compose exec -T -u www-data laravel php artisan migrate --force
@@ -81,6 +86,26 @@ docker compose exec -T ollama ollama pull "${OLLAMA_EMBED_MODEL:-nomic-embed-tex
 say "Préchauffage du modèle LLM (sinon la 1re question rame puis timeout)"
 docker compose exec -T ollama ollama run "${OLLAMA_MODEL:-llama3.2:3b}" "Réponds OK" >/dev/null 2>&1 || echo "!! Warmup LLM impossible (non bloquant, la 1re question sera lente)."
 echo "Vision optionnelle : docker compose exec ollama ollama pull ${OLLAMA_VISION_MODEL:-llama3.2-vision:11b}"
+
+say "Modèles vocaux (ignorés par git, ~550 Mo, non bloquant)"
+fetch_model() { # $1 = URL, $2 = fichier local
+  if [ -s "$2" ]; then echo "  déjà là : $2"; return 0; fi
+  echo "  téléchargement : $2"
+  if curl -fsSL --retry 2 --retry-all-errors -o "$2" "$1"; then return 0; fi
+  echo "  !! échec (non bloquant) : $2 — voix désactivée jusqu'au prochain ./start.sh"
+  rm -f "$2"
+  return 1
+}
+fetch_model "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin" \
+  "models/whisper/ggml-base.bin" || true
+fetch_model "https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12/resolve/main/model.int8.onnx" \
+  "models/omnilingual/model.int8.onnx" || true
+fetch_model "https://huggingface.co/csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12/resolve/main/tokens.txt" \
+  "models/omnilingual/tokens.txt" || true
+fetch_model "https://github.com/rhasspy/piper/releases/download/v1.2.0/fr_FR-upmc-medium.onnx" \
+  "models/piper/fr_FR-upmc-medium.onnx" || true
+fetch_model "https://github.com/rhasspy/piper/releases/download/v1.2.0/fr_FR-upmc-medium.onnx.json" \
+  "models/piper/fr_FR-upmc-medium.onnx.json" || true
 
 say "WASH Sentinel est prêt"
 echo "  Frontend admin : http://localhost:${FRONTEND_PORT:-5173}"

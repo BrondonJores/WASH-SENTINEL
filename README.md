@@ -274,10 +274,26 @@ git clone https://github.com/BrondonJores/WASH-SENTINEL && cd WASH-SENTINEL
 
 What `start.sh` does, in order: copies root/backend/frontend `.env` from examples; creates
 `models/{omnilingual,whisper,piper}`; fixes `storage/` permissions; `docker compose up -d --build`;
-waits for Postgres (`pg_isready`) and Laravel; `storage:link` + `migrate --force` + `db:seed --force`
+waits for Postgres (`pg_isready`) and Laravel; `composer install` on fresh clones (skipped when
+`backend/vendor` exists); `storage:link` + `migrate --force` + `db:seed --force`
 (8 schools, 9 incidents, roles, AI profiles); waits for Ollama; pulls `llama3.2:3b`
 (non-blocking on failure — switch to an external profile in Réglages IA) + `nomic-embed-text`;
-prints the URLs.
+downloads the voice models (Whisper + Omnilingual + Piper, ~550 MB, non-blocking, skipped when
+present); prints the URLs.
+
+Cold start from a clone takes 20–40 min on first boot (images + `npm install` + Ollama models
+~2.3 GB + voice models ~550 MB). Everything network-fragile is non-blocking: the stack always
+finishes booting, and `start.sh` tells you what to retry.
+
+Without any personal key (jury mode), everything works except live phone delivery and cloud
+fallback — no Meta account needed:
+
+| Works with zero keys | Needs your own keys |
+|---|---|
+| Console + agent + cards/charts/maps/decks/dossiers | Live WhatsApp (Meta app + token; else `WHATSAPP_SIMULATOR=true` replays flows locally, sends logged) |
+| Voice-note intake (Whisper) + local-language STT (Omnilingual) | Cloud LLM fallback (key entered in Réglages IA, stored in DB, never in git) |
+| Public form `/signaler`, offline field app `/m`, mesh monitor | |
+| Duplicate merge, repair-vs-replace, equity ranking, trends | |
 
 | Entry point | URL |
 |---|---|
